@@ -16,7 +16,7 @@ const SHARED_REMARK_PLUGINS = [
 const ADMONITIONS_CONFIG = {
   keywords: ['note', 'tip', 'info', 'warning', 'danger', 'experimental'],
 }
-const SITE_URL = process.env.SITE_URL ?? 'https://mastra.zisheng.pro'
+const SITE_URL = process.env.SITE_URL ?? 'https://mastra.youngjunning.com'
 const IS_PRODUCTION_DEPLOYMENT = process.env.DEPLOY_ENV === 'production' || process.env.VERCEL_ENV === 'production'
 const GA_ID = IS_PRODUCTION_DEPLOYMENT ? (process.env.GA_ID ?? 'G-XSL4QXVXDB') : undefined
 

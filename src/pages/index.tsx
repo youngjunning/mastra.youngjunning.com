@@ -918,6 +918,8 @@ export default function Home(): ReactNode {
                   <a href="https://discord.gg/BTYqqHKUrf">Discord</a>
                   <a href="https://www.youtube.com/@mastra-ai">YouTube</a>
                   <a href="https://x.com/zisheng_ai">X</a>
+                  <a href="https://youngjunning.com/">俊宁官网 ↗</a>
+                  <a href="https://design.youngjunning.com/">设计图鉴 ↗</a>
                 </div>
               </nav>
             </div>

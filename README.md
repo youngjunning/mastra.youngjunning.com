@@ -61,7 +61,7 @@ Set these values only on the production deployment:
 
 ```bash
 DEPLOY_ENV=production
-SITE_URL=https://mastra.zisheng.pro
+SITE_URL=https://mastra.youngjunning.com
 GA_ID=G-XSL4QXVXDB
 ```
 

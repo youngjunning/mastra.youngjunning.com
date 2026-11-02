@@ -119,9 +119,9 @@ test.describe('SEO metadata', () => {
 
     expect(urls.length).toBeGreaterThan(0)
     expect(new Set(urls).size).toBe(urls.length)
-    expect(urls).toContain('https://mastra.zisheng.pro/')
-    expect(urls).toContain('https://mastra.zisheng.pro/en/')
-    expect(urls).toContain('https://mastra.zisheng.pro/ja/')
+    expect(urls).toContain('https://mastra.youngjunning.com/')
+    expect(urls).toContain('https://mastra.youngjunning.com/en/')
+    expect(urls).toContain('https://mastra.youngjunning.com/ja/')
     expect(xml).not.toContain('<changefreq>')
     expect(xml).not.toContain('<priority>')
     expect(urls.some(url => url.includes('/404'))).toBe(false)
