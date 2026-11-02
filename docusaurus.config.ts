@@ -71,30 +71,6 @@ const config: Config = {
   favicon: '/img/favicon.ico',
   url: SITE_URL,
   baseUrl: '/',
-  headTags: [
-    {
-      tagName: 'link',
-      attributes: {
-        rel: 'preconnect',
-        href: 'https://securepubads.g.doubleclick.net',
-        crossorigin: 'anonymous',
-      },
-    },
-    {
-      tagName: 'script',
-      attributes: {
-        async: true,
-        src: 'https://securepubads.g.doubleclick.net/tag/js/gpt.js',
-        crossorigin: 'anonymous',
-      },
-    },
-    {
-      tagName: 'script',
-      attributes: {},
-      innerHTML:
-        'window.googletag=window.googletag||{cmd:[]};googletag.cmd.push(function(){googletag.setConfig({singleRequest:true,collapseDiv:"BEFORE_FETCH"});googletag.enableServices();});',
-    },
-  ],
   // Simplified Chinese is published at the root URL. Other locales are
   // published under locale-specific paths and self-canonicalize.
   i18n: {

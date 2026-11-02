@@ -13,8 +13,6 @@ import DocItemContent from '@theme/DocItem/Content'
 import DocBreadcrumbs from '@theme/DocBreadcrumbs'
 import ContentVisibility from '@theme/ContentVisibility'
 import type { Props } from '@theme/DocItem/Layout'
-import AdSlot from '@site/src/components/AdSlot'
-import AdxSlot from '@site/src/components/AdxSlot'
 
 import styles from './styles.module.css'
 
@@ -55,33 +53,17 @@ export default function DocItemLayout({ children }: Props): ReactNode {
             <DocBreadcrumbs />
             <DocVersionBadge />
             {docTOC.mobile}
-            <AdSlot slot="8933935824" />
             <DocItemContent>{children}</DocItemContent>
-            <AdSlot slot="5674061671" />
             {/* TODO: Fix display of prev/next, especially on mobile since the arrows are missing and the click targets are unclear. Add slight borders making it more obvious */}
             <DocItemFooter />
           </article>
-          <AdxSlot
-            path="/23294357175/q4"
-            id="div-gpt-ad-doc-item-q4"
-            sizes={[
-              [336, 280],
-              [250, 250],
-              [300, 250],
-            ]}
-          />
           <DocItemPaginator />
         </div>
       </div>
 
-      {docTOC.desktop ? (
+      {docTOC.desktop && (
         <div id="toc-column" className={clsx('col col--3')}>
           {docTOC.desktop}
-          <AdSlot slot="2009434824" className="hidden xl:block" />
-        </div>
-      ) : (
-        <div id="toc-column" className={clsx('col col--3')}>
-          <AdSlot slot="2009434824" className="hidden xl:block" />
         </div>
       )}
     </div>

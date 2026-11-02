@@ -1,5 +1,6 @@
 import React, { type ReactNode } from 'react'
 import OriginalFooter from '@theme-original/Footer'
+import SiteVisitStats from '@site/src/components/SiteVisitStats'
 
 export default function Footer(): ReactNode {
   return <>
@@ -9,6 +10,7 @@ export default function Footer(): ReactNode {
         <a href="https://youngjunning.com/">俊宁官网 ↗</a>
         <a href="https://design.youngjunning.com/">设计图鉴 ↗</a>
       </nav>
+      <div className="mt-3 text-slate-500"><SiteVisitStats /></div>
     </footer>
   </>
 }
