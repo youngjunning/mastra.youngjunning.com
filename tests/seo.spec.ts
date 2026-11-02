@@ -48,12 +48,12 @@ test.describe('SEO metadata', () => {
       expect(getAttribute(description, 'content')?.trim().length).toBeGreaterThan(0)
 
       const canonical = expectSingleTag(html, 'link', 'rel', 'canonical')
-      expect(getAttribute(canonical, 'href')).toMatch(/^https:\/\/mastra\.zisheng\.pro\//)
+      expect(getAttribute(canonical, 'href')).toMatch(/^https:\/\/mastra\.youngjunning\.com\//)
 
       for (const locale of LOCALES) {
         const alternate = findTags(html, 'link', 'hreflang', locale)
         expect(alternate, `Missing ${locale} hreflang on ${pageConfig.path}`).toHaveLength(1)
-        expect(getAttribute(alternate[0]!, 'href')).toMatch(/^https:\/\/mastra\.zisheng\.pro\//)
+        expect(getAttribute(alternate[0]!, 'href')).toMatch(/^https:\/\/mastra\.youngjunning\.com\//)
       }
 
       for (const property of [
