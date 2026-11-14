@@ -81,6 +81,8 @@ const upstreamBlobs = new Map(
 const hashMatched = []
 const pending = []
 const removed = []
+const aiPolishReviewed = { 'zh-CN': [], 'zh-TW': [], 'zh-HK': [] }
+const aiPolishPending = { 'zh-CN': [], 'zh-TW': [], 'zh-HK': [] }
 for (const [localPath, entry] of Object.entries(ledger.pages)) {
   const sourcePath = `docs/${localPath}`
   const sourceBlob = upstreamBlobs.get(sourcePath)
@@ -105,6 +107,15 @@ for (const [localPath, entry] of Object.entries(ledger.pages)) {
     )
   if (matches) hashMatched.push(localPath)
   else pending.push(localPath)
+
+  const review = ledger.aiPolish?.reviewedPages?.[localPath]
+  const localeBlobs = { 'zh-CN': entry.zhCNBlob, 'zh-TW': entry.zhTWBlob, 'zh-HK': entry.zhHKBlob }
+  for (const [locale, localeBlob] of Object.entries(localeBlobs)) {
+    const validReview =
+      review?.sourceBlob === entry.sourceBlob && review.locales?.[locale]?.blob === localeBlob
+    if (validReview) aiPolishReviewed[locale].push(localPath)
+    else aiPolishPending[locale].push(localPath)
+  }
 }
 for (const change of changes) {
   if (change.status === 'D') {
@@ -124,6 +135,13 @@ const summary = {
   hashMatchedPairCount: hashMatched.length,
   pendingFileCount: pending.length,
   pendingRemovalCount: removed.length,
+  aiPolishRequired: ledger.aiPolish?.required !== false,
+  aiPolishReviewedCount: Object.fromEntries(
+    Object.entries(aiPolishReviewed).map(([locale, files]) => [locale, files.length]),
+  ),
+  aiPolishPendingCount: Object.fromEntries(
+    Object.entries(aiPolishPending).map(([locale, files]) => [locale, files.length]),
+  ),
 }
 if (sinceCommit) {
   Object.assign(summary, {
@@ -134,7 +152,22 @@ if (sinceCommit) {
   })
 }
 if (asJson) {
-  console.log(JSON.stringify({ summary, newDocumentationCommits, newChanges, hashMatched, pending, removed }, null, 2))
+  console.log(
+    JSON.stringify(
+      {
+        summary,
+        newDocumentationCommits,
+        newChanges,
+        hashMatched,
+        pending,
+        removed,
+        aiPolishReviewed,
+        aiPolishPending,
+      },
+      null,
+      2,
+    ),
+  )
 } else {
   console.log(`Official main: ${head}`)
   console.log(`English full import: ${englishImportCommit}`)
@@ -152,6 +185,11 @@ if (asJson) {
   console.log(`All changed English content files since baseline: ${changes.length}`)
   console.log(`English + zh-CN + zh-TW + zh-HK pairs matching recorded hashes: ${hashMatched.length}`)
   console.log(`Pending files: ${pending.length}; pending removals: ${removed.length}`)
+  for (const locale of Object.keys(aiPolishPending)) {
+    console.log(
+      `AI polish ${locale}: ${aiPolishReviewed[locale].length} reviewed; ${aiPolishPending[locale].length} pending`,
+    )
+  }
   for (const file of pending.slice(0, 20)) console.log(`  ${file}`)
   if (pending.length > 20) console.log(`  ... and ${pending.length - 20} more`)
 }

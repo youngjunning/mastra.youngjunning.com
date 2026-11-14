@@ -11,12 +11,12 @@ For upstream change detection and batch selection, read [mastra-doc-sync](../mas
 
 ## Target locales
 
-| Locale | Requirements |
-| --- | --- |
-| `zh-CN` | Use natural Simplified Chinese and terminology common in mainland China. |
-| `zh-TW` | Use Traditional Chinese and Taiwan terminology. Do not mechanically convert `zh-CN`. |
+| Locale  | Requirements                                                                                                             |
+| ------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `zh-CN` | Use natural Simplified Chinese and terminology common in mainland China.                                                 |
+| `zh-TW` | Use Traditional Chinese and Taiwan terminology. Do not mechanically convert `zh-CN`.                                     |
 | `zh-HK` | Use Traditional Chinese and Hong Kong terminology. Do not reuse mainland or Taiwan wording without checking local usage. |
-| `ja` | Use concise, natural Japanese technical writing; avoid literal English word order. |
+| `ja`    | Use concise, natural Japanese technical writing; avoid literal English word order.                                       |
 
 Translate every locale independently from the English source. Preserve the same technical meaning across all locales while allowing native phrasing.
 
@@ -28,6 +28,7 @@ Translate every locale independently from the English source. Preserve the same 
 4. Translate user-facing prose, headings, table text, image alt text, admonition content, and user-visible string values in MDX props.
 5. Compare the translation with the English source paragraph by paragraph. Do not omit qualifications, prerequisites, warnings, examples, or limitations, and do not add unsupported claims.
 6. Review each locale separately for fluency and regional appropriateness. Never treat script conversion as localization.
+7. After machine translation, perform a separate AI editorial pass against the complete English source. Correct literal phrasing, ambiguous references, modality, terminology drift, and regional usage without changing code or MDX structure. Record completion only when the reviewed source blob and resulting locale blob are captured in the upstream ledger; machine translation plus structural validation is not editorial completion.
 
 ## Terminology policy
 

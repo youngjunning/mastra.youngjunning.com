@@ -5,6 +5,7 @@ import path from 'node:path'
 const root = path.resolve(import.meta.dirname, '..')
 const upstream = path.resolve(process.env.MASTRA_UPSTREAM_DIR ?? path.join(root, '..', 'github', 'mastra'))
 const ledgerPath = path.join(root, 'UPSTREAM_INCREMENTAL.json')
+const previousLedger = fs.existsSync(ledgerPath) ? JSON.parse(fs.readFileSync(ledgerPath, 'utf8')) : {}
 const git = (directory, ...args) => execFileSync('git', ['-C', directory, ...args], { encoding: 'utf8' }).trim()
 const head = git(upstream, 'rev-parse', 'HEAD')
 const remoteHead = git(upstream, 'rev-parse', 'refs/remotes/origin/main')
@@ -62,8 +63,28 @@ for (const change of changes) {
   pages[change.englishPath] = entry
 }
 
+const reviewedPages = {}
+for (const [englishPath, review] of Object.entries(previousLedger.aiPolish?.reviewedPages ?? {})) {
+  const current = pages[englishPath]
+  if (!current || review.sourceBlob !== current.sourceBlob) continue
+  const locales = {}
+  for (const [locale, [, blobField]] of Object.entries(localeFields)) {
+    const localeReview = review.locales?.[locale]
+    if (localeReview?.blob === current[blobField]) locales[locale] = localeReview
+  }
+  if (Object.keys(locales).length > 0) reviewedPages[englishPath] = { sourceBlob: current.sourceBlob, locales }
+}
+
 fs.writeFileSync(
   ledgerPath,
-  JSON.stringify({ translationBaseCommit: head, pages }, null, 2) + '\n',
+  JSON.stringify(
+    {
+      translationBaseCommit: head,
+      aiPolish: { version: 1, required: true, reviewedPages },
+      pages,
+    },
+    null,
+    2,
+  ) + '\n',
 )
 console.log(`Recorded ${Object.keys(pages).length} multilingual page pairs at ${head}`)
