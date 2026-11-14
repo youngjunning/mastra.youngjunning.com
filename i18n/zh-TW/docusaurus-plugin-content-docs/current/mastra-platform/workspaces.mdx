@@ -1,36 +1,36 @@
 ---
-title: "Workspaces | Mastra platform"
-description: "Use Mastra platform workspaces to give each environment isolated bucket storage and on-demand sandboxes for filesystem access and command execution."
+title: "Workspace | Mastra 平台"
+description: "為各環境提供獨立的儲存貯體與隨需沙箱，以存取檔案系統及執行指令。"
 ---
 
 # 工作空間
 
-Workspace是 Mastra 平台提供的一組執行時間資源，並在部署時交給您的Agent程式。每个环境都有自己的工作区，因此`production`和`staging`保持隔離。
+Workspace 是 Mastra 平台在部署時配置並提供給 Agent 的一組執行階段資源。每個環境有自己的 Workspace，讓 `production` 與 `staging` 保持隔離。
 
-每個Workspace都公開兩種功能：
+每個 Workspace 提供下列兩種資源：
 
-* 一**bucket** for filesystem storage, wrapped by [`PlatformFilesystem`](/reference/workspace/platform-filesystem). The bucket is a durable, environment-scoped store agents read from and write to across runs.
-* 一池**on-demand sandboxes** for command execution, wrapped by [`PlatformSandbox`](/reference/workspace/platform-sandbox). Each `PlatformSandbox` instance provisions its own remote sandbox on `start()`並摧毀它`destroy()`。Agent通常會在每個會話中啟動許多沙箱，將它們用於任務，然後讓它們離開。
+- 由 [`PlatformFilesystem`](/reference/workspace/platform-filesystem) 封裝的**儲存貯體**，供檔案系統使用。貯體會持久保存該環境的資料，Agent 可在不同次執行中讀寫。
+- 一組由 [`PlatformSandbox`](/reference/workspace/platform-sandbox) 封裝的**隨需沙箱**，供執行指令使用。各 `PlatformSandbox` 執行個體會在 `start()` 時佈建自己的遠端沙箱，並在 `destroy()` 時銷毀。Agent 通常在同一工作階段中依任務啟動多個沙箱，用完後釋放。
 
-Workspace的範圍僅限於單一[environment](/docs/mastra-platform/environments), so `production` and `staging` don't share buckets or sandbox pools. The platform manages provisioning, authentication, and idle cleanup.
+Workspace 的範圍限於單一[環境](/docs/mastra-platform/environments)，所以 `production` 與 `staging` 不會共用儲存貯體或沙箱集區。平台負責佈建資源、驗證身分與清理閒置資源。
 
-## 何時配置Workspace {/* #when-workspaces-are-provisioned */}
+## 何時佈建 Workspace {/* #when-workspaces-are-provisioned */}
 
-新項目預設啟用Workspace。當您建立環境時，平台會自動為其配置儲存桶。沙箱基礎圖像在背景中加熱，因此第一個`PlatformSandbox` call starts quickly.
+新專案預設啟用 Workspace。建立環境時，平台會自動佈建儲存貯體，並在背景預熱沙箱的基底映像，加快首次呼叫 `PlatformSandbox` 的啟動速度。
 
-未選擇加入的現有項目顯示**Enable workspaces** action in the Workspaces tab. Enabling provisions a bucket for every environment on the project.
+現有專案若尚未啟用這項功能，可在 Workspaces 分頁選取 **Enable workspaces**，為各環境佈建儲存貯體。
 
-如果環境配置失敗（例如，當沙箱Provider處於負載狀態時），「Workspace」標籤會顯示失敗並提供重試。環境本身還是被創造出來的。在您重試之前，只有Workspace不可用。
+若環境佈建失敗，例如沙箱供應商負載過高，Workspaces 分頁會顯示失敗狀態及重試選項。環境仍會建立，只有 Workspace 在重試前無法使用。
 
-## 使用程式碼中的Workspace {/* #use-the-workspace-from-your-code */}
+## 在程式碼中使用 Workspace {/* #use-the-workspace-from-your-code */}
 
-安裝Provider套件：
+安裝 Provider 套件：
 
 ```bash npm2yarn
 npm install @mastra/platform-workspace
 ```
 
-將Provider組成一個Workspace並將其註冊到 Mastra：
+將 Provider 組合成 Workspace，再向 Mastra 註冊：
 
 ```typescript title="src/mastra/workspace.ts"
 import { Workspace } from '@mastra/core/workspace'
@@ -51,24 +51,24 @@ export const mastra = new Mastra({
 })
 ```
 
-`PlatformFilesystem`和`PlatformSandbox` read their configuration from environment variables, so you don't pass any options on the platform. The platform injects them at deploy time. See [Environment variables](#environment-variables).
+`PlatformFilesystem` 和 `PlatformSandbox` 會從環境變數讀取設定，在平台上不必傳入選項。部署時平台會注入變數。請參閱[環境變數](#environment-variables)。
 
-## 一桶，多個沙箱 {/* #one-bucket-many-sandboxes */}
+## 單一儲存貯體與多個沙箱 {/* #one-bucket-many-sandboxes */}
 
-`PlatformFilesystem`和`PlatformSandbox` have different lifecycles, which matters when you design agents.
+設計 Agent 時，請留意 `PlatformFilesystem` 與 `PlatformSandbox` 的生命週期不同。
 
-**`PlatformFilesystem`是環境桶的長壽命句柄。**&#x4F7F;用此Provider的所有請求和Agent程式都會讀取和寫入相同的物件儲存。Agent寫入的任何內容在下一個請求中都可見，除非您明確刪除它。
+**`PlatformFilesystem` 可持續存取環境的儲存貯體。** 使用它的請求與 Agent 都讀寫同一個物件儲存空間。除非明確刪除，Agent 寫入的資料在下次請求時仍看得到。
 
-**`PlatformSandbox`是一個用於配置臨時沙箱的客戶端。**&#x6BCF;個`PlatformSandbox` instance owns one remote sandbox:
+**`PlatformSandbox` 是佈建暫時沙箱的用戶端。** 每個 `PlatformSandbox` 執行個體各自管理一個遠端沙箱：
 
-* `start()`提供一個新的沙箱（或當你通過時重新附加`sandboxId`).
-* `executeCommand()`
-* `stop()``start()` with the saved `sandboxId` reattaches to it. Reusing only the same `id` provisions a new sandbox, seeded from that `id`'s recovery checkpoint when one exists.
-* `destroy()`釋放虛擬機器。在 Railway 上，它還會刪除與呼叫者提供的復原關聯的復原檢查點`id`. On E2B, it only kills the VM, and any snapshot you captured remains yours to manage.
+- `start()` 會佈建新沙箱；若有傳入 `sandboxId`，則重新連線至原有沙箱。
+- `executeCommand()` 在沙箱中執行指令。
+- `stop()` 會釋放目前程序的租約，遠端沙箱不受影響。虛擬機器會依環境的閒置政策繼續運作，之後呼叫 `start()` 時可傳入儲存的 `sandboxId` 重新連線。若只沿用相同的 `id`，就會建立新沙箱；該 `id` 若有復原檢查點，便用它初始化新沙箱。
+- `destroy()` 會釋放虛擬機器。在 Railway 上，也會刪除呼叫端提供的復原 `id` 所對應的檢查點。在 E2B 上，只會終止虛擬機器，你擷取的快照仍由你管理。
 
-靜態配置的`PlatformSandbox` is shared across every request and agent using that configuration rather than creating separate sandboxes for requests or memory threads. `PlatformFilesystem` is also a separate provider: configuring both providers doesn't mount the environment bucket inside the sandbox.
+採用同一份靜態設定的請求與 Agent 會共用一個 `PlatformSandbox`，不會針對個別請求或記憶執行緒建立沙箱。`PlatformFilesystem` 是獨立的 Provider；同時設定兩者也不會把環境的儲存貯體掛載到沙箱內。
 
-當您的Agent程式需要另一個隔離環境時，例如每個任務沙箱、每個使用者租用戶或不應觸及共用 shell 狀態的後台作業，請建構另一個`PlatformSandbox`:
+Agent 若需要另一個隔離環境，例如為個別任務分配沙箱、按使用者區分租戶，或避免背景工作碰到共用的 shell 狀態，請另外建立 `PlatformSandbox`：
 
 ```typescript title="src/mastra/tools/run-in-fresh-sandbox.ts"
 import { PlatformSandbox } from '@mastra/platform-workspace'
@@ -84,7 +84,7 @@ export async function runInFreshSandbox(command: string) {
 }
 ```
 
-或克隆已配置的沙箱作為佇列的模板。克隆繼承憑證、環境、網路隔離和預設值，而不重複它們：
+也可用已設定的沙箱當範本，複製出一批沙箱。複本會繼承憑證、環境、網路隔離及預設值，不必逐一設定：
 
 ```typescript
 const template = new PlatformSandbox({ networkIsolation: 'PRIVATE' })
@@ -93,24 +93,24 @@ const perProjectSandbox = template.clone({ id: `project-${projectId}` })
 await perProjectSandbox.start()
 ```
 
-看[`PlatformSandbox` reference](/reference/workspace/platform-sandbox) for the full lifecycle, checkpoint recovery, reattachment, and clone options.
+完整生命週期、檢查點復原、重新連線和複製選項，請參閱 [`PlatformSandbox` 參考文件](/reference/workspace/platform-sandbox)。
 
 ## 環境變數 {/* #environment-variables */}
 
-在具有Workspace的平台環境上執行的每個部署都會自動接收這些變數：
+部署到設有 Workspace 的平台環境時，會自動取得下列變數：
 
-|變數|內容 |
+| 變數 | 說明 |
 | - | - |
-|`MASTRA_PLATFORM_ACCESS_TOKEN` | Platform-issued JSON Web Token (JWT) the workspace providers use to authenticate. The token is scoped to the deploy's organization and project. |
-| `MASTRA_PROJECT_ID` | Project the deploy belongs to. |
-| `MASTRA_ENVIRONMENT_ID` | Environment the deploy belongs to. Selects which sandbox pool the platform uses. |
-| `MASTRA_PLATFORM_BUCKET_NAME` | Bucket name attached to the environment. Selects which bucket `PlatformFilesystem` reads and writes. |
+| `MASTRA_PLATFORM_ACCESS_TOKEN` | 平台簽發的 JSON Web Token (JWT)，供 Workspace Provider 驗證身分，適用範圍限於部署所屬的組織及專案。 |
+| `MASTRA_PROJECT_ID` | 部署所屬的專案。 |
+| `MASTRA_ENVIRONMENT_ID` | 部署所屬的環境，決定平台使用的沙箱集區。 |
+| `MASTRA_PLATFORM_BUCKET_NAME` | 環境所連結的儲存貯體名稱，決定 `PlatformFilesystem` 讀寫哪個貯體。 |
 
-這些名稱是保留的。如果您的專案明確設定了其中任何一個，則平台管理的值優先。
+上述名稱是保留名稱。即使專案明確設定同名變數，仍以平台管理的值為準。
 
-## 當地發展 {/* #local-development */}
+## 本機開發 {/* #local-development */}
 
-透過將四個變數放入您的本地重用相同的Provider`.env` file. Get the project, environment, and bucket values from your project's **Workspaces** tab. For `MASTRA_PLATFORM_ACCESS_TOKEN`, create an `sk_` API token on your organization's settings page under **API Tokens**. Platform deploys use an injected JWT instead.
+把這四個變數寫入本機的 `.env` 檔案，就能沿用相同的 Provider。專案、環境與儲存貯體的值可在專案的 **Workspaces** 分頁取得。至於 `MASTRA_PLATFORM_ACCESS_TOKEN`，請在組織設定的 **API Tokens** 建立 `sk_` API 權杖。部署到平台時會改用注入的 JWT。
 
 ```bash title=".env"
 MASTRA_PLATFORM_ACCESS_TOKEN=sk_your-api-token
@@ -119,20 +119,20 @@ MASTRA_ENVIRONMENT_ID=your-environment-id
 MASTRA_PLATFORM_BUCKET_NAME=your-bucket-name
 ```
 
-`PlatformFilesystem`和`PlatformSandbox` behave the same locally as on the platform, they connect to the same bucket and sandbox pool for that environment. Use a `staging` or `preview` environment's variables for local runs if you want to keep production data isolated.
+`PlatformFilesystem` 和 `PlatformSandbox` 在本機與平台上的行為相同，會連到該環境的同一個儲存貯體與沙箱集區。如果要隔離正式環境的資料，請在本機執行時使用 `staging` 或 `preview` 的變數。
 
-對於從不接觸平台的純離線循環，請將Provider交換為[`LocalFilesystem`](/reference/workspace/local-filesystem) and [`LocalSandbox`](/reference/workspace/local-sandbox) in a local build.
+若要在完全不連線至平台的情況下開發，可在本機建置時改用 [`LocalFilesystem`](/reference/workspace/local-filesystem) 和 [`LocalSandbox`](/reference/workspace/local-sandbox)。
 
-## 檢查工作空間 {/* #inspect-the-workspace */}
+## 查看 Workspace {/* #inspect-the-workspace */}
 
-平台項目中的「Workspace」標籤依環境顯示：
+平台專案的 Workspaces 分頁依環境顯示：
 
-* 儲存桶狀態及其內容，以及上傳、下載和刪除操作。
-* 最近的沙箱會話及其命令、退出代碼和持續時間。
-* 配置失敗**Retry** action.
+- 儲存貯體的狀態和內容，並提供上傳、下載及刪除操作。
+- 最近的沙箱工作階段，以及各自的指令、結束代碼與執行時間。
+- 資源佈建失敗的狀態，可選取 **Retry** 重試。
 
 ## 參見 {/* #see-also */}
 
-* [`PlatformFilesystem`](/reference/workspace/platform-filesystem)：檔案系統Provider的參考。
-* [`PlatformSandbox`](/reference/workspace/platform-sandbox)：SandboxProvider的參考，包括檢查點恢復和克隆。
-* [環境](/docs/mastra-platform/environments)：環境如何決定工作空間、變數和資料庫的範圍。
+- [`PlatformFilesystem`](/reference/workspace/platform-filesystem)：檔案系統 Provider 的參考文件。
+- [`PlatformSandbox`](/reference/workspace/platform-sandbox)：沙箱 Provider 的參考文件，包含檢查點復原及複製。
+- [環境](/docs/mastra-platform/environments)：環境如何界定 Workspace、變數和資料庫的範圍。

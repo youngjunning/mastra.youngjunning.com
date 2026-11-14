@@ -1,19 +1,19 @@
 ---
-title: "Reference: StreamErrorRetryProcessor | Processors"
-description: "StreamErrorRetryProcessor is an error processor that retries transient LLM API and stream failures."
+title: "参考：StreamErrorRetryProcessor | 处理器"
+description: "StreamErrorRetryProcessor 是错误处理器，可重试暂时性的 LLM API 和流式传输故障。"
 packages:
   - "@mastra/core"
 ---
 
-# 流错误重试处理器
+# StreamErrorRetryProcessor
 
-`StreamErrorRetryProcessor`是一个**错误处理器**重试暂时的 LLM API 和流失败。它包括针对 OpenAI 响应流错误的内置匹配，并支持针对其他特定于Provider的错误形状的附加匹配器。
+`StreamErrorRetryProcessor` 是一种**错误处理器**，用于重试暂时性的 LLM API 和流式传输故障。它内置了对 OpenAI Responses 流错误的匹配规则，也支持添加匹配器来识别其他 Provider 特有的错误格式。
 
-Mastra 将此处理器添加到每个Agent的`errorProcessors` by default, last, after the `ProviderHistoryCompat`, `PrefillErrorHandler`， 和`UnsupportedFileHandler`默认情况下，因此修复请求的处理器在该请求保持不变重试之前就有机会。默认实例使用`maxRetries: 2`与内置匹配一起使用连接重置匹配器，并且它不会重试未知错误或重播修复处理器无法修复的错误请求（HTTP 400）响应。提供您自己的实例`errorProcessors`改变其政策。因为只有在默认情况下才会添加默认值`id`您的列表中缺少该实例，您的实例已被使用，并且默认实例未添加到它旁边。
+Mastra 默认会将此处理器加入每个 Agent 的 `errorProcessors`，排在 `ProviderHistoryCompat`、`PrefillErrorHandler` 和 `UnsupportedFileHandler` 之后，位于最后。这样，负责修复请求的处理器可以先尝试修复，再由此处理器原样重试。默认实例设置 `maxRetries: 2`，除内置匹配规则外还包含连接重置匹配器；它不会重试未知错误，也不会再次发送修复处理器未能解决的错误请求（HTTP 400）。如需调整策略，可在 `errorProcessors` 中提供自己的实例。只有列表中缺少相同 `id` 时，Mastra 才会加入默认实例，因此你提供的实例会替代默认实例。
 
 ## 使用示例 {/* #usage-example */}
 
-配置`StreamErrorRetryProcessor`. Supplying the same `id` means the default isn't added:
+配置 `StreamErrorRetryProcessor`。使用相同的 `id` 时，不会再加入默认实例：
 
 ```typescript title="src/mastra/agents/openai-agent.ts"
 import { Agent } from '@mastra/core/agent'
@@ -29,41 +29,41 @@ export const agent = new Agent({
 })
 ```
 
-放`maxProcessorRetries` alongside a `maxRetries` above `3`, because the agent stops error-processor retries at `3` when it's unset. See [Retry limits](#retry-limits).
+如果将 `maxRetries` 设为大于 `3`，还需同时设置 `maxProcessorRetries`；否则 Agent 会在错误处理器重试达到 `3` 次时停止。参见[重试次数限制](#retry-limits)。
 
-要仅运行您配置的处理器，而不合并任何默认值，请设置`errorProcessorDefaults: false`. Without an `errorProcessors` list, the agent then runs only the error processors its memory contributes, if any. When memory contributes one, the retry cap of `3` applies. See [Error processors are enabled by default](/docs/agents/processors#error-processors-are-enabled-by-default). An empty agent-level `errorProcessors` list still gets the defaults. A call-time `errorProcessors: []` replaces the resolved list instead, though the agent still runs the error processors its memory contributes. Supplying your own processor for all three default ids replaces every default with your own implementation.
+如需仅运行自行配置的处理器、不合并任何默认处理器，请设置 `errorProcessorDefaults: false`。如果没有提供 `errorProcessors` 列表，Agent 此时只会运行 Memory 提供的错误处理器（如果有）；Memory 提供处理器时，重试上限为 `3`。参见[默认启用错误处理器](/docs/agents/processors#error-processors-are-enabled-by-default)。Agent 级别的空 `errorProcessors` 列表仍会使用默认处理器；调用时传入 `errorProcessors: []` 则会替换已解析的列表，但 Agent 仍会运行 Memory 提供的错误处理器。若为全部三个默认 id 提供自己的处理器，就会用这些实现替代所有默认处理器。
 
-## 它是如何运作的 {/* #how-it-works */}
+## 工作原理 {/* #how-it-works */}
 
 处理器按以下顺序检查错误及其原因链：
 
-* 匹配器结果：任何返回的配置匹配器`true`
-* 内置 OpenAI Responses 流错误匹​​配
-* 提供者重试元数据：`isRetryable === true`
+- 匹配器结果：任一已配置的匹配器返回 `true`
+- 内置的 OpenAI Responses 流错误匹配规则
+- Provider 重试元数据：`isRetryable === true`
 
-第一个匹配决定重试策略，因此配置的匹配器的`maxRetries`, `delayMs` and `onRetry` apply even when the built-in matcher would also match.
+首个匹配结果决定重试策略。因此，即使内置匹配器也能匹配，同样会采用先匹配的自定义匹配器的 `maxRetries`、`delayMs` 和 `onRetry`。
 
-当错误可重试时，处理器返回`{ retry: true }`. It doesn't mutate messages.
+错误可重试时，处理器返回 `{ retry: true }`，不会修改消息。
 
-除非您自己的匹配器之一与之匹配，否则处理器永远不会重试凭证或配额拒绝，即使提供程序元数据将其标记为可重试也是如此。 AI SDK标记了每一个`429` retryable, including an exhausted quota.
+除非你自己的匹配器匹配到该错误，否则即使 Provider 元数据将其标记为可重试，处理器也绝不会重试凭证或配额被拒绝的错误。AI SDK 会将所有 `429` 错误标记为可重试，包括配额耗尽的情况。
 
-什么时候`delayMs` is set, the processor waits before signaling a retry. This is useful for transient network errors like `ECONNRESET` where immediately retrying is likely to fail again. The delay can be a fixed number of milliseconds or a function evaluated with the error args (for example, to implement exponential backoff).
+设置 `delayMs` 后，处理器会先等待，再发出重试信号。对于 `ECONNRESET` 这类暂时性网络错误，这很有用，因为立即重试很可能再次失败。延迟时间可以是固定毫秒数，也可以是使用错误参数计算的函数，例如用于实现指数退避。
 
-### 重试限制 {/* #retry-limits */}
+### 重试次数限制 {/* #retry-limits */}
 
-`maxRetries`默认为`1` and limits this processor's retry requests. The agent also limits processor retries with `maxProcessorRetries`. When error processors are configured without an agent limit, the runtime cap is `3`.
+`maxRetries` 默认为 `1`，限制此处理器请求重试的次数。Agent 还通过 `maxProcessorRetries` 限制处理器重试次数。配置了错误处理器但未设置 Agent 上限时，运行时上限为 `3`。
 
-当您需要单个重试预算时，将这两个值显式设置为相同的界限值。保留模型`maxRetries` at `0` for that call to avoid multiplying provider attempts.
+如果需要统一的重试预算，请将两个值明确设为相同的有限值。同时将该次调用的模型 `maxRetries` 设为 `0`，避免 Provider 尝试次数叠加。
 
-### `Retry-After`处理 {/* #retry-after-handling */}
+### `Retry-After` 处理 {/* #retry-after-handling */}
 
-对于可重试的错误`Retry-After` response header, the processor reads case-insensitive delta-seconds and HTTP-date values through the error cause chain. It waits for the longer of `delayMs` and the bounded server delay.
+对于带有 `Retry-After` 响应头的可重试错误，处理器会沿错误原因链读取不区分大小写的相对秒数或 HTTP 日期，并在 `delayMs` 与设定上限后的服务端延迟中取较长时间等待。
 
-`maxRetryAfterMs`默认为`30_000`. It caps only provider-provided wait time. A longer explicit `delayMs` remains unchanged. Invalid or expired headers are ignored.
+`maxRetryAfterMs` 默认为 `30_000`，只限制 Provider 给出的等待时间；明确设置的较长 `delayMs` 不受影响。无效或已过期的响应头会被忽略。
 
 ## 重试未知错误 {/* #retry-unknown-errors */}
 
-放`retryUnknownErrors` to retry errors that no custom matcher, provider metadata, or built-in OpenAI matcher selects a policy for. Custom matchers retry the errors they match whether or not `retryUnknownErrors` is enabled. Unknown-error retries use the processor-level `maxRetries` and `delayMs` values. Known credential and quota refusals, including HTTP `401` and `403` responses, aren't retried as unknown errors. A custom matcher that matches them still retries them:
+设置 `retryUnknownErrors` 后，对于自定义匹配器、Provider 元数据和内置 OpenAI 匹配器均未确定策略的错误，也会进行重试。无论是否启用 `retryUnknownErrors`，自定义匹配器都会重试它所匹配的错误。未知错误重试使用处理器级别的 `maxRetries` 和 `delayMs`。已知的凭证及配额拒绝错误（包括 HTTP `401` 和 `403` 响应）不会被当作未知错误重试；但匹配到它们的自定义匹配器仍会重试：
 
 ```typescript title="src/mastra/agents/resilient-agent.ts"
 import { Agent } from '@mastra/core/agent'
@@ -84,11 +84,11 @@ export const agent = new Agent({
 })
 ```
 
-特定的匹配器策略仍然优先于未知错误值。该选项默认为`false`, so unknown errors aren't retried unless you enable it.
+具体的匹配器策略仍优先于未知错误的配置。此选项默认为 `false`，因此只有明确启用后才会重试未知错误。
 
 ## 延迟重试 {/* #delaying-retries */}
 
-使用`delayMs` with a custom matcher to retry transient network resets with a wait:
+通过自定义匹配器配合 `delayMs`，可在等待一段时间后重试暂时性的网络连接重置：
 
 ```typescript title="src/mastra/agents/resilient-agent.ts"
 import { Agent } from '@mastra/core/agent'
@@ -117,11 +117,11 @@ export const agent = new Agent({
 })
 ```
 
-## 默认 OpenAI 响应匹配器 {/* #default-openai-responses-matcher */}
+## 默认的 OpenAI Responses 匹配器 {/* #default-openai-responses-matcher */}
 
-`isRetryableOpenAIResponsesStreamError`将 OpenAI 响应流错误块与`type: 'error'` or `type: 'response.failed'`. It reads each chunk with the shared provider-failure reader from `@mastra/core/error` and retries chunks that report a rate limit, a provider outage, or a timeout. As a fallback, it retries errors with explicit retry guidance such as `You can retry your request`. It never retries a credential or quota refusal.
+`isRetryableOpenAIResponsesStreamError` 会匹配 `type: 'error'` 或 `type: 'response.failed'` 的 OpenAI Responses 流错误数据块。它使用 `@mastra/core/error` 中共用的 Provider 失败信息读取器解析每个数据块，并重试报告了速率限制、Provider 服务中断或超时的错误。作为后备规则，它也会重试明确提示可以重试的错误，例如 `You can retry your request`。凭证或配额拒绝错误绝不会重试。
 
-`StreamErrorRetryProcessor`默认情况下包含此匹配器。您还可以导入它并在自定义重试逻辑中重用它。
+`StreamErrorRetryProcessor` 默认包含此匹配器。你也可以将其导入，在自定义重试逻辑中复用。
 
 ## 构造函数参数 {/* #constructor-parameters */}
 
@@ -130,13 +130,13 @@ export const agent = new Agent({
 {
   name: 'options',
   type: 'StreamErrorRetryProcessorOptions',
-  description: 'Configuration for retry handling.',
+    description: '重试处理配置。',
   isOptional: true,
   properties: [
     {
       name: 'maxRetries',
       type: 'number',
-      description: 'Maximum number of retries requested by this processor.',
+         description: '此处理器请求重试的最大次数。',
       isOptional: true,
       defaultValue: '1',
     },
@@ -144,7 +144,7 @@ export const agent = new Agent({
       name: 'matchers',
       type: 'StreamErrorRetryMatcherEntry[]',
       description:
-        'Additional matchers that identify provider-specific retryable stream errors. Each entry is either a predicate `(error) => boolean` or a config object `{ match, maxRetries?, delayMs?, onRetry? }`. When a config entry is the first matcher to match an error, its `maxRetries` and `delayMs` replace the processor-level values (omitted fields fall back to them), and its `onRetry` callback runs before each retry.',
+          '用于识别 Provider 特有的可重试流错误的额外匹配器。每项可以是谓词 `(error) => boolean`，也可以是配置对象 `{ match, maxRetries?, delayMs?, onRetry? }`。当某配置项是首个匹配错误的匹配器时，其 `maxRetries` 和 `delayMs` 会替代处理器级别的值（省略的字段仍使用处理器级别的值），并在每次重试前调用其 `onRetry` 回调。',
       isOptional: true,
       defaultValue: '[]',
     },
@@ -152,7 +152,7 @@ export const agent = new Agent({
       name: 'retryUnknownErrors',
       type: 'boolean',
       description:
-        'Whether to retry unknown errors left unmatched by provider metadata, built-in matchers, and custom matchers. Known credential and quota refusals are excluded. Uses the processor-level maxRetries and delayMs values.',
+          '是否重试 Provider 元数据、内置匹配器和自定义匹配器都未匹配到的未知错误。已知的凭证及配额拒绝错误除外。使用处理器级别的 maxRetries 和 delayMs。',
       isOptional: true,
       defaultValue: 'false',
     },
@@ -160,7 +160,7 @@ export const agent = new Agent({
       name: 'delayMs',
       type: 'number | ((args: ProcessAPIErrorArgs) => number | Promise<number>)',
       description:
-        'Delay in milliseconds to wait before signaling a retry. Accepts a fixed number or a function evaluated with the current error args (for example, for exponential backoff). Negative or non-finite values are clamped to 0.',
+          '发出重试信号前等待的毫秒数。可填写固定数值，也可提供使用当前错误参数计算的函数（例如用于指数退避）。负数或非有限数会被限制为 0。',
       isOptional: true,
       defaultValue: '0',
     },
@@ -168,7 +168,7 @@ export const agent = new Agent({
       name: 'maxRetryAfterMs',
       type: 'number',
       description:
-        'Maximum provider-controlled delay read from a Retry-After header. This does not cap an explicit delayMs value. Negative or non-finite values are clamped to 0.',
+          '从 Retry-After 响应头读取的 Provider 控制延迟上限。此上限不限制显式设置的 delayMs。负数或非有限数会被限制为 0。',
       isOptional: true,
       defaultValue: '30000',
     },
@@ -177,32 +177,32 @@ export const agent = new Agent({
 ]}
 />
 
-## 特性 {/* #properties */}
+## 属性 {/* #properties */}
 
 <PropertiesTable
   content={[
 {
   name: 'id',
   type: "'stream-error-retry-processor'",
-  description: 'Processor identifier.',
+    description: '处理器标识符。',
   isOptional: false,
 },
 {
   name: 'name',
   type: "'Stream Error Retry Processor'",
-  description: 'Processor display name.',
+    description: '处理器显示名称。',
   isOptional: false,
 },
 {
   name: 'processAPIError',
   type: '(args: ProcessAPIErrorArgs) => ProcessAPIErrorResult | void',
-  description: 'Retries stream errors up to the configured retry limit.',
+    description: '在配置的重试次数上限内重试流错误。',
   isOptional: false,
 },
 ]}
 />
 
-## 有关的 {/* #related */}
+## 相关内容 {/* #related */}
 
-* [处理器接口](/reference/processors/processor-interface)
-* [处理器](/docs/agents/processors)
+- [处理器接口](/reference/processors/processor-interface)
+- [处理器](/docs/agents/processors)

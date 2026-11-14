@@ -1,23 +1,23 @@
 ---
-title: "Migration: @mastra/mcp v1 to v2 | Migration Guide"
-description: "Migrate @mastra/mcp to v2, which serves only the MCP 2026-07-28 revision and replaces elicitation with suspend/resume. Clients still connect to older servers."
+title: "将 @mastra/mcp 从 v1 迁移到 v2 | 迁移指南"
+description: "将 @mastra/mcp 迁移到 v2：服务器仅支持 MCP 2026-07-28 版本，并以暂停和恢复机制取代输入请求。客户端仍可连接旧版服务器。"
 ---
 
 # 将 @mastra/mcp 从 v1 迁移到 v2
 
-`@mastra/mcp`2.0服务MCP**2026-07-28**仅修订。服务器不再协商较旧的协议修订版。每个请求都是独立的：`initialize`握手、会话标头、独立 HTTP+SSE 传输和服务器发起的请求都消失了。需要调用者调用输入的Tool、资源或提示`suspend()`。服务器用本机应答`input_required`继续并使用调用者的答案再次运行处理程序`resumeData`.
+`@mastra/mcp` 2.0 的服务器仅支持 MCP **2026-07-28** 协议版本，不再协商旧版协议。每个请求都独立处理：`initialize` 握手、会话标头、独立的 HTTP+SSE 传输以及服务器主动发起的请求均已移除。Tool、资源或提示词需要调用方提供输入时，会调用 `suspend()`。服务器以原生的 `input_required` 结果结束请求；调用方答复后，处理函数会重新运行，并通过 `resumeData` 获取答复。
 
-客户端会说出 2026-07-28，并且默认情况下会探测每个服务器并说出它提供的任何版本，因此`MCPClient` can reach upgraded and third-party servers alike. Features that older revisions lack fail with an explicit error on a legacy-negotiated connection instead of being emulated.
+客户端支持 2026-07-28；默认情况下，它会探测每台服务器并使用该服务器提供的协议版本，因此同一个 `MCPClient` 既能连接已升级的服务器，也能连接第三方服务器。在协商为旧版协议的连接上，旧版不支持的功能会明确报错，而不会由客户端模拟实现。
 
-如果您需要保留**serving** pre-2026 clients, stay on `@mastra/mcp` 1.x. It remains supported against current `@mastra/core`, and a Mastra instance can register 1.x and 2.x servers side by side.
+如果仍需向 2026 年之前的客户端**提供服务**，请继续使用 `@mastra/mcp` 1.x。它仍兼容当前版本的 `@mastra/core`；同一个 Mastra 实例也可以同时注册 1.x 和 2.x 服务器。
 
-可流式传输的 HTTP 仍然将响应作为服务器发送的事件进行流式传输。删除的是独立的`GET /sse` + `POST /messages` transport, not SSE framing.
+Streamable HTTP 仍会以服务器发送事件流式返回响应。移除的是独立的 `GET /sse` + `POST /messages` 传输方式，而不是 SSE 消息格式。
 
-## 改变了 {/* #changed */}
+## 变更 {/* #changed */}
 
-### `@mastra/core`同伴范围 {/* #mastracore-peer-range */}
+### `@mastra/core` 的 peer 依赖版本范围 {/* #mastracore-peer-range */}
 
-`@mastra/mcp`2.0需要`@mastra/core` 1.76 or a later 1.x release, which includes the shared server contract (`mcpVersion`, `MCPToolExecutionResultV2`, `context.mcp.protocolVersion`). Update both packages together.
+`@mastra/mcp` 2.0 要求 `@mastra/core` 1.76 或更新的 1.x 版本；这些版本包含共享的服务器契约（`mcpVersion`、`MCPToolExecutionResultV2`、`context.mcp.protocolVersion`）。请同时更新这两个包。
 
 ```diff
 - "@mastra/core": "^1.60.0",
@@ -26,11 +26,11 @@ description: "Migrate @mastra/mcp to v2, which serves only the MCP 2026-07-28 re
 + "@mastra/mcp": "^2.0.0"
 ```
 
-### 要求调用者输入的Tool暂停和恢复 {/* #tools-that-ask-the-caller-for-input-suspend-and-resume */}
+### 需要调用方输入的 Tool 会暂停并恢复 {/* #tools-that-ask-the-caller-for-input-suspend-and-resume */}
 
-在 1.x 中，Tool要求通过以下方式输入`context.mcp.elicitation.sendRequest()` and awaited the answer while the request stayed open. In 2.0 the tool calls `context.suspend(payload)` and returns; the server ends the request as `input_required`, and when the caller answers, the tool runs again with `context.resumeData` (the answer, validated against `resumeSchema`) and `context.suspendPayload` (what it suspended with, validated against `suspendSchema`). This is the same `suspend`/`resume` vocabulary agents and workflows already use, so one `createTool`定义服务于这三者。
+在 1.x 中，Tool 通过 `context.mcp.elicitation.sendRequest()` 请求输入，并在请求保持打开的同时等待答复。在 2.0 中，Tool 调用 `context.suspend(payload)` 后返回；服务器以 `input_required` 结束请求。调用方答复后，Tool 重新运行，并获得 `context.resumeData`（经 `resumeSchema` 验证的答复）和 `context.suspendPayload`（经 `suspendSchema` 验证的暂停数据）。这与 Agent 和 Workflow 已使用的 `suspend`/`resume` 机制一致，因此一份 `createTool` 定义即可供三者使用。
 
-要迁移，请移动每个`sendRequest` into a suspension. Put the state the next round needs in the suspend payload and branch on it when the tool resumes. The server never replays earlier rounds: each round sees only the previous payload and the current answer.
+迁移时，请将每次 `sendRequest` 调用改为暂停操作。把下一轮所需的状态放入暂停数据，并在 Tool 恢复时根据该状态执行相应分支。服务器不会重放先前的轮次：每一轮只能看到上一轮的暂停数据和当前答复。
 
 ```diff
   export const bookDelivery = createTool({
@@ -57,9 +57,9 @@ description: "Migrate @mastra/mcp to v2, which serves only the MCP 2026-07-28 re
   });
 ```
 
-`resumeSchema`成为调用者填写的形式，因此它必须描述基元的平面对象。拒绝或取消表单的调用者会以错误结束调用，并且该Tool不会再次运行。
+`resumeSchema` 会成为调用方填写的表单，因此必须描述由基本类型字段组成的扁平对象。调用方拒绝或取消表单时，本次调用会以错误结束，Tool 不会再次运行。
 
-延续以不透明的方式传播`requestState` string that the client echoes byte for byte. The server signs it, and rejects a tampered, expired or foreign state (a different tool, different arguments or a different caller) before your handler runs. The caller is the token subject when the authorization layer provides one, otherwise the `id` of the user `mapAuthInfoToUser` returns, otherwise the bearer token itself, so two users behind the same OAuth client can't resume each other's rounds. On a server without authorization every caller shares one anonymous principal, so a `requestState` behaves like a bearer credential until its `ttlSeconds` expire: anyone who obtains it can answer the round. Put tools whose suspensions carry authority (writes, purchases, account changes) behind authorization. The payload is signed, not encrypted, so keep it small and non-secret (IDs and phase, not confidential data). Set `requestState: { key }` from the environment so every instance that may answer a continuation shares the key. Without it the server generates a key per process and continuations only succeed on that process.
+后续请求通过不透明的 `requestState` 字符串关联；客户端必须逐字节原样返回该字符串。服务器会对其签名，并在处理函数运行前拒绝被篡改、已过期或不属于当前调用的状态（Tool、参数或调用方不同）。调用方身份优先取授权层提供的令牌主体，其次取 `mapAuthInfoToUser` 返回用户的 `id`，最后取 bearer token 本身；因此，同一个 OAuth 客户端背后的两个用户不能恢复彼此的调用轮次。未启用授权的服务器会将所有调用方视为同一个匿名主体，因此在 `ttlSeconds` 到期前，`requestState` 相当于 bearer 凭据：任何获得它的人都能答复该轮请求。对于暂停过程涉及写入、购买或修改账户等权限的 Tool，应启用授权。暂停数据经过签名，但未加密，因此应保持简短且不含秘密信息（可存放 ID 和阶段，不要存放机密数据）。请从环境中设置 `requestState: { key }`，让所有可能处理后续请求的实例共用该密钥。否则，服务器会为每个进程生成独立密钥，后续请求只能由原进程处理。
 
 ```diff
   const server = new MCPServer({
@@ -70,13 +70,13 @@ description: "Migrate @mastra/mcp to v2, which serves only the MCP 2026-07-28 re
   });
 ```
 
-### `context.mcp`是同一个对象，但删除了服务器发起的请求 {/* #contextmcp-is-the-same-object-with-server-initiated-requests-removed */}
+### `context.mcp` 保持不变，但移除了服务器主动发起的请求 {/* #contextmcp-is-the-same-object-with-server-initiated-requests-removed */}
 
-Tool仍然收到`context.mcp` on a 2.0 server: `extra` (cancellation `signal`, `requestId`, `authInfo`, `_meta`), `log` and `progress` work as before, and `context.mcp.protocolVersion` is `'2026-07-28'`. The members that relied on server-initiated requests are deprecated and throw on a 2.0 server with a message that names the replacement: `elicitation.sendRequest` (use `suspend`), `extra.sendRequest`和`extra.sendNotification`（使用`log`和`progress`).
+在 2.0 服务器上，Tool 仍会收到 `context.mcp`：其中的 `extra`（包括用于取消的 `signal`、`requestId`、`authInfo` 和 `_meta`）、`log` 及 `progress` 与以往一样可用，`context.mcp.protocolVersion` 为 `'2026-07-28'`。依赖服务器主动发起请求的成员已弃用；在 2.0 服务器上调用它们会抛出错误，并提示替代方式：`elicitation.sendRequest` 改用 `suspend`，`extra.sendRequest` 和 `extra.sendNotification` 改用 `log` 与 `progress`。
 
-### `executeTool`报告暂停 {/* #executetool-reports-a-suspension */}
+### `executeTool` 会报告暂停状态 {/* #executetool-reports-a-suspension */}
 
-`server.executeTool()`和 Mastra REST 路线`POST /api/mcp/:serverId/tools/:toolId/execute` return `{ status: 'completed', output }` for a finished call and `{ status: 'suspended', suspendPayload, resumeSchema }` when the tool asked for input. Continue by posting the same `data` again with `resumeData` and the echoed `suspendPayload`. Invalid `resumeData` rejects the call.
+Tool 执行完成时，`server.executeTool()` 和 Mastra REST 路由 `POST /api/mcp/:serverId/tools/:toolId/execute` 返回 `{ status: 'completed', output }`；Tool 请求输入时则返回 `{ status: 'suspended', suspendPayload, resumeSchema }`。要继续执行，请再次提交相同的 `data`，并附上 `resumeData` 和原样返回的 `suspendPayload`。无效的 `resumeData` 会使调用被拒绝。
 
 ```diff
 - const output = await server.executeTool('bookDelivery', { orderId });
@@ -87,9 +87,9 @@ Tool仍然收到`context.mcp` on a 2.0 server: `extra` (cancellation `signal`, `
 + }
 ```
 
-### 资源和提示回调也可以暂停 {/* #resource-and-prompt-callbacks-can-suspend-too */}
+### 资源和提示词回调也可以暂停 {/* #resource-and-prompt-callbacks-can-suspend-too */}
 
-`getResourceContent`和`getPromptMessages` receive `{ extra, requestContext, suspend, resumeData, suspendPayload }` alongside their existing parameters. `extra` is the same protocol context tools see as `context.mcp.extra`, and `requestContext` is the trusted application context that already carries `authInfo` and the user mapped by `mapAuthInfoToUser`. Declare `resumeSchema` on `resources` or `prompts` to make `suspend` usable.
+`getResourceContent` 和 `getPromptMessages` 除原有参数外，还会收到 `{ extra, requestContext, suspend, resumeData, suspendPayload }`。`extra` 是 Tool 在 `context.mcp.extra` 中看到的同一协议上下文；`requestContext` 是可信的应用上下文，已包含 `authInfo` 和由 `mapAuthInfoToUser` 映射出的用户。要在 `resources` 或 `prompts` 中使用 `suspend`，请声明 `resumeSchema`。
 
 ```diff
   resources: {
@@ -103,11 +103,11 @@ Tool仍然收到`context.mcp` on a 2.0 server: `extra` (cancellation `signal`, `
   },
 ```
 
-### 按请求记录取代会话日志级别 {/* #per-request-logging-replaces-session-log-levels */}
+### 按请求设置日志级别，取代会话日志级别 {/* #per-request-logging-replaces-session-log-levels */}
 
-服务器不再接受`logging/setLevel` or keep a log level per connection. A client opts in per request by sending the `io.modelcontextprotocol/logLevel` metadata key, and the server delivers `notifications/message` for that request only, filtered to the requested severity. A later round of the same tool call is a new request: it must opt in again. Tools keep logging through `context.mcp.log(level, message, data)`. The Mastra logger and observability are unaffected.
+服务器不再接受 `logging/setLevel`，也不再按连接保存日志级别。客户端可以在每个请求中发送 `io.modelcontextprotocol/logLevel` 元数据键来启用日志；服务器只为该请求发送 `notifications/message`，并按指定的严重程度过滤。同一次 Tool 调用的后续轮次属于新请求，必须重新启用日志。Tool 仍通过 `context.mcp.log(level, message, data)` 记录日志。Mastra logger 和可观测性功能不受影响。
 
-在客户端上，`enableServerLogs` (default `true`) attaches the metadata key to every request at `serverLogLevel` (default `'info'`). Set `enableServerLogs: false` to receive nothing. Delivered messages still reach your `logger` handler.
+在客户端，`enableServerLogs` 默认为 `true`，会为每个请求附上元数据键，日志级别由 `serverLogLevel` 指定，默认为 `'info'`。设置 `enableServerLogs: false` 即可不接收服务器日志。已发送的消息仍会进入你的 `logger` 处理函数。
 
 ```diff
   servers: {
@@ -120,9 +120,9 @@ Tool仍然收到`context.mcp` on a 2.0 server: `extra` (cancellation `signal`, `
   },
 ```
 
-### 资源订阅保留其 API 并乘坐一个监听流 {/* #resource-subscriptions-keep-their-api-and-ride-one-listen-stream */}
+### 资源订阅沿用原有 API，并共用一条监听流 {/* #resource-subscriptions-keep-their-api-and-ride-one-listen-stream */}
 
-`resources.subscribe`和`resources.unsubscribe` keep their signatures. Under the hood the client carries every subscription and list-changed handler on a single `subscriptions/listen` stream per server, replaces the stream when the set changes, and reopens it after a reconnect. Register handlers before subscribing so nothing is missed. A subscription the server declines rejects and leaves earlier subscriptions in place.
+`resources.subscribe` 和 `resources.unsubscribe` 的函数签名保持不变。客户端会为每台服务器用一条 `subscriptions/listen` 流承载所有订阅及列表变更处理函数；订阅集合变化时会替换这条流，重连后会重新打开。请先注册处理函数再订阅，以免遗漏事件。如果服务器拒绝某项订阅，该订阅调用会失败，已有订阅则保持不变。
 
 ```ts
 await mcp.resources.onUpdated('weather', ({ uri }) => refresh(uri))
@@ -131,9 +131,9 @@ await mcp.resources.subscribe('weather', 'weather://forecast')
 await mcp.resources.unsubscribe('weather', 'weather://forecast')
 ```
 
-### 客户端输入处理程序是按服务器配置的 {/* #client-input-handlers-are-configured-per-server */}
+### 按服务器配置客户端输入处理函数 {/* #client-input-handlers-are-configured-per-server */}
 
-客户端用以下方式回答服务器引发`mcp.elicitation.onRequest(serverName, handler)`. Because input requests are now embedded in `input_required` results, the handler is part of the server definition and receives one request at a time. Configuring it advertises the `elicitation.form` capability. Without a handler an `input_required` result is surfaced as an error rather than answered on your behalf.
+此前，客户端通过 `mcp.elicitation.onRequest(serverName, handler)` 响应服务器发起的输入请求。现在输入请求包含在 `input_required` 结果中，因此处理函数改为在服务器定义中配置，并且每次只接收一个请求。配置处理函数会声明支持 `elicitation.form` 能力。若未配置处理函数，`input_required` 结果会作为错误抛出，客户端不会代为答复。
 
 ```diff
   const mcp = new MCPClient({
@@ -147,11 +147,11 @@ await mcp.resources.unsubscribe('weather', 'weather://forecast')
 - await mcp.elicitation.onRequest('booking', async params => askUser(params));
 ```
 
-### 客户`protocolVersion` pins instead of selecting a revision {/* #client-protocolversion-pins-instead-of-selecting-a-revision */}
+### 客户端的 `protocolVersion` 用于固定协议版本，而非选择版本 {/* #client-protocolversion-pins-instead-of-selecting-a-revision */}
 
-1.x 客户端接受`protocolVersion: '2025-11-25' | '2026-07-28' | 'auto'`. The 2.0 client always speaks 2026-07-28 and, when the option is omitted, probes the server with `server/discover` and falls back to the `initialize` handshake for servers that haven't upgraded. Pin `'2026-07-28'` to skip the probe and fail on a legacy server, or `'legacy'` to skip the probe and use the handshake directly. The negotiated revision is cached per connection for reconnects and reported by `mcp.getServerProtocolVersions()`.
+1.x 客户端接受 `protocolVersion: '2025-11-25' | '2026-07-28' | 'auto'`。2.0 客户端始终支持 2026-07-28；省略该选项时，它会先通过 `server/discover` 探测服务器，对尚未升级的服务器则回退到 `initialize` 握手。将其固定为 `'2026-07-28'` 可跳过探测，并在遇到旧版服务器时报错；固定为 `'legacy'` 则会跳过探测，直接使用握手。协商得到的协议版本会按连接缓存，供重连使用，也可通过 `mcp.getServerProtocolVersions()` 查询。
 
-在遗留协商连接上，共享动词起作用（`tools/list`, `tools/call`, `resources/read`, `prompts/get`). Resource subscriptions, list-changed handlers and embedded input requests throw an error naming the negotiated revision.
+在协商为旧版协议的连接上，共通的方法仍可使用（`tools/list`、`tools/call`、`resources/read`、`prompts/get`）。资源订阅、列表变更处理函数和嵌入式输入请求则会抛出错误，并指出协商得到的协议版本。
 
 ```diff
   servers: {
@@ -163,9 +163,9 @@ await mcp.resources.unsubscribe('weather', 'weather://forecast')
   },
 ```
 
-### OAuth 客户端已预先注册或使用客户端 ID 元数据文档 {/* #oauth-clients-are-pre-registered-or-use-a-client-id-metadata-document */}
+### OAuth 客户端须预先注册或使用客户端 ID 元数据文档 {/* #oauth-clients-are-pre-registered-or-use-a-client-id-metadata-document */}
 
-`MCPOAuthClientProvider`不再动态注册客户端。通过任一`clientInformation` for a client you registered with the authorization server, or `clientMetadataUrl` (SEP-991) so the server fetches your client metadata from an HTTPS URL. Constructing the provider with neither throws, and no request is ever sent to a `registration_endpoint`.
+`MCPOAuthClientProvider` 不再动态注册客户端。请提供 `clientInformation`，用于指定已在授权服务器注册的客户端；或者提供 `clientMetadataUrl`（SEP-991），让服务器从 HTTPS URL 获取客户端元数据。两者均未提供时，创建 Provider 会抛出错误；系统也绝不会向 `registration_endpoint` 发送请求。
 
 ```diff
   const authProvider = new MCPOAuthClientProvider({
@@ -175,11 +175,11 @@ await mcp.resources.unsubscribe('weather', 'weather://forecast')
   });
 ```
 
-持久凭据也发生了变化：令牌按授权服务器存储`issuer` (the SDK's `tokens(ctx)`/`saveTokens(tokens, ctx)` context) and the provider persists OAuth discovery state so the authorization code is only exchanged with the server that issued the redirect. Custom `OAuthStorage` backends keep the same key-value contract, but a storage namespace must not be shared between providers. `createOAuthCallbackServer` now also returns the RFC 9207 `iss` parameter. Pass it to the code exchange so the SDK can reject an issuer mismatch.
+持久化凭据的结构也发生了变化：令牌按授权服务器的 `issuer` 存储（即 SDK 的 `tokens(ctx)`/`saveTokens(tokens, ctx)` 上下文）；Provider 还会持久化 OAuth 发现状态，确保授权码只与发起重定向的服务器交换。自定义 `OAuthStorage` 后端仍使用相同的键值存储契约，但不同 Provider 不得共用同一个存储命名空间。`createOAuthCallbackServer` 现在还会返回 RFC 9207 定义的 `iss` 参数。请在交换授权码时传入该参数，以便 SDK 拒绝颁发者不匹配的请求。
 
-### `startHTTP`选项 {/* #starthttp-options */}
+### `startHTTP` 选项 {/* #starthttp-options */}
 
-`startHTTP`保持`url`, `httpPath`, `req` and `res`. The `options` object only carries request security (`enableDnsRebindingProtection`, `allowedHosts`, `allowedOrigins`). The session and serverless flags are gone because every request is stateless.
+`startHTTP` 保留 `url`、`httpPath`、`req` 和 `res`。`options` 对象现在只包含请求安全相关选项（`enableDnsRebindingProtection`、`allowedHosts`、`allowedOrigins`）。由于每个请求都是无状态的，会话和 serverless 相关选项已移除。
 
 ```diff
   await server.startHTTP({
@@ -192,20 +192,20 @@ await mcp.resources.unsubscribe('weather', 'weather://forecast')
   });
 ```
 
-### 文档服务器`Prompt` metadata {/* #docs-server-prompt-metadata */}
+### 文档服务器的 `Prompt` 元数据 {/* #docs-server-prompt-metadata */}
 
-`MastraPrompt`及其已弃用的`version` field are gone; prompt providers return the SDK `Prompt` type, re-exported from `@mastra/mcp`.
+`MastraPrompt` 及其已弃用的 `version` 字段均已移除；提示词 Provider 返回 SDK 的 `Prompt` 类型，该类型由 `@mastra/mcp` 重新导出。
 
 ```diff
 - import type { MastraPrompt } from '@mastra/mcp';
 + import type { Prompt } from '@mastra/mcp';
 ```
 
-## 已删除 {/* #removed */}
+## 已移除 {/* #removed */}
 
-### 服务器`protocolVersion` option {/* #server-protocolversion-option */}
+### 服务器的 `protocolVersion` 选项 {/* #server-protocolversion-option */}
 
-接受服务器`protocolVersion` (`'2025-11-25'`, `'2026-07-28'` or `'auto'`). Only `2026-07-28` is served now, exposed as the `MCP_PROTOCOL_VERSION` constant. Remove the option; a client that doesn't offer `2026-07-28` fails with an explicit negotiation error instead of a downgrade. To keep serving clients that still open with `initialize` over HTTP, set `legacy: 'stateless'` on the server. Each of their requests is then answered without a session.
+服务器此前接受 `protocolVersion` 选项（`'2025-11-25'`、`'2026-07-28'` 或 `'auto'`）。现在服务器只支持 `2026-07-28`，该版本由 `MCP_PROTOCOL_VERSION` 常量公开。请移除这一选项；未提供 `2026-07-28` 的客户端会收到明确的协商错误，服务器不会降级。如果仍需服务通过 HTTP 以 `initialize` 开始通信的客户端，请在服务器上设置 `legacy: 'stateless'`。这些客户端的每个请求都将在无会话状态下得到响应。
 
 ```diff
   const server = new MCPServer({
@@ -216,9 +216,9 @@ await mcp.resources.unsubscribe('weather', 'weather://forecast')
   });
 ```
 
-### `startSSE`, `startHonoSSE`, `connectSSE` and the `/sse` + `/messages` routes {/* #startsse-starthonosse-connectsse-and-the-sse--messages-routes */}
+### `startSSE`、`startHonoSSE`、`connectSSE` 及 `/sse` + `/messages` 路由 {/* #startsse-starthonosse-connectsse-and-the-sse--messages-routes */}
 
-不再提供独立的 HTTP+SSE 传输，当 Streamable HTTP 不可用时，客户端也不再使用它。`startSSE` and `startHonoSSE` remain on the shared `MCPServerBase` for 1.x servers but reject on a 2.0 server. `connectSSE` is removed. Mastra server adapters answer `404` on `/sse` and `/messages` for 2.0 servers, and Studio no longer shows an SSE endpoint for them. Point every client at the `/mcp` endpoint.
+服务器不再提供独立的 HTTP+SSE 传输；Streamable HTTP 不可用时，客户端也不会回退到该传输方式。`startSSE` 和 `startHonoSSE` 仍保留在供 1.x 服务器使用的共享 `MCPServerBase` 中，但在 2.0 服务器上调用会被拒绝。`connectSSE` 已移除。对于 2.0 服务器，Mastra 服务器适配器会对 `/sse` 和 `/messages` 返回 `404`，Studio 也不再显示其 SSE 端点。请将所有客户端指向 `/mcp` 端点。
 
 ```diff
 - url: new URL('http://localhost:4111/api/mcp/weather/sse'),
@@ -227,7 +227,7 @@ await mcp.resources.unsubscribe('weather', 'weather://forecast')
 
 ### `handleServerlessRequest`, `sessionId`, `sessionIds`, `reconnectionOptions`, `eventSourceInit` {/* #handleserverlessrequest-sessionid-sessionids-reconnectionoptions-eventsourceinit */}
 
-请求是无状态的，因此无需恢复或识别任何内容。`startHTTP` handles serverless and long-lived servers alike. Remove the session options from server and client definitions.
+请求是无状态的，因此无需恢复会话，也无需标识会话。`startHTTP` 同时适用于 serverless 和长期运行的服务器。请从服务器及客户端定义中移除会话相关选项。
 
 ```diff
   servers: {
@@ -239,29 +239,29 @@ await mcp.resources.unsubscribe('weather', 'weather://forecast')
   },
 ```
 
-### `elicitation`服务器和客户端上的操作 {/* #elicitation-actions-on-server-and-client */}
+### 服务器和客户端上的 `elicitation` 操作 {/* #elicitation-actions-on-server-and-client */}
 
-`server.elicitation.sendRequest()`和`mcp.elicitation.onRequest()` are removed. Suspend from the tool and configure `inputRequests` on the client.
+`server.elicitation.sendRequest()` 和 `mcp.elicitation.onRequest()` 已移除。请在 Tool 中暂停执行，并在客户端配置 `inputRequests`。
 
-### `roots`和`sampling` {/* #roots-and-sampling */}
+### `roots` 和 `sampling` {/* #roots-and-sampling */}
 
-客户不再做广告`roots`. `setRoots()` and `sendRootsListChanged()` are gone. Servers neither request sampling nor advertise it. A server that embeds a `roots/list` or `sampling/createMessage` request in `input_required` isn't answered: the client has no handler for those methods. The call fails instead of fabricating a response.
+客户端不再声明 `roots` 能力。`setRoots()` 和 `sendRootsListChanged()` 已移除。服务器既不会请求采样，也不会声明采样能力。如果服务器在 `input_required` 中嵌入 `roots/list` 或 `sampling/createMessage` 请求，客户端不会答复，因为它没有对应的处理函数；调用会失败，而不会生成虚构的响应。
 
-### `logging/setLevel`和`sendLoggingMessage` {/* #loggingsetlevel-and-sendloggingmessage */}
+### `logging/setLevel` 和 `sendLoggingMessage` {/* #loggingsetlevel-and-sendloggingmessage */}
 
-服务器保持静态`logging` capability required by the specification but reject `logging/setLevel` with method-not-found. `server.sendLoggingMessage()` and `server.getServer()` are removed. Log per request through `context.mcp.log` or keep using the Mastra logger.
+服务器仍保留规范要求的静态 `logging` 能力，但会以“方法不存在”错误拒绝 `logging/setLevel`。`server.sendLoggingMessage()` 和 `server.getServer()` 已移除。请通过 `context.mcp.log` 按请求记录日志，或继续使用 Mastra logger。
 
-### `resources/subscribe`和`resources/unsubscribe` {/* #resourcessubscribe-and-resourcesunsubscribe */}
+### `resources/subscribe` 和 `resources/unsubscribe` {/* #resourcessubscribe-and-resourcesunsubscribe */}
 
-遗产`resources/subscribe` is removed from both sides. `resources.subscribe` now uses `subscriptions/listen`.
+旧版 `resources/subscribe` 已从服务器和客户端移除。`resources.subscribe` 现在使用 `subscriptions/listen`。
 
 ### 动态客户端注册 {/* #dynamic-client-registration */}
 
-`registerClient`, `OAuthClientRegistrationError` and the `saveClientInformation`-driven registration fallback are removed. See the OAuth section above for the replacement.
+`registerClient`、`OAuthClientRegistrationError` 以及由 `saveClientInformation` 驱动的注册回退机制均已移除。替代方式请参阅上面的 OAuth 章节。
 
 ### 区分 1.x 和 2.0 服务器 {/* #telling-1x-and-20-servers-apart */}
 
-两者延伸相同`MCPServerBase`, and a 2.0 server sets `mcpVersion` to `2`. Use it to branch where the two differ, such as whether an `executeTool` result can be a suspension.
+两者都继承同一个 `MCPServerBase`，而 2.0 服务器将 `mcpVersion` 设为 `2`。在两者行为不同的地方，可据此分支处理，例如判断 `executeTool` 的结果是否可能表示暂停。
 
 ```diff
   const server = mastra.getMCPServer('booking');

@@ -1,6 +1,6 @@
 ---
-title: "Goals | Long-running agents"
-description: "Set a durable goal for a Mastra agent so an execution loop evaluates progress and continues working until the objective completes or its run budget ends."
+title: "目標 | 長時間運行的 Agent"
+description: "為 Mastra Agent 設定持久目標，讓執行迴圈評估進度，直至達成目標或用盡執行預算。"
 packages:
   - "@mastra/core"
   - "@mastra/memory"
@@ -8,27 +8,27 @@ packages:
 
 # 目標
 
-**添加於：** `@mastra/core@1.43.0`
+**加入版本** `@mastra/core@1.43.0`
 
-目標是一個持久的、執行緒範圍內的目標：Agent在循環迭代中不斷努力的長期指令，直到判斷模型決定它滿足或運行預算耗盡。
+目標是儲存在 Thread 內的長期指令。Agent 會在各輪迭代繼續推進，直至評判模型裁定目標已達成，或執行預算用盡。
 
-目標持久保存在線程狀態中，因此即使在已運行的輪次中間有新訊息到達，它也能在重新加載後繼續存在並在循環中進行評估。
+目標會保存在 Thread 狀態，重新載入後仍然有效。即使正在執行的一輪途中收到新訊息，迴圈也會繼續評估目標。
 
-目標建立在與[`isTaskComplete`](/docs/subagents): an LLM-as-judge scores the agent's output each iteration and gates the loop. The difference is that a goal is **durable** (stored in thread state, not passed per call) and is set and updated through `Agent`方法而不是每`stream()`選項。
+目標沿用 [`isTaskComplete`](/docs/subagents) 的機制。LLM 在每輪迭代為 Agent 的輸出評分，決定迴圈是否繼續。目標會持久保存在 Thread 狀態，並透過 `Agent` 方法設定和更新，毋須在每次呼叫 `stream()` 時傳入選項。
 
-## 何時使用目標 {/* #when-to-use-goals */}
+## 適合使用目標的情況 {/* #when-to-use-goals */}
 
-當您希望Agent程式在多次迭代和訊息中繼續朝著單一目標努力，而無需在每次呼叫時重新提供成功標準時，請使用目標：
+若希望 Agent 在多輪迭代及訊息中持續推進同一目標，毋須每次呼叫都重傳達成條件，可設定目標。
 
-* Agent應追求的長期目標，直到法官宣布其完成為止。
-* 應在運行中訊息中繼續進行的工作（仍根據目標來判斷傳遞到即時運行的訊息）。
-*
+* Agent 要繼續推進，直至評判模型確認完成。
+* 執行途中收到新訊息後仍須繼續工作，新訊息亦會按同一目標評估。
+* 重新載入 Thread 或重啟程序後，仍須保留目標。
 
-對於一次內的一次性完成檢查`stream()` call, use [`isTaskComplete`](/docs/subagents) instead.
+如只需在單次 `stream()` 呼叫中檢查有否完成，請使用 [`isTaskComplete`](/docs/subagents)。
 
 ## 快速入門 {/* #quickstart */}
 
-目標需要配置[storage](/docs/storage) backend and a memory-backed thread. Add a `goal` config to the agent, a judge model is required for the goal to do anything, then set an objective for a thread:
+目標需要已配置的 [儲存](/docs/storage) 後端，以及使用 Memory 的 Thread。先為 Agent 加入 `goal` 配置及指定評判模型，再為 Thread 設定目標。
 
 ```typescript title="src/mastra/agents/worker.ts" {8-11}
 import { Agent } from '@mastra/core/agent'
@@ -57,38 +57,38 @@ const stream = await worker.stream('Start working on the goal', {
 })
 ```
 
-這`goal` config auto-registers the state-signal projection, so the model always sees the current objective as `<current-objective>` in its context without extra setup.
+`goal` 配置會自動註冊狀態訊號投影，模型毋須額外設定，便可在上下文看到以 `<current-objective>` 呈現的目前目標。
 
-## 目標步驟如何運作 {/* #how-the-goal-step-works */}
+## 目標評估的運作方式 {/* #how-the-goal-step-works */}
 
-目標步驟在Agent執行循環內運行，緊接著`isTaskComplete`. On a real candidate answer it scores the conversation against the objective and gates the loop:
+目標評估在 Agent 執行迴圈內緊接 `isTaskComplete` 運行。Agent 提出實際候選答案時，這個步驟會按目標為對話評分，決定迴圈是否繼續。
 
-* **不滿意，還有預算**→ 循環繼續。注入每次評估回饋，以便Agent進行迭代。
-* **使滿意**→ 循環停止並標記目標`done`.
-* **預算用盡** (`runsUsed >= maxRuns`) → the loop stops and the objective is marked `paused`. Raise `maxRuns`, then resume the objective to continue.
+* **尚未達成目標，仍有預算** → 迴圈繼續。每次評估的回饋都會加入上下文，讓 Agent 在下一輪改進。
+* **已達成目標** → 迴圈停止，目標標記為 `done`。
+* **預算用盡** (`runsUsed >= maxRuns`) → 迴圈停止，目標標記為 `paused`。調高 `maxRuns` 並恢復目標，即可繼續。
 
-`isTaskComplete`.
+與 `isTaskComplete` 一樣，若迭代在處理背景工作、仍在工具呼叫迴圈內，或只更新工作記憶，就會略過這個步驟。
 
-每個評估都會發出一個類型化的`goal` stream chunk (`GoalEvaluationPayload`: `objective`, `iteration`, `maxRuns`, `passed`, `status`, `results`, `reason`, `duration`, `timedOut`, `maxRunsReached`, `suppressFeedback`) so a UI can show goal progress mid-run.
+每次評估都會發出具有類型定義的 `goal` 串流區塊，供介面在執行期間顯示進度。其類型為 `GoalEvaluationPayload`，包括 `objective`、`iteration`、`maxRuns`、`passed`、`status`、`results`、`reason`、`duration`、`timedOut`、`maxRunsReached` 及 `suppressFeedback`。
 
-**判斷模型是啟動開關。**&#x5982;果沒有法官解決，則根據每個目標的覆蓋或Agent的`goal.judge`, the goal step performs no scoring or budget consumption and emits no `goal` chunk. The gate covers every scorer: Mastra checks it before selecting a scorer, so a custom `goal.scorer` still needs a judge to resolve.
+**目標評估須有可用的評判模型才會啟動。** 若個別目標的覆寫設定及 Agent 的 `goal.judge` 都無法提供評判模型，此步驟不會評分、耗用預算或發出 `goal` 區塊。Mastra 會先檢查評判模型，再選擇 Scorer，所以自訂 `goal.scorer` 亦須能解析出評判模型。
 
-有效設定解析為每個目標記錄值，然後解析為Agent`goal` config, then a built-in default (`maxRuns` `50` and the default judge prompt).
+設定依次採用個別目標記錄、Agent 的 `goal` 配置及內置預設值（`maxRuns` 為 `50`，並使用預設評判提示）。
 
-### 裁判員和記分員 {/* #judge-and-scorer */}
+### 評判模型與 Scorer {/* #judge-and-scorer */}
 
-`goal.judge`和`goal.scorer` work at different levels. `goal.scorer` is the evaluation pipeline that produces the score the loop gates on. `goal.judge` is the model the default pipeline calls to reach that score.
+`goal.judge` 與 `goal.scorer` 分工不同。`goal.scorer` 是產生分數的評估流程，迴圈按分數決定是否繼續。`goal.judge` 是預設流程用來評分的模型。
 
-忽略`scorer` and Mastra builds a default LLM-as-judge scorer, which returns `1` when the objective is achieved, `0.5` when the judge decides the agent is waiting for user input, and `0` otherwise. A `0.5` score stops the automatic loop without completing the goal, so the next agent turn is still judged. Configure it with these settings:
+省略 `scorer` 時，Mastra 會建立預設 Scorer，由 LLM 評判。達成目標時傳回 `1`；評判模型認為 Agent 正等待用戶輸入時傳回 `0.5`；其他情況傳回 `0`。分數為 `0.5` 時，自動迴圈會停止，目標仍未完成，所以 Agent 的下一輪仍會接受評估。可用以下項目配置預設 Scorer。
 
-* `goal.judge`：決定是否滿足目標的模型。
-* `goal.prompt`
-* `goal.tools`：法官可以在做出決定之前調用唯讀驗證Tool，因此可以確認作品，而不是單獨對Agent的文本進行評分。
-* `goal.maxSteps`：法官自己的Agent循環的步驟預算。預設為`5`.
+* `goal.judge` 指定判斷是否達成目標的模型。
+* `goal.prompt` 為評判模型提供額外指令，預設採用內置的目標評判提示。
+* `goal.tools` 指定評判模型作出判斷前可呼叫的唯讀驗證工具，讓它核實實際工作成果，避免只按 Agent 的文字評分。
+* `goal.maxSteps` 限制評判模型本身的執行迴圈步數，預設為 `5`。
 
-經過`goal.scorer` to replace the pipeline with your own [scorer](/reference/evals/create-scorer), either a scorer instance or a registered scorer id. The custom scorer brings its own judging, so `goal.prompt`, `goal.tools`, and `goal.maxSteps` no longer apply, and Mastra stops resolving the judge model for judging. A `goal.judge` resolver function still runs, and its return value is discarded.
+傳入 `goal.scorer` 可用自訂 [Scorer](/reference/evals/create-scorer) 取代預設流程，接受 Scorer 實例或已註冊的 Scorer ID。自訂 Scorer 自行評判，因此 `goal.prompt`、`goal.tools` 及 `goal.maxSteps` 不再適用，Mastra 亦不會為評判另行解析模型。如 `goal.judge` 是解析函數，仍會執行，但其傳回值會被捨棄。
 
-`judge`, `maxRuns`, and `prompt`:
+可用 `judge`、`maxRuns` 及 `prompt` 配置預設 Scorer。
 
 ```typescript title="src/mastra/agents/worker.ts"
 import { Agent } from '@mastra/core/agent'
@@ -110,7 +110,7 @@ const worker = new Agent({
 })
 ```
 
-要將決定權交給您自己的記分員，請將其傳遞為`scorer` and keep `judge` set, because the activation gate still applies:
+如要由自訂 Scorer 作出判斷，可把它作為 `scorer` 傳入，並保留 `judge` 設定，因為啟動時仍會檢查評判模型。
 
 ```typescript oxfmt:false
 goal: {
@@ -122,7 +122,7 @@ goal: {
 
 ## 管理目標 {/* #managing-the-objective */}
 
-控制線程的目標`Agent` methods. All of them no-op when the run isn't memory-backed (they require storage and a `threadId`):
+可用 `Agent` 方法管理 Thread 的目標。這些方法需要儲存後端及 `threadId`。如執行沒有使用 Memory，呼叫不會有任何作用。
 
 ```typescript title="src/mastra/objective.ts"
 // Read the current objective record.
@@ -136,13 +136,13 @@ await worker.updateObjectiveOptions({ threadId, maxRuns: 100 })
 await worker.clearObjective({ threadId })
 ```
 
-客觀記錄包括可選的`activeDurationMs` value for user interfaces that display active pursuit time. Mastra advances this value while an agent runs toward an active objective and checkpoints it when the run ends or waits for tool approval. Missing values represent zero, and the duration measures agent execution rather than the goal's wall-clock age.
+目標記錄可包含 `activeDurationMs`，讓介面顯示 Agent 推進目標的時間。Agent 推進有效目標時，Mastra 會累加此值，並在執行結束或等待工具審批時保存。沒有值時視為零，時長只計算 Agent 的執行時間，與目標建立後經過的總時間有別。
 
-每個目標的值由`setObjective` / `updateObjectiveOptions` take precedence over the agent's `goal` config, and that precedence is remembered in thread state. See the [`GoalEvaluationPayload` in the ChunkType reference](/reference/streaming/ChunkType) for the full goal chunk shape.
+`setObjective` 或 `updateObjectiveOptions` 寫入的個別目標設定優先於 Agent 的 `goal` 配置，優先次序會保存在 Thread 狀態。完整區塊結構見 [ChunkType 參考的 `GoalEvaluationPayload`](/reference/streaming/ChunkType)。
 
-## 有關的 {/* #related */}
+## 相關文件 {/* #related */}
 
-* [主管Agent](/docs/subagents): `isTaskComplete` and the rubric scorer
-* [信號提供者](/docs/signals/signal-providers)：如何將目標投射到背景中
-* [記憶體儲存](/docs/storage)：儲存後端目標要求
-* [馬斯特拉工廠](https://factory.mastra.ai)和[Mastra Code](https://code.mastra.ai): Examples of goal-driven coding agents
+* [Supervisor Agent](/docs/subagents) 介紹 `isTaskComplete` 及按評分準則運作的 Scorer。
+* [訊號 Provider](/docs/signals/signal-providers) 說明如何將目標投影到上下文。
+* [Memory 儲存](/docs/storage) 介紹目標需要的儲存後端。
+* [Mastra Factory](https://factory.mastra.ai) 及 [Mastra Code](https://code.mastra.ai) 是由目標驅動的開發 Agent 示例。

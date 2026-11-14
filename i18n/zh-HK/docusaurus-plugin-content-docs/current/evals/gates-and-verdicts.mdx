@@ -5,16 +5,16 @@ packages:
   - "@mastra/core"
 ---
 
-# 大門和判決
+# 必達條件與評估結果
 
-門和判決添加了嚴重性語義`runEvals`。蓋茲是必須得分為 1.0 的得分手，這是阻止跑動的硬性要求。閾值是追蹤指標的平均分數的下限和/或上限。判決將結果歸納為`passed`, `scored`， 或者`failed`.
+必達條件和評估結果讓 `runEvals` 區分要求的嚴格程度。用作必達條件的評分器必須取得 1.0 分，否則該次評估不能通過。可按所追蹤指標的平均分設定下限、上限或兩者。評估結果以 `passed`、`scored` 或 `failed` 表示。
 
-## {/* #when-to-use-gates-and-verdicts */}
+## 何時使用必達條件與評估結果 {/* #when-to-use-gates-and-verdicts */}
 
 * 在 CI 中強制執行硬性要求（例如，「Agent必須呼叫正確的Tool」）
 * 追蹤具有最小閾值的品質指標（例如，「忠實度高於 0.7」）
-* 取得單一判決訊號（`passed`, `scored`, or `failed`) from an eval run without writing custom assertion logic
-* 將「必須通過」的關卡與「最好有」的追蹤指標分開
+- 毋須編寫自訂斷言，便可取得該次評估的整體結果（`passed`、`scored` 或 `failed`）。
+- 將必達條件和只供追蹤的質素指標分開。
 
 ## 快速入門 {/* #quickstart */}
 
@@ -41,19 +41,19 @@ const result = await runEvals({
 console.log(result.verdict) // 'passed' | 'scored' | 'failed'
 ```
 
-## 判決如何運作 {/* #how-verdicts-work */}
+## 如何判定評估結果 {/* #how-verdicts-work */}
 
-處理所有資料項後，根據閘和閾值計算判決：
+處理完各個資料項目後，按必達條件及閾值判定結果：
 
-* `failed`：至少有一個門的資料項平均值低於 1.0
-* `scored`：所有門都通過了，但至少有一個閾值得分者未達到閾值
-* `passed`：所有門得分為 1.0，並且滿足所有閾值
+- `failed`：至少一項必達條件在各資料項目的平均分低於 1.0。
+- `scored`：所有必達條件均通過，但至少一個設有閾值的評分器未達標。
+- `passed`：所有必達條件均取得 1.0 分，並符合全部閾值。
 
-當沒有提供閘或閾值計分器時，以及當每個配置的閘和閾值都返回時，判決欄位將被省略`notScorable()` (no numeric evidence). In those cases `runEvals` still returns `scores` and `summary`.
+如果沒有設定必達條件或設有閾值的評分器，或所設定的這些項目全部回傳 `notScorable()`（沒有數值可供判斷），就會省略評估結果欄位。兩種情況下，`runEvals` 都仍會回傳 `scores` 和 `summary`。
 
-## 蓋茲 {/* #gates */}
+## 必達條件 {/* #gates */}
 
-門是得分者通過`gates` field. They run before regular scorers on each data item. A gate must average a score of 1.0 across the data items it could score to pass. Items where the gate returns `notScorable()` are excluded from the average, and a gate that throws an error counts as 0 for that item.
+以 `gates` 欄位傳入的評分器會用作必達條件。處理每項資料時，必達條件先於一般評分器執行。可評分項目的平均分須達 1.0 才算通過。回傳 `notScorable()` 的項目不計入平均分；如執行期間拋出錯誤，該項計 0 分。
 
 ```typescript title="src/evals/tool-gate.ts"
 import { runEvals } from '@mastra/core/evals'
@@ -69,11 +69,11 @@ const result = await runEvals({
 // result.gateResults: [{ id: 'check-called-tool', passed: true, score: 1 }]
 ```
 
-任何得分手都充當大門。快速檢查非常適合，因為它們會傳回二進位 1/0 分數。訪問[runEvals() reference](/reference/evals/run-evals) for the full parameter and return type documentation.
+任何評分器均可作為必達條件。快速檢查只會回傳 1 或 0，尤其適合這種用法。完整參數和回傳類型見 [runEvals() 參考](/reference/evals/run-evals)。
 
-### 僅登機口運行 {/* #gate-only-runs */}
+### 只執行必達條件 {/* #gate-only-runs */}
 
-`scorers`當至少提供一個門時，該門是可選的。這對於確定性 CI 檢查非常有用，您只關心通過/失敗門，不需要追蹤任何品質指標。
+只要指定至少一項必達條件，便可省略 `scorers`。這適用於只需判斷條件是否通過、毋須追蹤質素指標的確定性 CI 檢查。
 
 ```typescript title="src/evals/gate-only.ts"
 import { runEvals } from '@mastra/core/evals'
@@ -86,18 +86,18 @@ const result = await runEvals({
 })
 ```
 
-
+至少須提供一個評分器或必達條件。若兩者均未提供，執行時會拋出錯誤。
 
 ## 閾值 {/* #thresholds */}
 
-將得分手包起來`{ scorer, threshold }` to set pass/fail bounds. The threshold is compared against the scorer's average score across scored data items. Results that return `notScorable()` are left out of the average.
+用 `{ scorer, threshold }` 包裝評分器，以設定達標範圍。閾值會與該評分器在已評分項目所得的平均分比較。回傳 `notScorable()` 的結果不計入平均分。
 
-一個`threshold` can be:
+`threshold` 可用以下形式表示：
 
 * **一個數字**：表示最低分數（等於或高於及格分數）：`{ scorer, threshold: 0.7 }`
-* **一個對象與`min` and/or `max`**：對於基於範圍的檢查：`{ scorer, threshold: { max: 0.3 } }`
+- **包含 `min`、`max` 或兩者的物件**：用於檢查分數範圍，例如 `{ scorer, threshold: { max: 0.3 } }`。
 
-使用`max` for scorers where a high score is bad (e.g., hallucination, toxicity). Use `{ min, max }` when the score should fall within a specific band.
+對於分數愈高代表表現愈差的評分器（例如幻覺和有害內容評分器），可用 `max`。如要求分數在指定範圍內，可用 `{ min, max }`。
 
 ```typescript title="src/evals/threshold-example.ts"
 import { runEvals } from '@mastra/core/evals'
@@ -121,11 +121,11 @@ const result = await runEvals({
 // ]
 ```
 
-裸得分手（無門檻）仍然出現在`result.scores` but doesn't affect the verdict.
+沒有設定閾值的評分器仍會在 `result.scores` 列出，但不影響評估結果。
 
-## 在 CI 中使用判決 {/* #using-verdicts-in-ci */}
+## 在 CI 中使用評估結果 {/* #using-verdicts-in-ci */}
 
-該判決為 CI 管道提供了一個信號：
+CI 流程可根據整體評估結果採取相應行動：
 
 ```typescript title="src/evals/ci-check.ts"
 import { runEvals } from '@mastra/core/evals'
@@ -156,7 +156,7 @@ if (result.verdict === 'scored') {
 
 ## 有關的 {/* #related */}
 
-* [快速檢查](/docs/evals/quick-checks)：零法學碩士微型得分者，可以很好地作為大門
+- [快速檢查](/docs/evals/quick-checks)：毋須調用 LLM 的輕量評分器，適合作為必達條件。
 * [runEvals() 參考](/reference/evals/run-evals)：完整的API文檔
-* [內建記分器](/docs/evals/built-in-scorers)：基於法學碩士和基於代碼的評分器
+- [內置評分器](/docs/evals/built-in-scorers)：以 LLM 或程式碼運作的評分器
 * [在 CI 中運行評估](/docs/evals/running-in-ci)：CI整合模式

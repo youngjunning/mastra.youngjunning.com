@@ -1,38 +1,38 @@
 ---
-title: 'Signal providers | Signals'
-description: 'Build Mastra signal providers that monitor external systems through polling or webhooks and deliver notifications into long-running agent threads.'
+title: '訊號 Provider | 訊號'
+description: '建立 Mastra 訊號 Provider，透過輪詢或 Webhook 監看外部系統，並將通知送入長時間執行的 Agent 對話執行緒。'
 packages:
   - '@mastra/core'
 ---
 
-# 信號Provider
+# 訊號 Provider
 
-信號Provider監視外部系統並發送[notifications](/docs/signals/notifications)到訂閱的Agent線程。例如，Provider可以監視建置管道，並在建置失敗時通知訂閱該管道的每個執行緒。
+訊號 Provider 會監看外部系統，並將[通知](/docs/signals/notifications)送到訂閱的 Agent 執行緒。例如，可監看建置管線，在建置失敗時通知訂閱該管線的每個執行緒。
 
-當您的應用程式需要管理哪些執行緒從哪些來源接收事件時，請使用Provider。這[`SignalProvider`](/reference/signals/signal-provider) base class tracks those subscriptions, runs polling, and forwards notifications to the agent. Your provider supplies the code that reads the external system and matches events to subscriptions. It can also supply tools and processors to the agent.
+若應用程式需要決定各來源的事件該送到哪些執行緒，可使用 Provider。基底類別 [`SignalProvider`](/reference/signals/signal-provider) 負責維護訂閱、執行輪詢，以及將通知轉送給 Agent。你要實作讀取外部系統及比對事件與訂閱的程式碼，也可提供工具和處理器給 Agent。
 
-如果您的伺服器已經接收到事件並知道其目標線程，請調用[`agent.sendNotificationSignal()`](/reference/agents/agent#sendnotificationsignalnotification-options) directly. For changing application context, use a [state signal](/docs/signals/state-signals). For context needed by one model request, use a [瞬態無功訊號](/docs/signals/sending-signals#send-context-from-a-system).
+若伺服器已收到事件，而且知道目標執行緒，可直接呼叫 [`agent.sendNotificationSignal()`](/reference/agents/agent#sendnotificationsignalnotification-options)。若要更新應用程式的上下文，請用[狀態訊號](/docs/signals/state-signals)；若上下文僅供單次模型請求使用，請用[暫時性反應訊號](/docs/signals/sending-signals#send-context-from-a-system)。
 
-## Provider如何運作 {/* #how-a-provider-works */}
+## Provider 的運作方式 {/* #how-a-provider-works */}
 
-`signals` array. It receives events in one of two ways:
+將 Provider 註冊到 Agent 的 `signals` 陣列。它可透過兩種方式接收事件：
 
-* **輪詢：** [`poll()`](/reference/signals/signal-provider#polling) checks the external system at regular intervals.
-* **網路鉤子：**&#x60A8;的伺服器將傳入事件傳遞給[`handleWebhook()`](/reference/signals/signal-provider#webhooks).
+- **輪詢：** [`poll()`](/reference/signals/signal-provider#polling) 定期查看外部系統。
+- **Webhook：** 由伺服器將收到的事件交給 [`handleWebhook()`](/reference/signals/signal-provider#webhooks)。
 
-對於每個符合的訂閱，您的Provider都會呼叫受保護的[`notify()`](/reference/signals/signal-provider#notifications) method. This forwards the event to `Agent.sendNotificationSignal()`, using the notification delivery policy, retries, and inbox.
+每筆符合條件的訂閱都會由 Provider 呼叫受保護的 [`notify()`](/reference/signals/signal-provider#notifications) 方法。這會將事件轉交給 `Agent.sendNotificationSignal()`，並採用通知的投遞政策、重試機制和收件匣。
 
-## 將外部身分映射到線程 {/* #map-external-identities-to-threads */}
+## 對應外部識別碼與執行緒 {/* #map-external-identities-to-threads */}
 
-使用目標線程的[`resourceId` and `threadId`](/docs/memory/message-history#threads-and-resources) to route notifications. The provider also needs an `externalResourceId` to identify what the thread watches, such as the pipeline `acme-app-main`. Choose a stable value that you can match to incoming events.
+用目標執行緒的 [`resourceId` 和 `threadId`](/docs/memory/message-history#threads-and-resources) 決定通知去向。Provider 還需要 `externalResourceId` 來識別執行緒監看的對象，例如建置管線 `acme-app-main`。請選擇可用來比對傳入事件的固定值。
 
-訂閱由所有三個值作為鍵控，因此一個執行緒可以監視多個資源，並且多個執行緒可以監視同一個資源。將額外資料儲存在`metadata` rather than in the external id. For webhooks, match the payload to `externalResourceId`, then use the subscription's `resourceId` and `threadId` as the target.
+這三個值合在一起作為訂閱的鍵值。因此，一個執行緒可監看多個資源，多個執行緒也可監看同一資源。額外資料請放在 `metadata`，避免放入外部識別碼。處理 Webhook 時，先比對承載資料與 `externalResourceId`，再用訂閱的 `resourceId` 和 `threadId` 指定目標。
 
-## 快速入門 {/* #quickstart */}
+## 快速上手 {/* #quickstart */}
 
-此範例檢查管道的建置狀態並在失敗時通知訂閱執行緒。這`builds` map stands in for your CI service. Replace `fetchBuildStatus()` with a call to that service.
+這個範例會檢查管線的建置狀態，建置失敗就通知已訂閱的執行緒。`builds` 對應表用來模擬 CI 服務。請將 `fetchBuildStatus()` 換成呼叫實際服務的程式碼。
 
-配置[notification storage on your `Mastra` instance](/docs/signals/notifications#storage-and-dispatcher-setup) before using the provider. Without it, `notify()` can't create records.
+使用 Provider 前，請先[替 `Mastra` 執行個體設定通知儲存](/docs/signals/notifications#storage-and-dispatcher-setup)，否則 `notify()` 無法建立紀錄。
 
 ```typescript title="src/mastra/signals/ci-signals.ts"
 import { SignalProvider } from '@mastra/core/signals'
@@ -85,7 +85,7 @@ export class CiSignals extends SignalProvider<'ci-signals'> {
 }
 ```
 
-向Agent註冊Provider，然後將線程訂閱到它應該監視的管道：
+將 Provider 註冊到 Agent，再讓執行緒訂閱要監看的建置管線：
 
 ```typescript title="src/mastra/agents/support-agent.ts"
 import { Agent } from '@mastra/core/agent'
@@ -104,37 +104,37 @@ export const supportAgent = new Agent({
 ciSignals.watch({ resourceId: 'user_123', threadId: 'thread_456' }, 'acme-app-main')
 ```
 
-Agent連接它、輪詢並在管道發生故障時發送通知。登記`supportAgent` on your `Mastra` instance so `notify()` can reach its notification storage.
+Agent 會連接 Provider、輪詢，並在管線失敗時發出通知。請把 `supportAgent` 註冊到 `Mastra` 執行個體，讓 `notify()` 能存取通知儲存層。
 
-## 建立一個Provider {/* #build-a-provider */}
+## 建立 Provider {/* #build-a-provider */}
 
-### 連接和訂閱 {/* #connect-and-subscriptions */}
+### 連接及訂閱 {/* #connect-and-subscriptions */}
 
-覆蓋[`connect()`](/reference/signals/signal-provider#connection) only when you need setup that depends on the connected agent. Always call `super.connect(agent)` first.
+只有初始化設定依賴已連接的 Agent 時，才需要覆寫 [`connect()`](/reference/signals/signal-provider#connection)。務必先呼叫 `super.connect(agent)`。
 
-訂閱位於受保護的方法後面：
+透過下列受保護的成員存取訂閱：
 
-* `subscribe(target, externalResourceId, metadata?)`
-* `unsubscribe(target, externalResourceId)``unsubscribeAll(target)` removes every subscription for a thread.
-* `getSubscriptions()`, `getSubscriptionsForResource()`, `getSubscriptionsForThread()`, `hasSubscription()`, and `subscriptionCount` read the registry for diagnostics and guards.
+- `subscribe(target, externalResourceId, metadata?)` 新增訂閱，或將中繼資料合併到已有的訂閱。
+- `unsubscribe(target, externalResourceId)` 移除一筆訂閱；`unsubscribeAll(target)` 移除執行緒的所有訂閱。
+- `getSubscriptions()`、`getSubscriptionsForResource()`、`getSubscriptionsForThread()`、`hasSubscription()` 和 `subscriptionCount` 可讀取訂閱登錄表，供診斷及條件檢查使用。
 
-僅公開您的應用程式所需的內容。 CI 範例換行`subscribe()` and `unsubscribe()` in public `watch()` and `unwatch()` methods.
+只公開應用程式用得到的功能。CI 範例以公開方法 `watch()` 和 `unwatch()` 包裝 `subscribe()` 與 `unsubscribe()`。
 
 ### 輪詢 {/* #polling */}
 
-放`pollInterval` in milliseconds and implement `poll(subscriptions)` when the source can't push events.
+若來源無法主動推送事件，請以毫秒設定 `pollInterval`，並實作 `poll(subscriptions)`。
 
-基類處理計時器：
+基底類別會管理計時器：
 
-* `poll()` doesn't run concurrently with itself.
-* 它捕獲並記錄錯誤`poll()`, then waits for the next cycle.
-* 它調用`unref()` on the timer so polling alone doesn't keep the process alive.
+- 沒有訂閱時會略過該輪，而且不會同時執行兩輪。即使 `poll()` 執行較慢，也不會與另一輪同時執行。
+- 捕捉並記錄 `poll()` 的錯誤，接著等待下一輪。
+- 對計時器呼叫 `unref()`，讓處理程序不必只因輪詢而繼續執行。
 
-基底類別不會立即重試失敗的輪詢。讓下一個間隔重試，或在裡面添加您自己的退避`poll()`.
+輪詢失敗時，基底類別不會立刻重試。可等到下一輪再試，或在 `poll()` 內加入自己的退避機制。
 
-### 網路鉤子 {/* #webhooks */}
+### Webhook {/* #webhooks */}
 
-當來源可以呼叫您的應用程式時，請使用 Webhooks。覆蓋`handleWebhook(request)` to parse the payload, look up subscriptions, and call `notify()` for each match:
+若來源能呼叫你的應用程式，請用 Webhook。覆寫 `handleWebhook(request)` 來解析承載資料、查詢訂閱，並針對每筆相符的訂閱呼叫 `notify()`：
 
 ```typescript title="src/mastra/signals/ci-signals.ts"
 import { SignalProvider } from '@mastra/core/signals'
@@ -165,19 +165,19 @@ export class CiSignals extends SignalProvider<'ci-signals'> {
 }
 ```
 
-`handleWebhook()`是一個Provider方法。從您自己的端點呼叫它，並在解析來源需要的地方之前根據原始正文驗證來源的簽名。
+`handleWebhook()` 是 Provider 的方法，請由你自己的端點呼叫。若來源要求驗證簽章，請在解析前用原始請求本文驗證。
 
-### 持久訂閱 {/* #durable-subscriptions */}
+### 保留訂閱 {/* #durable-subscriptions */}
 
-基本註冊表位於記憶體中，屬於一個進程中的一個Provider實例。它無法在重新啟動或跨實例邊界後繼續存在。
+基底類別將訂閱登錄表保存在記憶體內，限定單一處理程序的單一 Provider 執行個體使用。重啟後會遺失，也無法跨執行個體存取。
 
-[`start()`](/reference/signals/signal-provider#start). A second process has an empty registry until it rehydrates its own copy.
+若需在重啟後保留訂閱，請自行儲存並在 [`start()`](/reference/signals/signal-provider#start) 中載入。第二個處理程序的登錄表一開始是空的，須自行載入一份訂閱。
 
-### 生命週期掛鉤 {/* #lifecycle-hooks */}
+### 生命週期鉤子 {/* #lifecycle-hooks */}
 
-Agent打電話`connect()` when constructed, starts polling, then invokes `start()` without awaiting it. Keep `start()` independent of the first poll cycle and handle its errors.
+Agent 建構時會呼叫 `connect()`，接著啟動輪詢並呼叫 `start()`，但不會等待它完成。請確保 `start()` 不依賴第一輪輪詢，並處理它可能發生的錯誤。
 
-[`stop()`](/reference/signals/signal-provider#stop)是同步的。預設實作停止輪詢並清除每個訂閱索引。覆蓋它進行清理，但調用`super.stop()` so the registry is released:
+[`stop()`](/reference/signals/signal-provider#stop) 是同步方法。預設實作會停止輪詢並清除所有訂閱索引。若覆寫方法來清理資源，請記得呼叫 `super.stop()` 以釋放登錄表：
 
 ```typescript oxfmt:false
 override stop() {
@@ -186,42 +186,42 @@ override stop() {
 }
 ```
 
-稱呼`stop()` from your shutdown path. The agent doesn't. If closing a client is asynchronous, expose an async shutdown method and await it before calling `stop()`.
+Agent 不會代為呼叫 `stop()`，請自行在關閉流程中呼叫。若關閉用戶端需要非同步操作，請提供非同步關閉方法，等它完成後再呼叫 `stop()`。
 
-### 處理器和Tool {/* #processors-and-tools */}
+### 處理器和工具 {/* #processors-and-tools */}
 
-Provider可以向連線的Agent貢獻行為：
+Provider 可替已連接的 Agent 提供額外功能：
 
-* 返回輸入處理器`getInputProcessors()` and output processors from `getOutputProcessors()`.
-* 返回Agent可調用Tool`getTools()`.
+- 以 `getInputProcessors()` 回傳輸入處理器，並以 `getOutputProcessors()` 回傳輸出處理器。
+- 以 `getTools()` 回傳 Agent 可呼叫的工具。
 
-Agent會在之後解決這些問題`connect()` and registers the processors with the Mastra instance.
+Agent 會在 `connect()` 後取得這些項目一次，並將處理器註冊到 Mastra 執行個體。
 
-### 發送通知 {/* #send-notifications */}
+### 傳送通知 {/* #send-notifications */}
 
-[`notify()`](/reference/signals/signal-provider#notifications)包裝連接的Agent的`sendNotificationSignal()` and accepts the same fields: `source`, `kind`, `summary`, optional `priority`, `payload`, `dedupeKey`, `coalesceKey`, and `attributes`.
+[`notify()`](/reference/signals/signal-provider#notifications) 包裝了已連接 Agent 的 `sendNotificationSignal()`，接受相同欄位：`source`、`kind`、`summary`，以及選用的 `priority`、`payload`、`dedupeKey`、`coalesceKey` 和 `attributes`。
 
-使用`dedupeKey` for one event that may arrive twice, such as the same failing build on consecutive polls, and `coalesceKey` when related events should merge into one pending record. The [Notifications guide](/docs/signals/notifications#create-and-coalesce-records) covers the merge rules.
+若同一事件可能到達兩次，例如連續兩輪輪詢都看到同一筆建置失敗，請用 `dedupeKey`。若要將相關事件併入同一筆待處理紀錄，請用 `coalesceKey`。合併規則請見[通知指南](/docs/signals/notifications#create-and-coalesce-records)。
 
-`notify()`当Provider未连接时抛出。它還會傳播儲存錯誤，因此讓這些錯誤到達您的輪詢或 Webhook 錯誤處理。
+Provider 尚未連接時，`notify()` 會擲出例外。儲存層的錯誤也會往上傳遞，請讓輪詢或 Webhook 的錯誤處理邏輯接手。
 
-### 乾淨地關閉 {/* #shut-down-cleanly */}
+### 正常關閉 {/* #shut-down-cleanly */}
 
-關機期間：
+關閉時：
 
-1. 停止接受新的 webhook 工作。
-2. 停止輪詢`stopPolling()` or `stop()`.
-3. 清除訂閱註冊表。
-4. 關閉或釋放外部客戶端和連線。
-5. 讓在飛行中`notify()` calls finish where your runtime allows it.
+1. 不再接收新的 Webhook 請求。
+1. 用 `stopPolling()` 或 `stop()` 停止輪詢。
+1. 清除訂閱登錄表。
+1. 關閉或釋放外部用戶端及連線。
+1. 若執行環境允許，等待已在執行的 `notify()` 呼叫完成。
 
-基類清除註冊表`stop()`. It can't drain an in-flight webhook handler or close an async client, so coordinate those in your shutdown path.
+基底類別會在 `stop()` 清除登錄表，但無法等候處理中的 Webhook 結束，也無法關閉非同步用戶端。請在關閉流程中安排這些操作。
 
-## 內建Provider {/* #built-in-providers */}
+## 內建 Provider {/* #built-in-providers */}
 
-### 任務訊號Provider {/* #task-signal-provider */}
+### 任務訊號 Provider {/* #task-signal-provider */}
 
-[`TaskSignalProvider`](/reference/signals/task-signal-provider)`TaskStateProcessor` behind one registration. Add it when you want the agent to maintain a task list across turns:
+註冊一次 [`TaskSignalProvider`](/reference/signals/task-signal-provider)，即可一併使用任務工具和 `TaskStateProcessor`。如果想讓 Agent 跨回合維護任務清單，可以加入它：
 
 ```typescript
 import { Agent } from '@mastra/core/agent'
@@ -233,11 +233,11 @@ const agent = new Agent({
 })
 ```
 
-它貢獻`task_write`, `task_update`, `task_complete`, and `task_check`, plus the processor that projects the task list onto a state-signal lane. Task tracking requires a memory-backed thread and a `storage` instance. Without memory, the tools report that tracking needs agent memory.
+它提供 `task_write`、`task_update`、`task_complete` 和 `task_check`，以及把任務清單映射到狀態訊號通道的處理器。追蹤任務需要有 Memory 支援的執行緒，以及 `storage` 執行個體。若未設定 Memory，工具會回報任務追蹤需要 Agent 的 Memory。
 
-### Webhook 訊號Provider {/* #webhook-signal-provider */}
+### Webhook 訊號 Provider {/* #webhook-signal-provider */}
 
-對於通用 Webhook 來源，請使用[`WebhookSignalProvider`](/reference/signals/webhook-signal-provider) instead of writing a subclass. Configure a function that extracts the resource id and an optional one that builds the notification:
+若是一般的 Webhook 來源，可用 [`WebhookSignalProvider`](/reference/signals/webhook-signal-provider)，省去撰寫子類別。設定一個取得資源識別碼的函式，也可選擇加上建立通知的函式：
 
 ```typescript title="src/mastra/index.ts"
 import { Agent } from '@mastra/core/agent'
@@ -264,18 +264,18 @@ export const supportAgent = new Agent({
 webhooks.subscribeThread({ resourceId: 'user_123', threadId: 'thread_456' }, 'acme/app')
 ```
 
-稱呼`webhooks.handleWebhook({ body, headers })` from your route. The provider matches the extracted resource id against its subscriptions and notifies each matching thread.
+從路由呼叫 `webhooks.handleWebhook({ body, headers })`。Provider 會以取出的資源識別碼比對訂閱，並通知所有相符的執行緒。
 
-沒有`extractResourceId`, it reads `resource` or `externalResourceId` from the payload. Without `buildNotification`, it sends a `webhook-event` notification at `medium` priority.
+未提供 `extractResourceId` 時，會從承載資料讀取 `resource` 或 `externalResourceId`。未提供 `buildNotification` 時，會以 `medium` 優先級傳送 `webhook-event` 通知。
 
-## 生產清單 {/* #production-checklist */}
+## 正式環境部署檢查清單 {/* #production-checklist */}
 
 部署前：
 
-* **重複資料刪除重試：**&#x7D66;每一個事件一個穩定的`dedupeKey` or `coalesceKey`. Webhook deliveries and poll cycles repeat, and the provider doesn't deduplicate before `notify()`.
-* **驗證網路鉤子：**
-* **處理源中斷：**`poll()` if needed. Webhook sources usually retry their side, so return a non-2xx status when you couldn't accept the event.
-* **如果重要的話，請保留訂閱：**&#x8A3B;冊表位於記憶體中。將其重新水化`start()` when a restart must preserve watches.
-* **使用共享儲存：**&#x901A;知記錄和傳遞策略取決於Agent的 Mastra 儲存。
-* **計劃停工：**&#x505C;止接受 webhook、停止輪詢、關閉客戶端並讓動態通知穩定下來。
-* **觀察通知隊列：**&#x6458;要和延期交付取決於[notification dispatcher](/docs/signals/notifications#dispatch), especially across shared storage.
+- **避免重試造成重複通知：** 為每個事件指定固定的 `dedupeKey` 或 `coalesceKey`。Webhook 可能重複投遞，輪詢也可能再次讀到同一事件，而 Provider 不會在 `notify()` 之前去除重複項目。
+- **驗證 Webhook：** 解析前使用原始請求本文驗證簽章，並由 HTTP 端點拒絕無效的請求。
+- **處理來源中斷：** 輪詢會在下一個間隔重試，必要時可在 `poll()` 實作退避。Webhook 來源通常會自行重試；無法接收事件時，請回傳非 2xx 狀態碼。
+- **視需求保存訂閱：** 登錄表位於記憶體。若重啟後仍須監看，請在 `start()` 重新載入訂閱。
+- **使用共用儲存：** 通知紀錄和投遞政策依賴 Agent 使用的 Mastra 儲存層。
+- **規劃關閉流程：** 停止接收 Webhook、停止輪詢、關閉用戶端，並讓傳送中的通知處理完畢。
+- **監控通知佇列：** 摘要和延後投遞仰賴[通知分派器](/docs/signals/notifications#dispatch)，尤其在共用儲存時。

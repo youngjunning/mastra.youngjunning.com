@@ -1,29 +1,29 @@
 ---
-title: "MCP authentication and authorization"
-description: "Choose credentials for MCP connections, protect a Mastra MCP server, and separate delegated access from tool and data permissions."
+title: "MCP 驗證與授權"
+description: "為 MCP 連線選擇憑證、保護 Mastra MCP 伺服器，並區分委派存取與工具及資料權限。"
 packages:
   - "@mastra/mcp"
   - "@mastra/core"
   - "@mastra/server"
 ---
 
-# MCP認證和授權
+# MCP 驗證與授權
 
-您可以將 Mastra 應用程式連接到其他人受保護的 MCP 伺服器，或將自己的Tool和資料公開給第三方用戶端。每個方向都需要不同的憑證和不同的檢查。
+Mastra 應用程式可能連線至他人受保護的 MCP 伺服器，也可能向第三方用戶端提供自己的工具與資料。兩種方向各自需要不同的憑證和檢查。
 
-在兩個方向上，MCP 連線都會跨越多個安全邊界：對呼叫者進行身份驗證並不會決定他們可以讀取哪些客戶記錄，而且連線權限不會授權每個Tool操作。將憑證、委派存取和應用程式權限視為單獨的決策。
+不論是哪個方向，MCP 連線都會跨越多道安全邊界：驗證呼叫者身分，並不能決定他可以讀取哪些客戶紀錄；允許連線，也不代表允許執行每項工具操作。憑證、委派存取權和應用程式權限應分開判斷。
 
-本指南解釋了 Mastra 作為 MCP 用戶端和伺服器的這些決策。協議要求參見[MCP authorization specification dated July 28, 2026](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization).
+本指南說明 Mastra 作為 MCP 用戶端與伺服器時的判斷方式。文中的協定要求參照 [2026 年 7 月 28 日版 MCP 授權規範](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization)。
 
-## 了解界限 {/* #understand-the-boundaries */}
+## 了解安全邊界 {/* #understand-the-boundaries */}
 
-這三個決定回答了不同的問題：
+以下三項決策回答不同問題：
 
-* **驗證**驗證呼叫者，例如使用者或服務帳戶。
-* **授權存取**讓客戶端透過授權伺服器授予存取權限進行操作。 OAuth 存取權杖授予對其預期資源的存取權限，它不是通用身分憑證。
-* **申請授權**決定呼叫者是否可以對資料執行操作，例如更新其組織中的發票。
+- **身分驗證**：確認呼叫者的身分，例如使用者或服務帳號。
+- **委派存取**：讓用戶端使用透過授權伺服器授予的存取權。OAuth 存取權杖只授權存取指定資源，不能當成通用身分憑證。
+- **應用程式授權**：判斷呼叫者能否對資料執行特定操作，例如更新所屬組織的發票。
 
-在 HTTP OAuth 流程中，這些是單獨的角色而不是一項服務：
+在 HTTP OAuth 流程中，這些是彼此獨立的角色，並非同一項服務：
 
 ```mermaid
 flowchart LR
@@ -34,134 +34,134 @@ flowchart LR
   client -- "Bearer token for<br/>the server URI" --> server([MCP server])
 ```
 
-MCP 伺服器是受保護的資源，不一定是讓使用者登入的服務。授權伺服器頒發令牌，並且可以與 MCP 伺服器分開。客戶端獲取並呈現一個令牌。在使用者委託的流程中，授權伺服器根據需要與使用者互動以進行身份驗證和同意。並非每個流程都需要使用者互動。
+MCP 伺服器是受保護的資源，不一定是讓使用者登入的服務。授權伺服器負責核發權杖，可以與 MCP 伺服器分開。用戶端取得並提交權杖。在由使用者委派存取的流程中，授權伺服器會視需要與使用者互動，完成身分驗證和同意授權；並非每種流程都需要使用者參與。
 
-您的应用程序在该图中的位置决定了它管理哪些凭据。和[`MCPClient`](/reference/tools/mcp-client), your Mastra application connects to another MCP server. With [`MCPServer`](/reference/tools/mcp-server), your application exposes capabilities to other clients. The same application can do both, but its incoming and outgoing credentials serve different boundaries.
+應用程式在圖中的位置，決定它需要管理哪些憑證。使用 [`MCPClient`](/reference/tools/mcp-client) 時，Mastra 應用程式會連線至另一部 MCP 伺服器；使用 [`MCPServer`](/reference/tools/mcp-server) 時，應用程式則向其他用戶端提供功能。同一個應用程式可以同時扮演兩種角色，但入站與出站憑證對應不同的安全邊界。
 
-MCP 授權是可選的。對於 HTTP 傳輸，支援授權的實作應遵循規範。使用 stdio 的實作應該從環境中檢索憑證，並且不應使用此 HTTP 授權流程。在選擇憑證機制之前選擇傳輸方式。
+MCP 授權並非必須。對於 HTTP 傳輸，支援授權的實作應遵循規範。使用 stdio 的實作則應從環境取得憑證，而不應使用此 HTTP 授權流程。先選擇傳輸方式，再選擇憑證機制。
 
-## 連接到受保護的 MCP 伺服器 {/* #connect-to-protected-mcp-servers */}
+## 連線至受保護的 MCP 伺服器 {/* #connect-to-protected-mcp-servers */}
 
-根據遠端伺服器應強制執行的存取權限來選擇憑證：
+依遠端伺服器應針對誰的存取權進行控管，選擇適當憑證：
 
-|接入模式|馬斯特拉整合 |應用責任|
+| 存取模式 | Mastra 整合方式 | 應用程式的責任 |
 | - | - | - |
-|共享服務存取|透過設定伺服器特定的憑證`MCPClient` request headers or a custom `fetch`. | Limit the service account's access. Don't treat shared credentials as proof of the end user's permissions. |
-| Access delegated by each user | Configure a separate `MCPOAuthClientProvider` for each server through `authProvider`. | Isolate each user's providers, connections, tokens, and stored registration state. |
+| 共用服務存取權 | 透過 `MCPClient` 要求標頭或自訂 `fetch`，設定該伺服器專用的憑證。 | 限制服務帳號的存取權。不要把共用憑證視為終端使用者擁有相同權限的證明。 |
+| 由各使用者分別委派存取 | 透過 `authProvider`，為每部伺服器設定獨立的 `MCPOAuthClientProvider`。 | 隔離各使用者的 Provider、連線、權杖及儲存的註冊狀態。 |
 
-看[MCP connection configuration](/docs/connections/mcp) for static and runtime tools, and the [OAuth client reference](/reference/tools/mcp-client#oauth-authentication) for provider configuration and storage.
+靜態與執行階段工具的設定方式請參閱 [MCP 連線設定](/docs/connections/mcp)；Provider 設定和儲存方式請參閱 [OAuth 用戶端參考文件](/reference/tools/mcp-client#oauth-authentication)。
 
-每個 MCP 伺服器都有一個單獨的Provider做一件事而不是另一件事：
+每部 MCP 伺服器各自使用一個 Provider，能做到以下事情，但也有其限制：
 
-* 它阻止該Provider的授權會話狀態在伺服器之間共用。
-* 它不會隔離使用者或授權伺服器頒發者。 Mastra 的預設 OAuth 儲存在記憶體中。風俗`OAuthStorage` controls persistence, so scope that storage to the user and connection.
-* 它無法為您將憑證綁定到頒發者。此規範要求頒發者綁定的註冊憑證以及不同授權伺服器的單獨註冊和令牌狀態，因此當頒發者變更時不要重複使用這些憑證。
+- 它能避免同一個 Provider 的授權工作階段狀態在伺服器之間共用。
+- 它不會隔離使用者或授權伺服器的簽發者。Mastra 預設將 OAuth 狀態存在記憶體中；自訂 `OAuthStorage` 決定持久化方式，因此儲存範圍應限定在個別使用者與連線。
+- 它不會替你將憑證綁定至簽發者。規範要求註冊憑證綁定簽發者，且不同授權伺服器的註冊及權杖狀態必須分開。簽發者變更時，請勿重複使用這些憑證。
 
-### 註冊和瀏覽器回調 {/* #registration-and-browser-callbacks */}
+### 註冊與瀏覽器回呼 {/* #registration-and-browser-callbacks */}
 
-該規範建議支持**Client ID Metadata Documents (CIMD)**, which identify a client through an HTTPS metadata URL. It also defines pre-registration. Clients that support all registration options should prefer existing pre-registered information when available. Legacy Dynamic Client Registration (DCR) remains optional for compatibility but is deprecated for new implementations. See the versioned [client registration rules](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization/client-registration).
+規範建議支援 **Client ID Metadata Documents (CIMD)**，以 HTTPS 中繼資料 URL 識別用戶端；也定義了預先註冊。支援所有註冊方式的用戶端，若有既存的預先註冊資料，應優先使用。舊版 Dynamic Client Registration (DCR) 仍可選用以維持相容性，但新實作不再建議採用。詳見對應版本的[用戶端註冊規則](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization/client-registration)。
 
-`MCPOAuthClientProvider`從不在執行時註冊客戶端且不支援 DCR。僅配置一個客戶端身分：`clientInformation` for a client pre-registered with the authorization server, or `clientMetadataUrl` for CIMD. Check that your authorization server supports the mechanism you choose before deploying. See the [OAuth client reference](/reference/tools/mcp-client#oauth-authentication) for configuration examples.
+`MCPOAuthClientProvider` 不會在執行階段註冊用戶端，也不支援 DCR。請只設定一種用戶端身分：已在授權伺服器預先註冊的用戶端使用 `clientInformation`，CIMD 則使用 `clientMetadataUrl`。部署前，請確認授權伺服器支援所選機制。設定範例請參閱 [OAuth 用戶端參考文件](/reference/tools/mcp-client#oauth-authentication)。
 
-馬斯特拉的互動`authenticate()` flow uses a local loopback callback server. It isn't a hosted multi-user login endpoint. A hosted application must own its callback endpoint and associate each authorization attempt with the correct user and provider. See [interactive browser authentication](/reference/tools/mcp-client#interactive-browser-authentication).
+Mastra 的互動式 `authenticate()` 流程使用本機回環回呼伺服器，並非託管式的多使用者登入端點。託管應用程式必須自行提供回呼端點，並將每次授權嘗試對應至正確的使用者與 Provider。詳見[互動式瀏覽器驗證](/reference/tools/mcp-client#interactive-browser-authentication)。
 
-### 授權回應職責 {/* #authorization-response-responsibilities */}
+### 授權回應的處理責任 {/* #authorization-response-responsibilities */}
 
-對於您選擇的客戶端集成，請區分以下協定職責：
+針對選用的用戶端整合方式，請分別確認以下協定責任：
 
-* 客戶端必須實現代碼交換證明金鑰 (PKCE)，驗證授權伺服器公佈的支持，並使用`S256` when technically capable.
-* 重定向 URI 必須使用 HTTPS 或 localhost。授權伺服器必須與註冊的重定向 URI 完全相符。客戶端應使用並驗證 OAuth`state`.
+- 用戶端必須實作 Proof Key for Code Exchange (PKCE)、確認授權伺服器宣告支援，並在技術上可行時使用 `S256`。
+- 重新導向 URI 必須使用 HTTPS 或 localhost。授權伺服器必須與已註冊的重新導向 URI 完全相符。用戶端應使用並驗證 OAuth `state`。
 
-客戶還必須拒絕任何授權回應，其`iss` value doesn't exactly match the issuer recorded from validated authorization-server metadata. What the client must do depends on the response and whether the server advertises `authorization_response_iss_parameter_supported`:
+如果授權回應中的 `iss` 與已驗證授權伺服器中繼資料所記錄的簽發者不完全相符，用戶端也必須拒絕回應。具體行為取決於回應內容，以及伺服器是否宣告 `authorization_response_iss_parameter_supported`：
 
-|授權回應`iss` | Server advertises `iss` support | Client action |
+| 授權回應的 `iss` | 伺服器宣告支援 `iss` | 用戶端動作 |
 | - | - | - |
-| Present and exactly matches the recorded issuer | Either value | Continue |
-| Present but doesn't match | Either value | Reject before exchanging the code |
-| Missing | `true` | Reject before exchanging the code |
-| Missing | `false` or absent | Permitted |
+| 存在且與記錄的簽發者完全相符 | 任意值 | 繼續 |
+| 存在但不相符 | 任意值 | 交換授權碼前拒絕 |
+| 缺少 | `true` | 交換授權碼前拒絕 |
+| 缺少 | `false` 或未提供 | 允許 |
 
-請參閱[authorization response validation rules](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization#authorization-response-validation). Validating `state` isn't issuer validation.
+詳見[授權回應驗證規則](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization#authorization-response-validation)。驗證 `state` 並不等於驗證簽發者。
 
-在依賴您選擇的整合之前驗證這些責任`authProvider` configuration. The [security considerations](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization/security-considerations) define the full rules.
+在依賴所選整合的 `authProvider` 設定前，請確認它履行上述責任。完整規則請參閱[安全性考量](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization/security-considerations)。
 
 ## 保護 Mastra MCP 伺服器 {/* #protect-a-mastra-mcp-server */}
 
-從兩個單獨的問題開始：客戶端如何發現從哪裡取得令牌，以及伺服器如何驗證該令牌？
+先分別釐清兩個問題：用戶端如何找出取得權杖的位置？伺服器又如何驗證該權杖？
 
-如果您的伺服器使用授權，則協定流程為：
+如果伺服器使用授權，協定流程如下：
 
-1. 用戶端發現 MCP 伺服器的受保護資源元數據，該元數據標識其授權伺服器。
-2. 用戶端發現所選授權伺服器的元資料並取得 MCP 伺服器的令牌。
-3. MCP 伺服器在應用程式授權請求的操作之前驗證令牌。
+1. 用戶端探索 MCP 伺服器的受保護資源中繼資料，從中得知其授權伺服器。
+1. 用戶端探索選定授權伺服器的中繼資料，並取得供 MCP 伺服器使用的權杖。
+1. MCP 伺服器先驗證權杖，再由應用程式授權所要求的操作。
 
-此規範需要受保護的資源元資料和授權伺服器發現。宣傳發行者或支援的範圍不會驗證令牌或強制執行權限。看[authorization server discovery](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization/authorization-server-discovery).
+規範要求提供受保護資源中繼資料，以及授權伺服器探索機制。公布簽發者或支援的 scope，並不會自動驗證權杖或強制執行權限。詳見[授權伺服器探索](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization/authorization-server-discovery)。
 
-對於令牌使用，客戶端必須將 MCP 伺服器的規格 URI 包含為`resource` in authorization and token requests, then send access tokens in the `Authorization` header, never the query string. Servers must validate that a token is valid and intended for them, including its audience, and return HTTP 401 for invalid or expired tokens.
+使用權杖時，用戶端必須在授權和權杖要求中，以 `resource` 指定 MCP 伺服器的標準 URI；之後要在 `Authorization` 標頭傳送存取權杖，絕不能放在查詢字串。伺服器必須驗證權杖有效且以自身為對象，包括檢查其 audience；權杖無效或過期時須回傳 HTTP 401。
 
-馬斯特拉的`createOAuthMiddleware` can serve protected-resource metadata and challenge requests without a bearer token. It calls a configured token validator and rejects results marked invalid.
+Mastra 的 `createOAuthMiddleware` 可提供受保護資源中繼資料，並對未帶 bearer token 的要求發出驗證質詢。它會呼叫已設定的權杖驗證器，並拒絕標示為無效的結果。
 
-：：：警告
+:::warning
 
-如果沒有驗證器，中間件將接受未經驗證的令牌。該行為用於開發和測試，而不是生產保護。
+若未設定驗證器，中介軟體會接受未經驗證的權杖。此行為僅供開發與測試使用，無法保護正式環境。
 
 :::
 
-配置適合您的發行人的驗證，包括受眾和到期檢查。驗證結果還需要連接到您的Tool所使用的可信身份。中間件不會為您執行身分映射。
+請依簽發者設定適當的驗證，包括 audience 與到期時間檢查。驗證結果也必須連結至工具使用的可信身分；中介軟體不會替你進行身分對應。
 
-保護馬斯特拉路線`server.auth` and providing interoperable OAuth discovery are different tasks. Don't assume configuring one supplies the other.
+透過 `server.auth` 保護 Mastra 路由，與提供可互通的 OAuth 探索機制，是兩項不同工作。設定其中一項，不代表另一項已經就緒。
 
-### 路由 Mastra 註冊 MCP 伺服器 {/* #routes-mastra-registers-for-an-mcp-server */}
+### Mastra 為 MCP 伺服器註冊的路由 {/* #routes-mastra-registers-for-an-mcp-server */}
 
-除了 MCP 傳輸之外，Mastra 還註冊 Studio 使用的 REST 路由來列出伺服器、檢查Tool、執行Tool和讀取資源。請參閱[MCP routes reference](/reference/server/routes#mcp) for the full list. These paths use the default `/api` prefix.
+除了 MCP 傳輸端點，Mastra 也註冊供 Studio 列出伺服器、查看工具、執行工具與讀取資源的 REST 路由。完整清單請參閱 [MCP 路由參考文件](/reference/server/routes#mcp)。這些路徑預設使用 `/api` 前綴。
 
-這`POST /api/mcp/:serverId/tools/:toolId/execute` route calls `executeTool()` directly, without a protocol client. With a Mastra FGA provider configured, `MCPServer.executeTool()` enforces tool execution permission using the user in `requestContext`. The REST tool list also filters tools through FGA, but these permission checks don't replace route authentication.
+`POST /api/mcp/:serverId/tools/:toolId/execute` 路由直接呼叫 `executeTool()`，不會經過協定用戶端。若已設定 Mastra FGA Provider，`MCPServer.executeTool()` 會依據 `requestContext` 中的使用者檢查工具執行權限。REST 工具清單也會透過 FGA 篩選工具，但這些權限檢查不能取代路由的身分驗證。
 
-這些路由的內建身份驗證取決於`server.auth`. Without it, `requiresAuth: true` doesn't enforce authentication. Custom middleware that checks only the `/mcp` or `/sse` transport paths leaves the REST routes open. If you use custom middleware instead of `server.auth`, default-deny `/api/mcp/*` and allow access only after authentication.
+這些路由的內建身分驗證取決於 `server.auth`。沒有設定它時，`requiresAuth: true` 不會強制驗證。若自訂中介軟體只檢查 `/mcp` 或 `/sse` 傳輸路徑，REST 路由仍會開放。使用自訂中介軟體而非 `server.auth` 時，應預設拒絕 `/api/mcp/*`，並只在完成驗證後允許存取。
 
-### 將經過驗證的身份傳遞給Tool {/* #pass-verified-identity-to-tools */}
+### 將已驗證身分傳給工具 {/* #pass-verified-identity-to-tools */}
 
-當 Mastra 伺服器處理 MCP 請求時，其驗證橋會保留現有的`req.auth`. Otherwise, it uses `server.mcpOptions.setRequestAuth` when configured, or builds `authInfo` from the request context. With the default bridge, the authenticated user is available in `authInfo.extra.user`.
+Mastra 伺服器處理 MCP 要求時，驗證橋接層會保留既有的 `req.auth`。否則，若已設定 `server.mcpOptions.setRequestAuth`，就使用該設定；再否則從要求內容建立 `authInfo`。使用預設橋接方式時，已驗證的使用者位於 `authInfo.extra.user`。
 
-從受信任的身份驗證結果填入該身份，因為對應欄位不會驗證憑證。看[forwarding identity to MCP tools](/docs/guides/authentication-identity#forward-identity-to-mcp-tools) for the bridge and [where `authInfo` comes from](/reference/tools/mcp-server#where-authinfo-comes-from) for the mapping reference.
+請根據可信的驗證結果填入該身分，因為欄位對應本身不會驗證憑證。橋接方式請參閱[將身分傳給 MCP 工具](/docs/guides/authentication-identity#forward-identity-to-mcp-tools)；對應關係請參閱 [`authInfo` 的來源](/reference/tools/mcp-server#where-authinfo-comes-from)。
 
-## 授權Tool和數據 {/* #authorize-tools-and-data */}
+## 授權工具與資料 {/* #authorize-tools-and-data */}
 
-OAuth 範圍描述了授予的存取權限，但它們並不能取代應用程式的權限和所有權檢查。此規範建議最小權限範圍請求，並描述當操作需要更多存取權限時的逐步授權。不要假設 Mastra 會自動組合範圍或針對您的應用程式策略發出範圍不足的挑戰。
+OAuth scope 說明已授予的存取權，但不能取代應用程式的權限及資料所有權檢查。規範建議要求最小必要的 scope，並說明操作需要更多權限時如何逐步授權。不要假設 Mastra 會自動合併 scope，或針對應用程式政策自動發出權限不足質詢。
 
-配置 Mastra FGA Provider後，`MCPServer` filters `tools/list` and enforces tool execution authorization on `tools/call`. `mapAuthInfoToUser` maps trusted MCP authentication information to the user those checks consume. See [fine-grained authorization](/docs/auth/fga) for policy setup and the [`MCPServer` configuration](/reference/tools/mcp-server#configuration-properties) for MCP-specific mappings.
+設定 Mastra FGA Provider 後，`MCPServer` 會篩選 `tools/list`，並在 `tools/call` 檢查工具執行權限。`mapAuthInfoToUser` 會將可信的 MCP 驗證資訊對應到這些檢查所使用的使用者。政策設定請參閱[細粒度授權](/docs/auth/fga)；MCP 專用對應請參閱 [`MCPServer` 設定](/reference/tools/mcp-server#configuration-properties)。
 
-Tool可見性還不夠：呼叫者可以嘗試呼叫Tool而無需先列出它。在呼叫時保持授權，並檢查每個請求的記錄是否屬於呼叫者可以存取的組織或使用者。從受信任的伺服器上下文解析呼叫者和租用戶，而不是模型提供的Tool參數。人工批准可以確認預期的操作，但不能取代這些檢查。
+控制工具是否顯示還不夠：呼叫者即使沒有先列出工具，仍可嘗試呼叫。請在呼叫時檢查權限，並確認每筆要求的紀錄屬於呼叫者可存取的組織或使用者。應從可信的伺服器內容判定呼叫者與租戶，而不是採用模型提供的工具參數。人工核准可以確認預期操作，但不能取代這些檢查。
 
-MCP Tool FGA 整合不會自動授權資源、提示或訂閱，且其對應不適用於內部Agent或WorkflowTool執行。如果您公開這些表面，請在應用程式程式碼中對它們進行授權。
+MCP 工具的 FGA 整合不會自動授權資源、提示或訂閱，其對應設定也不適用於內部 Agent 或 Workflow 的工具執行。如果公開這些功能，請在應用程式程式碼中分別授權。
 
-：：：警告
+:::warning
 
-不要假設Tool權限可以保護您透過資源、提示或訂閱公開的呼叫者敏感資料。
+不要假設工具權限也能保護透過資源、提示或訂閱提供的呼叫者敏感資料。
 
 :::
 
 ## 安全存取上游服務 {/* #access-upstream-services-safely */}
 
-MCP 存取權杖用於 MCP 伺服器。该规范禁止将该令牌传递给上游 API。當Tool呼叫另一個服務時，請使用專用於該服務的單獨憑證，這些憑證由授權使用者或租用戶的可信任應用程式程式碼選擇。
+MCP 存取權杖是提供給 MCP 伺服器使用的。規範禁止將它直接轉交上游 API。工具呼叫其他服務時，應使用專供該服務使用的獨立憑證，並由可信的應用程式程式碼依已授權的使用者或租戶選擇。
 
-將存取權杖、刷新令牌和服務憑證保留在模型可見指令、Tool參數和Tool結果之外。僅返回任務所需的資料。這[authentication and identity guide](/docs/guides/authentication-identity#keep-secrets-outside-the-model-boundary) explains this model boundary.
+存取權杖、更新權杖與服務憑證，不應出現在模型可見的指示、工具參數或工具結果中。只回傳完成工作所需的資料。[驗證與身分指南](/docs/guides/authentication-identity#keep-secrets-outside-the-model-boundary)說明了這道模型邊界。
 
-## 生產清單 {/* #production-checklist */}
+## 正式環境檢查清單 {/* #production-checklist */}
 
-* \[ ] **Validate tokens:** Configure validation for your issuer, including audience and expiry checks, and confirm an unvalidated token is rejected.
-* \[ ] **Challenge missing tokens:** Confirm every protected server path returns `401` without a bearer token.
-* \[ ] **Protect MCP REST routes:** If you don't use `server.auth`, confirm `/api/mcp/:serverId/tools*`, `/api/mcp/:serverId/resources*`, and `/api/mcp/v0/servers*` aren't reachable without authentication. Use your configured API prefix if it differs from `/api`.
-* \[ ] **Isolate users:** Confirm one user's provider, connection, and stored credentials aren't reused for another user.
-* \[ ] **Bind credentials to the issuer:** Confirm registration and tokens aren't reused when the authorization server changes.
-* \[ ] **Deny unauthorized operations:** Confirm a caller without permission is denied both `tools/call` and `POST /api/mcp/:serverId/tools/:toolId/execute`, including for a tool it never listed.
-* \[ ] **Scope records to the caller:** Confirm record lookups resolve the tenant from trusted server context rather than tool arguments.
-* \[ ] **Keep tokens at their audience:** Confirm upstream calls use separate credentials and never forward the MCP token.
-* \[ ] **Keep secrets out of model data:** Confirm tokens and credentials stay out of instructions, tool arguments, and tool results.
+- [ ] **驗證權杖：**依簽發者設定驗證，包括 audience 和到期時間檢查，並確認未經驗證的權杖會被拒絕。
+- [ ] **質詢缺少權杖的要求：**確認所有受保護的伺服器路徑，在沒有 bearer token 時都回傳 `401`。
+- [ ] **保護 MCP REST 路由：**若未使用 `server.auth`，確認未通過驗證時無法存取 `/api/mcp/:serverId/tools*`、`/api/mcp/:serverId/resources*` 和 `/api/mcp/v0/servers*`。如果 API 前綴不是 `/api`，請改用實際前綴。
+- [ ] **隔離使用者：**確認某位使用者的 Provider、連線與已存憑證不會供其他使用者重複使用。
+- [ ] **憑證綁定簽發者：**確認授權伺服器變更時，不會重複使用註冊資料和權杖。
+- [ ] **拒絕未授權操作：**確認沒有權限的呼叫者在 `tools/call` 和 `POST /api/mcp/:serverId/tools/:toolId/execute` 都會被拒絕，即使他從未列出該工具。
+- [ ] **依呼叫者限制紀錄範圍：**確認查詢紀錄時，租戶資訊取自可信的伺服器內容，而不是工具參數。
+- [ ] **權杖只供指定資源使用：**確認上游呼叫使用獨立憑證，且絕不轉送 MCP 權杖。
+- [ ] **避免向模型揭露機密：**確認權杖與憑證不會出現在指示、工具參數或工具結果中。
 
 ## 後續步驟 {/* #next-steps */}
 
-* 連接到受保護的伺服器[MCP connection configuration](/docs/connections/mcp) and the [`MCPClient` reference](/reference/tools/mcp-client).
-* 公開您自己的Tool並查看傳輸和上下文選項[`MCPServer` reference](/reference/tools/mcp-server).
-* 新增權限檢查[fine-grained authorization](/docs/auth/fga).
-* 使用以下命令追蹤傳入請求的身份[authentication and identity guide](/docs/guides/authentication-identity).
+- 依照 [MCP 連線設定](/docs/connections/mcp)與 [`MCPClient` 參考文件](/reference/tools/mcp-client)，連線至受保護的伺服器。
+- 參閱 [`MCPServer` 參考文件](/reference/tools/mcp-server)，了解如何提供自己的工具，以及傳輸與內容選項。
+- 透過[細粒度授權](/docs/auth/fga)加入權限檢查。
+- 透過[驗證與身分指南](/docs/guides/authentication-identity)追查傳入要求的身分。

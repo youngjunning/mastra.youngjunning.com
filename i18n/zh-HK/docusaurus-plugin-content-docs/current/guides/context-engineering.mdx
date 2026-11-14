@@ -1,39 +1,39 @@
 ---
-title: "Context engineering"
-description: "Engineer the context Mastra agents receive by combining instructions, inline data, tools, RAG, filesystems, memory, and observational memory."
+title: "上下文工程"
+description: "結合指令、內嵌資料、Tool、RAG、檔案系統、記憶及觀察記憶，設計 Mastra Agent 接收的上下文。"
 packages:
   - "@mastra/core"
   - "@mastra/memory"
   - "@mastra/rag"
 ---
 
-# 情境工程
+# 上下文工程
 
 {/* vale ai-tells.VerbTricolon = NO */}
 
-模型只能使用其上下文視窗中可用的資訊。這可能包括當前對話、記住的細節、應用程式資料、Tool結果或知識庫中的相關段落。
+模型只能利用上下文視窗中的資料，例如目前對話、記住的細節、應用程式資料、Tool 結果或知識庫的相關段落。
 
-上下文工程是決定模型應該看到什麼資訊以及何時看到的實踐。我們的目標不是提供盡可能多的內容，而是保持上下文的相關性和最新性。上下文太少會使模型無法獲得所需的資訊；太多可能會使重要細節更難找到，增加成本，並在模型達到其上下文限制之前降低響應品質。
+上下文工程是決定模型應在何時看到哪些資料。目標是令資料保持相關和及時，而非越多越好。資料太少，模型缺乏必要依據；太多，重要細節便更難找到，成本增加，甚至在達到上下文上限前已降低回應質素。
 
-Mastra 提供了不同的方法來將資訊帶入上下文、保持資訊隨時間可用、在需要時檢索資訊以及隨著任務的增長減少或隔離資訊。本指南解釋了何時使用每種機制以及它們如何組合在一起。
+Mastra 提供多種機制，可將資料帶入上下文、長期保留、按需要檢索，並在工作擴大時壓縮或隔離。本指南說明各機制的使用時機及配合方式。
 
 {/* vale ai-tells.VerbTricolon = YES */}
 
-|需要|以 | 開頭模型看到了什麼 |
+| 需求 | 從何入手 | 模型看到的內容 |
 | - | - | - |
-|穩定的身份、規則或約束|[Instructions](#instructions) | System context on each model call |
-| Data from a database or API | [Tools](#tools) | Tool definitions followed by selected results |
-| Current customer or application data | [內聯上下文](#inline-context)|資料插入到用戶訊息中 |
-|龐大、穩定的知識庫 |[抹布](#rag)|索引中語意相關的區塊 |
-|使用者或組織管理的文件 |[檔案系統](#filesystems)|透過讀取或搜尋Tool選擇的檔案 |
-|最近的談話或持久的事實|[記憶](#memory)|歷史、觀察或檢索的記憶 |
-|一場長時間的對話 |[觀察記憶](#observational-memory)|密集觀察加上最近未觀察到的訊息|
-|運行期間發生新事件或更改狀態 |[訊號](#signals)|用戶訊息、反應訊息、通知訊息或狀態訊息 |
-|僅某些任務需要說明 |[動態技能](#dynamic-skills)
+| 穩定的身分、規則或限制 | [指令](#instructions) | 每次模型呼叫的系統上下文 |
+| 資料庫或 API 資料 | [Tool](#tools) | Tool 定義及選取的結果 |
+| 目前客戶或應用程式資料 | [內嵌上下文](#inline-context) | 插入用戶訊息的資料 |
+| 大型且穩定的知識庫 | [RAG](#rag) | 索引中語義相關的內容區塊 |
+| 用戶或機構管理的文件 | [檔案系統](#filesystems) | 透過讀取或搜尋 Tool 選取的檔案 |
+| 近期對話或持久事實 | [記憶](#memory) | 訊息記錄、觀察紀錄或檢索到的記憶 |
+| 長時間進行的對話 | [觀察記憶](#observational-memory) | 精簡的觀察紀錄及近期尚未觀察的訊息 |
+| 執行期間的新事件或狀態變化 | [Signals](#signals) | 用戶、反應式、通知或狀態訊息 |
+| 只有部分工作需要的指令 | [動態 Skill](#dynamic-skills) | Skill 元資料及按需要載入的指令 |
 
 ## 指示 {/* #instructions */}
 
-一個Agent的[`instructions`](/reference/agents/agent#constructor-parameters) define its stable identity, behavior, and constraints. They're system messages and appear before conversation messages in the model request.
+Agent 的 [`instructions`](/reference/agents/agent#constructor-parameters) 定義穩定的身分、行為及限制。它們屬於系統訊息，出現在模型請求的對話訊息之前。
 
 ```typescript title="src/mastra/agents/support-agent.ts"
 import { Agent } from '@mastra/core/agent'
@@ -47,9 +47,9 @@ export const supportAgent = new Agent({
 })
 ```
 
-讓說明集中在適用於大多數通話的行為上。新增目前帳戶資料、檢索到的文件或特定於任務的詳細資訊會使基本提示變得更大且更難以重複使用。
+指令應聚焦適用於大多數呼叫的行為。加入目前帳戶資料、檢索文件或工作專屬細節，會令基礎提示詞變長且更難重用。
 
-指令也可以在運行時解析[`RequestContext`](/docs/server/request-context):
+指令亦可在執行時從 [`RequestContext`](/docs/server/request-context) 解析：
 
 ```typescript title="src/mastra/agents/support-agent.ts"
 instructions: ({ requestContext }) => {
@@ -59,7 +59,7 @@ instructions: ({ requestContext }) => {
 }
 ```
 
-使用`RequestContext` when instructions depend on data that changes with each request, such as the current user, tenant, locale, role, or feature flags. Anything evaluated when the agent is constructed, including an interpolated `new Date()`, is fixed for the life of the process, so compute time-dependent values inside a callback and pass an explicit timezone:
+如果指令依賴每次請求都可能變動的資料，例如目前用戶、租戶、locale、角色或功能旗標，請使用 `RequestContext`。Agent 建立時求值的內容，包括插入的 `new Date()`，在程序的生命週期內都不會變。因此應在回呼中計算隨時間變化的值，並明確傳入時區：
 
 ```typescript title="src/mastra/agents/support-agent.ts"
 instructions: () =>
@@ -67,19 +67,19 @@ instructions: () =>
   Today is ${new Date().toLocaleDateString('en-US', { timeZone: 'America/New_York' })}.`
 ```
 
-解析回呼中的日期意味著長時間運行的伺服器會在午夜後選取新的一天，並且明確`timeZone` keeps the date stable regardless of the host's timezone. If the date must refresh across tool continuations or coexist with Studio instruction overrides, use a [`processInputStep`](/reference/processors/processor-interface#processinputstep) processor instead.
+在回呼中解析日期，長時間運行的伺服器便能在午夜後取得新日期；明確設定 `timeZone` 可避免主機時區影響日期。若日期必須在 Tool 接續時更新，或需與 Studio 的指令覆寫設定並存，請改用 [`processInputStep`](/reference/processors/processor-interface#processinputstep) 處理器。
 
-：：：提示
+:::tip
 
-如果解析的指令經常更改，模型提供者可能無法重複使用相同的提示快取前綴。首先保持穩定的部分，然後透過訊息或訊號來傳遞頻繁變化的背景。
+若解析後的指令頻繁變動，模型 Provider 可能無法重用提示詞快取的相同前綴。請將穩定部分放在前面，頻繁變動的背景資料則透過訊息或訊號傳送。
 
-手錶[this short video on prompt caching](https://youtu.be/eBB0dBqfvuQ) to learn how cacheable prompt prefixes reduce latency and cost.
+觀看[這段提示詞快取短片](https://youtu.be/eBB0dBqfvuQ)，了解可快取的提示詞前綴如何降低延遲及成本。
 
 :::
 
 ## 內聯上下文 {/* #inline-context */}
 
-大多數應用程式透過將相關值插入到目前訊息中來傳遞運行時上下文。當您的程式碼已經載入客戶或應用程式資料時，這很有效：
+大多數應用程式會將相關值插入目前訊息，以傳遞執行時上下文。如果程式碼已載入客戶或應用程式資料，這種方式很合適：
 
 ```typescript
 const customer = await db.customer.findById(customerId)
@@ -93,9 +93,9 @@ await supportAgent.generate(`
 
 選擇並標記模型所需的字段，而不是序列化整個資料庫記錄。這樣可以使提示更小，並使每個值的含義更加清晰。
 
-啟用記憶體後，Mastra 會保存目前使用者訊息。不要插入不應出現在對話歷史記錄中的敏感或臨時資料。
+啟用記憶後，Mastra 會儲存目前用戶訊息。請勿插入不應留在對話記錄中的敏感或臨時資料。
 
-對於不太常見的情況，即背景應該影響一個回應而不保存為對話歷史記錄，請傳遞一個[`context`](/reference/agents/generate) message:
+若背景資料只需影響一次回應，不應儲存到對話記錄，可傳入 [`context`](/reference/agents/generate) 訊息：
 
 ```typescript
 await supportAgent.generate('Recommend the next action.', {
@@ -103,11 +103,11 @@ await supportAgent.generate('Recommend the next action.', {
 })
 ```
 
-模型會看到目前執行的背景，但 Mastra 不會將其儲存到記憶體中。使用`context` when persisting the background would pollute the conversation or expose temporary application state on later turns.
+模型會在本次執行看到這些背景資料，但 Mastra 不會將它們存入記憶。若儲存背景資料會干擾對話，或令臨時應用程式狀態在後續回合暴露，請使用 `context`。
 
 ## Tool {/* #tools */}
 
-[Tool](/docs/agents/tools)是從資料庫、API 或服務取得目前資料的建議方法。模型決定何時需要資料並提供Tool參數，而您的應用程式控制查詢和傳回的欄位。
+[Tool](/docs/agents/tools) 是從資料庫、API 或服務取得即時資料的建議方式。模型決定何時取資料並提供 Tool 參數，應用程式則控制查詢及傳回欄位。
 
 ```typescript title="src/mastra/tools/customer-tool.ts"
 import { createTool } from '@mastra/core/tools'
@@ -124,9 +124,9 @@ export const getCustomer = createTool({
 })
 ```
 
-使用[`toModelOutput`](/docs/agents/tools#shape-output-for-the-model) when application code needs the full result but the model needs a smaller representation.
+應用程式程式碼需要完整結果、模型只需精簡表示時，請使用 [`toModelOutput`](/docs/agents/tools#shape-output-for-the-model)。
 
-## 抹布 {/* #rag */}
+## RAG {/* #rag */}
 
 [檢索增強生成 (RAG)](/reference/rag/overview)從索引語料庫中檢索語意相關的區塊。它仍然適合大型、穩定的知識庫，使用者可以在其中提出開放式問題，而這些問題不能清楚地映射到結構化資料庫查詢。
 
@@ -141,13 +141,13 @@ const knowledgeBase = createVectorQueryTool({
 })
 ```
 
-註冊引用的向量存儲`vectorStoreName` on the same Mastra instance as the agent. Mastra supports [multiple vector databases](/reference/rag/vector-databases). RAG is often exposed through a tool, as in this example. The design choice is whether the agent needs semantic retrieval or can query the source directly.
+將 `vectorStoreName` 參照的向量儲存註冊到 Agent 所在的 Mastra 實例。Mastra 支援[多種向量資料庫](/reference/rag/vector-databases)。如本例所示，RAG 常透過 Tool 提供。關鍵在於判斷 Agent 需要語義檢索，還是能直接查詢資料來源。
 
-現在許多應用程式都是從直接的、特定於來源的Tool開始的。模型在選擇它們方面變得越來越好，直接查詢通常更簡單、更便宜，因為它不需要分塊、嵌入和向量索引管道。當實際需要對非結構化內容進行語義搜尋時，請選擇 RAG，然後使用元資料過濾器、重新排名和保守的方法來約束返回的上下文`topK`.
+如今不少應用程式會先使用直接查詢特定資料來源的 Tool。模型更擅長選用這類 Tool，而直接查詢通常更簡單、成本更低，因為毋須進行分塊、嵌入及向量索引。只有確實需要對非結構化內容做語義搜尋時才選用 RAG，並以元資料篩選、重新排序及保守的 `topK` 限制傳回的上下文。
 
 ## 檔案系統 {/* #filesystems */}
 
-一個[filesystem](/docs/sandbox/filesystem) gives an agent persistent access to documents and other files. Files can live in a local directory or in providers such as Amazon S3, AgentFS, or Google Drive. The agent receives built-in tools to list, read, and search them.
+[檔案系統](/docs/sandbox/filesystem)讓 Agent 持續存取文件和其他檔案。檔案可位於本機目錄，或 Amazon S3、AgentFS、Google Drive 等 Provider。Agent 會取得列出、讀取及搜尋檔案的內置 Tool。
 
 ```typescript title="src/mastra/workspace.ts"
 import { LocalFilesystem, Workspace } from '@mastra/core/workspace'
@@ -163,19 +163,19 @@ export const workspace = new Workspace({
 await workspace.init()
 ```
 
-[Workspace搜尋](/docs/sandbox/search)支援 BM25 關鍵字搜尋、向量語義搜尋或兩者的混合。使用文件系統作為個人助理，處理使用者的文件或團隊成員在 Google Drive 等服務中更新的組織知識庫。搜尋針對Workspace索引執行，因此必須先對已變更的檔案建立索引，然後Agent程式才能檢索其最新內容。
+[Workspace 搜尋](/docs/sandbox/search)支援 BM25 關鍵字搜尋、向量語義搜尋及混合搜尋。個人助理需要處理用戶檔案，或團隊透過 Google Drive 等服務更新機構知識庫時，可使用檔案系統。搜尋以 Workspace 索引為準，因此檔案變更後必須先更新索引，Agent 才能檢索最新內容。
 
-：：：提示
+:::tip
 
-檔案系統搜尋也可以使用向量，因此它與 RAG 重疊。當真實來源是Agent可能需要列出、讀取或更新的一組檔案時，請選擇檔案系統。當檢索是主要要求且來源內容不需要像檔案一樣運作時，請選擇獨立的 RAG 管道。
+檔案系統搜尋亦可使用向量，因此與 RAG 的功能有所重疊。若資料來源是一組 Agent 可能需要列出、讀取或更新的檔案，請選用檔案系統；若主要需求是檢索，且內容毋須當作檔案處理，則選用獨立的 RAG 流程。
 
 :::
 
 ## 記憶 {/* #memory */}
 
-[記憶](/docs/memory/overview)為座席提供跨輪對話的連貫性。它將最近的訊息和記住的細節帶入上下文中，而不需要應用程式每次都重新發送完整的記錄。
+[記憶](/docs/memory/overview)讓 Agent 的多輪對話保持連貫。它將近期訊息及記住的細節帶入上下文，應用程式毋須每回合重新傳送完整對話記錄。
 
-記憶體需要一個儲存提供者。每個呼叫還標識一個`resource` that owns the memory and a `thread` that identifies the conversation. Reuse both values to continue the same conversation:
+記憶需要儲存 Provider。每次呼叫還須指定擁有該記憶的 `resource`，以及識別對話的 `thread`。沿用這兩個值，才能接續同一對話：
 
 ```typescript title="src/mastra/agents/assistant.ts"
 import { Agent } from '@mastra/core/agent'
@@ -200,17 +200,17 @@ await assistant.generate('Help me plan the next project milestone.', {
 })
 ```
 
-此範例假設儲存體是在註冊的 Mastra 實例上配置的或直接在`Memory`. `lastMessages` controls how many recent messages Mastra loads from the thread. The default is 10.
+本例假設儲存已設定於註冊的 Mastra 實例，或直接設定於 `Memory`。`lastMessages` 控制 Mastra 從執行緒載入的近期訊息數量，預設為 10。
 
-訊息歷史記錄非常適合較短的對話，其中最近的對話包含Agent所需的上下文。因為`lastMessages` window slides forward on every request, each turn past the limit removes the oldest message from the start of the prompt and invalidates the provider prompt cache. For long-running conversations, Mastra recommends [Observational Memory](/docs/memory/observational-memory), which keeps recent conversation available and turns older history into a dense observation log while keeping the prompt prefix stable for caching.
+訊息記錄適合較短的對話，近期回合通常足以提供所需上下文。`lastMessages` 視窗每次請求都會前移；超過上限後，每回合都會從提示詞開頭移除最舊訊息，令 Provider 的提示詞快取失效。長對話建議使用[觀察記憶](/docs/memory/observational-memory)：它保留近期對話，將舊記錄整理成精簡的觀察紀錄，同時令提示詞前綴保持穩定，以便快取。
 
 ## 觀察記憶 {/* #observational-memory */}
 
 對話歷史記錄隨著每個用戶訊息、回應和Tool呼叫而增長。即使在達到模型的硬上下文限制之前，長文本也會增加成本並使模型更難找到相關細節。壓縮用較小的表示法取代舊的、冗長的歷史記錄。
 
-[觀察記憶](/docs/memory/observational-memory)持續處理這個問題。觀察者將舊的訊息和Tool互動轉化為密集的觀察結果，而定期反射則重新組織和壓縮這些觀察。
+[觀察記憶](/docs/memory/observational-memory)持續處理不斷增加的記錄。Observer 將較舊訊息及 Tool 互動整理成精簡的觀察紀錄，定期反思再重新組織並壓縮這些紀錄。
 
-你不需要配置`lastMessages` when Observational Memory is enabled. Observational Memory manages history itself, keeping recent unobserved messages in context and replacing older messages with observations.
+啟用觀察記憶後，毋須設定 `lastMessages`。觀察記憶會自行管理記錄：在上下文保留近期尚未觀察的訊息，並以觀察紀錄取代較早的訊息。
 
 ```typescript title="src/mastra/agents/assistant.ts"
 import { Agent } from '@mastra/core/agent'
@@ -228,24 +228,24 @@ export const assistant = new Agent({
 })
 ```
 
-觀察到訊息後，模型會收到觀察日誌、最近未觀察到的訊息以及繼續提醒。由於延遲提示在緩衝區塊啟動時可能已過時，因此非同步緩衝觀察不會產生連續提示（`currentTask` or `suggestedResponse`). The raw messages remain stored but no longer occupy the active model context.
+訊息經觀察後，模型會收到觀察紀錄、近期尚未觀察的訊息及續接提醒。非同步緩衝的觀察紀錄不會產生續接提示（`currentTask` 或 `suggestedResponse`），因為緩衝內容啟用時，延遲產生的提示可能已過時。原始訊息仍儲存在後端，但不再佔用目前模型上下文。
 
-觀察結果以穩定的區塊的形式添加，這有助於提供者重複使用現有的提示前綴。觀察記憶體還可以在提示快取可能過期後或Agent更改提供者之前啟動緩衝觀察。
+觀察紀錄以穩定的區塊加入，幫助 Provider 重用現有提示詞前綴。觀察記憶亦可在提示詞快取可能過期後，或 Agent 切換 Provider 前，啟用已緩衝的觀察紀錄。
 
 ## 訊號 {/* #signals */}
 
 [訊號](/docs/signals/overview)將訊息或系統產生的上下文新增至記憶體支援的執行緒。傳遞取決於執行緒的狀態：訊號可以喚醒空閒Agent或進入活動循環。它還可以等待下一個回合或持續存在而不喚醒Agent。
 
-狀態訊號需要記憶體和現有線程。通知收件匣訊號需要具有通知支援的儲存適配器。
+狀態訊號需要記憶及現有執行緒；通知收件箱訊號需要支援通知的儲存適配器。
 
-|應用程式介面 |使用|情境行為 |
+| API | 用途 | 上下文行為 |
 | - | - | - |
-|`sendMessage()` | User input that the active agent should see now | Enters the active loop or wakes an idle thread |
-| `queueMessage()` | User input that should wait for the next turn | Starts after the current run finishes |
-| `sendSignal()` | Background results, policy reminders, or external events | Adds reactive or notification context according to its delivery options |
-| `sendStateSignal()` | Browser state, editor state, task state, or another changing value | Maintains a thread-scoped state lane with snapshots and deltas |
+| `sendMessage()` | 目前運行中的 Agent 應立即看到的用戶輸入 | 進入運行中的迴圈，或喚醒閒置執行緒 |
+| `queueMessage()` | 應等待下一回合的用戶輸入 | 目前執行結束後開始處理 |
+| `sendSignal()` | 背景結果、政策提醒或外部事件 | 按傳送選項加入反應式或通知上下文 |
+| `sendStateSignal()` | 瀏覽器、編輯器、工作等持續變動的狀態 | 透過快照及差異維護執行緒範圍的狀態通道 |
 
-使用`sendSignal()` for context produced by the system rather than the user:
+對系統而非用戶產生的上下文，請使用 `sendSignal()`：
 
 ```typescript
 const result = agent.sendSignal(
@@ -263,15 +263,15 @@ const result = agent.sendSignal(
 await result.accepted
 ```
 
-處理器可以在期間發送反應訊號`processInputStep()`. This is useful for guidance that depends on the current step or a recent tool result. Set `transient: true` when the signal should reach only the current model call. Re-send it when needed instead of storing repeated reminders in conversation history.
+處理器可在 `processInputStep()` 期間傳送反應式訊號，提供依賴目前步驟或近期 Tool 結果的指引。若訊號只應送達目前模型呼叫，請設定 `transient: true`。需要時重新傳送，避免將重複提醒存入對話記錄。
 
-狀態訊號代表隨時間變化的上下文。對於每個狀態通道，Mastra 都會追蹤快照和增量，以便在前一個快照離開活動上下文視窗後重新插入新的快照。使用`computeStateSignal()` when a processor owns the state. This lane can keep working memory and browser context available alongside task lists, even after history or Observational Memory removes older messages.
+狀態訊號表示隨時間變動的上下文。Mastra 會為每條狀態通道追蹤快照及差異；當舊快照離開運行中的上下文視窗後，可重新插入最新快照。處理器負責狀態時，可使用 `computeStateSignal()`。即使訊息記錄或觀察記憶移除較舊訊息，此通道仍能讓工作記憶、瀏覽器上下文及工作清單一同保持可用。
 
 訊號會在目前回合附近附加不斷變化的上下文，而不是重寫Agent的基本指令。因此，瞬態和狀態訊號可以保留更穩定的提示前綴，同時保持當前指導和狀態對模型可見。
 
 ## 動態技能 {/* #dynamic-skills */}
 
-[Agent技巧](/docs/skills)讓Agent僅在需要時載入特定於任務的指令，而不是在其基本指令中攜帶每個流程。使用它們作為適用於某些請求的專門指導，並使預設上下文保持較小。
+[Agent Skill](/docs/skills) 讓 Agent 只在需要時載入工作專屬指令，毋須將所有流程都放進基礎指令。適用於部分請求才需要的專門指引，亦能縮小預設上下文。
 
 ## 情境控制 {/* #context-control */}
 
@@ -279,34 +279,34 @@ await result.accepted
 
 ### 壓實 {/* #compaction */}
 
-如果您使用過 Claude Code，您可能會在長時間會話期間看到壓縮發生。 Mastra 團隊喜歡開玩笑，「朋友不讓朋友做壓縮」。
+若用過 Claude Code，你可能見過長時間工作階段中的上下文壓縮。Mastra 團隊有句玩笑話：「朋友不會讓朋友做上下文壓縮。」
 
-壓縮會等到對話達到令牌閾值。然後它會總結文字記錄並替換先前的訊息。這是一個生硬的後退。壓縮回合增加了延遲，單一摘要必須代表之前發生的所有內容。重複的總結可能會使時間順序變得扁平或失去後來變得重要的細節。
+上下文壓縮會等到對話達到 token 門檻，才摘要記錄並取代較舊訊息。這是較粗略的後備方式：壓縮回合會增加延遲，而一份摘要必須概括先前所有內容。反覆摘要可能模糊時間順序，或遺失後來才顯得重要的細節。
 
-更喜歡[Observational Memory](#observational-memory) for long-running conversations. It can process history asynchronously in the background while preserving temporal context. Reflection revisits accumulated memories and naturally prunes details that no longer matter. Mastra doesn't provide compaction out of the box, though you could implement it with a custom [processor](/docs/agents/processors).
+長對話優先使用[觀察記憶](#observational-memory)。它能在背景非同步處理記錄，同時保留時間脈絡。反思會重新檢視累積的記憶，自然刪減不再重要的細節。Mastra 沒有開箱即用的上下文壓縮，但可透過自訂[處理器](/docs/agents/processors)實作。
 
 ### 處理器 {/* #processors */}
 
 [處理器](/docs/agents/processors)控制進入模型上下文的內容，並且可以在模型呼叫之前重寫內容。當資訊應保留在儲存的歷史記錄或應用程式輸出中但不需要在每個步驟中傳回模型時，請使用它們。
 
-例如，`ToolCallFilter` removes old tool arguments and results from the next model request without deleting those messages from storage. The model gets a smaller prompt, while your application can still display or inspect the complete interaction.
+例如，`ToolCallFilter` 會從下一次模型請求移除舊 Tool 的參數及結果，但不會從儲存中刪除這些訊息。模型收到較短的提示詞，應用程式仍可顯示或檢查完整互動。
 
-使用`processInput()` or `processInputStep()` to change the active message list. Those changes may later be saved to memory. Use `processLLMRequest()` when a rewrite should apply only to the current provider call and leave memory untouched.
+使用 `processInput()` 或 `processInputStep()` 修改目前訊息清單；這些改動之後可能儲存到記憶。如果改寫只應作用於目前 Provider 呼叫，而不應影響記憶，請使用 `processLLMRequest()`。
 
 Mastra 包含一些針對上下文膨脹的常見來源的控制項：
 
-* [`toModelOutput`](/docs/agents/tools#shape-output-for-the-model)
+* [`toModelOutput`](/docs/agents/tools#shape-output-for-the-model)：將冗長的 Tool 結果換成更精簡的模型輸入。
 * [`ToolCallFilter`](/reference/processors/tool-call-filter)：從模型輸入中刪除舊的Tool呼叫和結果，同時將它們保留在記憶體和 UI 中。
-* [`ToolSearchProcessor`](/reference/processors/tool-search-processor)
+* [`ToolSearchProcessor`](/reference/processors/tool-search-processor)：以搜尋及載入 Tool 取代龐大的 Tool 目錄。
 * [`TokenLimiter`](/reference/processors/token-limiter-processor)：修剪非系統訊息，直到提示符合令牌預算。
 
-開始於[`toModelOutput`](/docs/agents/tools#shape-output-for-the-model) for verbose tool results and `ToolCallFilter` for old tool interactions. Add `TokenLimiter` as a final budget guard rather than relying on the model's maximum context window.
+對冗長的 Tool 結果，先使用 [`toModelOutput`](/docs/agents/tools#shape-output-for-the-model)；對舊 Tool 互動，先使用 `ToolCallFilter`。將 `TokenLimiter` 作為最後的預算保障，而非只依賴模型的最大上下文視窗。
 
 ### 子Agent {/* #subagents */}
 
-上下文膨脹的一個常見原因是傳入和傳出過多的信息[subagents](/docs/subagents). A subagent gets a separate model context for its delegated task, but the boundary still needs deliberate controls.
+上下文膨脹的常見原因，是傳給[子 Agent](/docs/subagents) 或從它接收過多資料。子 Agent 有獨立的模型上下文來執行委派工作，但仍須仔細控制這個邊界。
 
-預設情況下，Mastra 將家長的對話轉發給子Agent。使用`messageFilter` to pass only the messages that specialist needs:
+預設 Mastra 會將父 Agent 的對話轉給子 Agent。使用 `messageFilter` 只傳入該專責 Agent 需要的訊息：
 
 ```typescript
 await supervisor.generate('Investigate the failed deployment.', {
@@ -316,6 +316,6 @@ await supervisor.generate('Investigate the failed deployment.', {
 })
 ```
 
-另一方面，Mastra 預設將子Agent程式的文字傳回父模型，同時保持巢狀Tool呼叫和元資料可供應用程式程式碼使用。離開`includeSubAgentToolResultsInModelContext` disabled unless the parent must reason over those details. Use `onDelegationStart` to refine the child prompt and `onDelegationComplete` to reduce or replace the text returned to the parent.
+反過來，Mastra 預設將子 Agent 的文字傳回父模型，同時保留巢狀 Tool 呼叫及元資料供應用程式程式碼使用。除非父模型必須分析這些細節，否則請保持停用 `includeSubAgentToolResultsInModelContext`。使用 `onDelegationStart` 調整子 Agent 提示詞，並用 `onDelegationComplete` 精簡或替換傳回父模型的文字。
 
-看[Subagents](/docs/subagents) for delegation hooks, memory isolation, iteration monitoring, and result controls.
+委派掛鉤、記憶隔離、迭代監察及結果控制詳見[子 Agent](/docs/subagents)。

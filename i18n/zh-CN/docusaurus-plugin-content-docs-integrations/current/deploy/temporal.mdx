@@ -1,23 +1,23 @@
 ---
-title: 'Temporal | Deploy'
-description: "Run Mastra workflows on Temporal with durable orchestration, retries, workers, task queues, suspension, activity execution, and local development."
+title: 'Temporal | 部署'
+description: "在 Temporal 上运行 Mastra Workflow。了解持久化编排、重试、Worker、任务队列、挂起、活动执行和本地开发。"
 ---
 
-# 颞
+# Temporal
 
-[颞](https://temporal.io/)是一个持久的执行平台，用于编排长期运行的容错Workflow程。这`@mastra/temporal`包允许您使用标准 Mastra API 编写Workflow程并在临时集群上运行它们。
+[Temporal](https://temporal.io/) 是一个持久化执行平台，用于编排可长期运行且具备容错能力的 Workflow。借助 `@mastra/temporal` 包，你可以使用标准 Mastra API 编写 Workflow，并在 Temporal 集群上运行。
 
 ## Temporal 如何与 Mastra 配合使用 {/* #how-temporal-works-with-mastra */}
 
-Mastra Workflow程创作者`createWorkflow()` and `createStep()` map onto Temporal's workflow and activity model. The `MastraPlugin`对于 Temporal Worker，在捆绑时编译您的 Mastra 条目文件：
+用 `createWorkflow()` 和 `createStep()` 编写的 Mastra Workflow 对应 Temporal 的 Workflow 和活动模型。Temporal Worker 的 `MastraPlugin` 会在打包时编译 Mastra 入口文件：
 
-* 每个`createStep()` handler is extracted into a Temporal activity.
-* 每个`createWorkflow()` is rewritten into a Temporal workflow that invokes those activities.
-* 该插件自动向工作人员注册生成的活动和Workflow程。
+* 将每个 `createStep()` 的处理函数提取为一个 Temporal 活动。
+* 将每个 `createWorkflow()` 改写为调用这些活动的 Temporal Workflow。
+* 自动将生成的活动和 Workflow 注册到 Worker。
 
-当跑步开始时`mastra.getWorkflow(...).createRun().start(...)`, the Mastra client hands control to Temporal. Temporal then drives durable execution, retries, and state persistence on the worker.
+通过 `mastra.getWorkflow(...).createRun().start(...)` 启动一次运行时，Mastra 客户端会将控制权交给 Temporal。随后，Temporal 负责 Worker 上的持久化执行、重试和状态保存。
 
-## 设置 {/* #setup */}
+## 环境准备 {/* #setup */}
 
 安装所需的软件包：
 
@@ -25,15 +25,15 @@ Mastra Workflow程创作者`createWorkflow()` and `createStep()` map onto Tempor
 npm install @mastra/temporal@latest @temporalio/client @temporalio/worker @temporalio/envconfig
 ```
 
-您还需要访问临时集群。对于本地开发，请使用[Temporal CLI development server](https://docs.temporal.io/develop/run-a-development-server).
+你还需要能够访问 Temporal 集群。本地开发时，可以使用 [Temporal CLI 开发服务器](https://docs.temporal.io/develop/run-a-development-server)。
 
-## 构建时间支持的Workflow程 {/* #building-a-temporal-backed-workflow */}
+## 构建由 Temporal 执行的 Workflow {/* #building-a-temporal-backed-workflow */}
 
-本指南逐步介绍如何使用 Temporal 和 Mastra 创建Workflow程，演示递增值的计数器应用程序。
+下面通过一个递增数值的计数器示例，演示如何使用 Temporal 和 Mastra 创建 Workflow。
 
-### 时间初始化 {/* #temporal-initialization */}
+### 初始化 Temporal 集成 {/* #temporal-initialization */}
 
-初始化 Temporal 集成以获得与 Mastra 兼容的Workflow程助手。这`createWorkflow()` and `createStep()` functions are bound to a Temporal client and a task queue.
+初始化 Temporal 集成，获取与 Mastra 兼容的 Workflow 辅助函数。`createWorkflow()` 和 `createStep()` 都会绑定到一个 Temporal 客户端和一个任务队列。
 
 ```ts title="src/mastra/temporal/index.ts"
 import { init } from '@mastra/temporal'
@@ -50,11 +50,11 @@ export const { createWorkflow, createStep } = init({
 })
 ```
 
-`loadClientConnectConfig()`读取标准时间环境变量，例如`TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, and mTLS settings. See the [Temporal envconfig docs](https://docs.temporal.io/develop/typescript/temporal-clients) for the full list.
+`loadClientConnectConfig()` 读取 Temporal 的标准环境变量，包括 `TEMPORAL_ADDRESS`、`TEMPORAL_NAMESPACE` 以及用于配置 mTLS 的变量。完整列表见 [Temporal envconfig 文档](https://docs.temporal.io/develop/typescript/temporal-clients)。
 
 ### 配置活动重试 {/* #configure-activity-retries */}
 
-经过`retry` to `init()` to set a Temporal activity retry policy for workflows created by these helpers. For example, add the following options to the initialization above to limit a failing activity to five total attempts:
+向 `init()` 传入 `retry`，为这些辅助函数创建的 Workflow 配置 Temporal 活动重试策略。例如，在上面的初始化配置中加入以下选项，可让失败的活动最多尝试五次，含首次执行：
 
 ```ts
 export const { createWorkflow, createStep } = init({
@@ -71,13 +71,13 @@ export const { createWorkflow, createStep } = init({
 })
 ```
 
-该策略适用于所有生成的活动，包括步骤、映射和条件。放`maximumAttempts: 1` to disable retries. Omitting `retry` preserves Temporal's default policy, which allows unlimited attempts. Mastra's workflow `retryConfig` doesn't configure Temporal activity retries.
+该策略适用于所有生成的活动，包括步骤、映射和条件。设置 `maximumAttempts: 1` 可禁用重试。省略 `retry` 时沿用 Temporal 的默认策略，尝试次数不限。Mastra Workflow 的 `retryConfig` 不控制 Temporal 活动的重试。
 
-将重试选项保留在可静态分析的状态中`init()` configuration so the worker build can include them. Inline object literal spreads are supported. Spreads of variables or function results are skipped during activity option extraction, so `retry` and `startToCloseTimeout` inside those spreads aren't forwarded to the generated workflow. Provide these options directly in `init()` or in an inline object literal spread instead. Rebuild and restart the worker after changing the policy.
+将重试选项放在可静态分析的 `init()` 配置中，以便 Worker 在构建时纳入这些选项。构建过程支持展开内联对象字面量，但提取活动选项时会跳过对变量或函数返回值的展开。这些展开项中的 `retry` 和 `startToCloseTimeout` 不会传给生成的 Workflow。请直接在 `init()` 的配置对象中提供选项，或通过展开内联对象字面量提供。修改策略后，重新构建并启动 Worker。
 
 ### 创建步骤 {/* #creating-steps */}
 
-定义构成Workflow程的各个步骤。每一步都成为一项时间活动。
+定义组成 Workflow 的各个步骤。每个步骤都会转换为一个 Temporal 活动。
 
 ```ts title="src/mastra/workflows/index.ts"
 import { z } from 'zod'
@@ -97,9 +97,9 @@ const incrementStep = createStep({
 })
 ```
 
-### 创建Workflow程 {/* #creating-the-workflow */}
+### 创建 Workflow {/* #creating-the-workflow */}
 
-将步骤组成Workflow程。Workflow程`id` must be a static string literal so the build-time transformer can derive its Temporal export name.
+将步骤组合成 Workflow。Workflow 的 `id` 必须是静态字符串字面量，以便转换器在构建时据此生成 Temporal 导出名称。
 
 ```ts title="src/mastra/workflows/index.ts"
 const workflow = createWorkflow({
@@ -120,7 +120,7 @@ export { workflow as incrementWorkflow }
 
 ### 配置 Mastra 实例 {/* #configuring-the-mastra-instance */}
 
-向 Mastra 注册Workflow程。执行由临时工作者驱动。
+将 Workflow 注册到 Mastra，由 Temporal Worker 驱动执行。
 
 ```ts title="src/mastra/index.ts"
 import { Mastra } from '@mastra/core'
@@ -133,9 +133,9 @@ export const mastra = new Mastra({
 })
 ```
 
-## 运行工人 {/* #running-the-worker */}
+## 运行 Worker {/* #running-the-worker */}
 
-Worker 是一个长期存在的 Node.js 进程，用于轮询临时任务队列。安装`MastraPlugin` and pass it the path to the Mastra entry file that registers your workflows.
+Worker 是一个持续运行的 Node.js 进程，负责轮询 Temporal 任务队列。加载 `MastraPlugin`，并将注册 Workflow 的 Mastra 入口文件路径传给它。
 
 ```ts title="src/mastra/worker.ts"
 import { MastraPlugin } from '@mastra/temporal/worker'
@@ -157,27 +157,27 @@ const worker = await Worker.create({
 await worker.run()
 ```
 
-`MastraPlugin`将条目文件重写为仅限Workflow的捆绑包，并将步骤处理程序连接为临时活动。你不需要通过`activities` or `workflowsPath` to `Worker.create()` manually.
+`MastraPlugin` 将入口文件改写为只包含 Workflow 的构建产物，并将步骤处理函数接入为 Temporal 活动。调用 `Worker.create()` 时，无需手动传入 `activities` 或 `workflowsPath`。
 
-## 运行Workflow程 {/* #running-workflows */}
+## 运行 Workflow {/* #running-workflows */}
 
 ### 本地运行 {/* #running-locally */}
 
-1. [安装临时 CLI](https://docs.temporal.io/cli/setup-cli)，然后启动本地服务器：
+1. [安装 Temporal CLI](https://docs.temporal.io/cli/setup-cli)，然后启动本地服务器：
 
    ```bash
    temporal server start-dev --db-filename temporal.db
    ```
 
-2. 打开临时 UI[http://localhost:8233](http://localhost:8233) to inspect namespaces, workflows, and activities.
+2. 在 [http://localhost:8233](http://localhost:8233) 打开 Temporal 界面，查看命名空间、Workflow 和活动。
 
-3. 在新终端中，通过运行以下命令启动工作程序：
+3. 在新的终端中运行以下命令，启动 Worker：
 
    ```bash
    npx tsx src/mastra/worker.ts
    ```
 
-4. 从导入 Mastra 实例的脚本或任何进程触发Workflow运行：
+4. 在导入了 Mastra 实例的脚本或其他进程中触发一次 Workflow 运行：
 
    ```ts title="scripts/run.ts"
    import { mastra } from '../src/mastra'
@@ -188,11 +188,11 @@ await worker.run()
    console.log(result)
    ```
 
-5. 在 Temporal UI 下监视执行情况**Workflows** to see step-by-step activity progress and retry history.
+5. 在 Temporal 界面的 **Workflows** 中监控执行情况，查看各步骤的活动进度和重试记录。
 
-### 生产中运行 {/* #running-in-production */}
+### 在生产环境运行 {/* #running-in-production */}
 
-用于生产、使用[Temporal Cloud](https://temporal.io/cloud) or a self-hosted Temporal cluster. Configure the client and worker connections through environment variables read by `@temporalio/envconfig`:
+在生产环境中，使用 [Temporal Cloud](https://temporal.io/cloud) 或自托管的 Temporal 集群。通过 `@temporalio/envconfig` 读取的环境变量配置客户端和 Worker 的连接：
 
 ```bash title=".env"
 TEMPORAL_ADDRESS=your-namespace.tmprl.cloud:7233
@@ -200,21 +200,21 @@ TEMPORAL_NAMESPACE=your-namespace
 TEMPORAL_API_KEY=your-api-key
 ```
 
-请参阅[Temporal Cloud connection docs](https://docs.temporal.io/cloud/get-started) for mTLS and API key options.
+有关 mTLS 和 API 密钥选项，请参阅 [Temporal Cloud 连接文档](https://docs.temporal.io/cloud/get-started)。
 
-:::警告
-Temporal Worker 必须作为长期进程运行。不要将其部署到执行限制较短的无服务器平台，例如 AWS Lambda 或 Vercel 函数。使用容器、虚拟机或工作人员友好的平台，例如 Fly.io、Railway 或 Kubernetes。
+:::warning
+Temporal Worker 必须作为常驻进程运行。请勿将其部署到 AWS Lambda 或 Vercel Functions 等执行时限较短的无服务器平台。可以使用容器、虚拟机，或 Fly.io、Railway、Kubernetes 等适合运行 Worker 的平台。
 :::
 
 ## 配置选项 {/* #configuration-options */}
 
 ### `taskQueue` {/* #taskqueue */}
 
-必需的。标识您的工作线程轮询的临时任务队列。必须将相同的值传递给`init()` (used by the client to start runs) and to `Worker.create()` (used by the worker to receive them).
+必填。指定 Worker 轮询的 Temporal 任务队列。必须向 `init()` 和 `Worker.create()` 传入相同的值，以便客户端启动的运行能由 Worker 从同一队列接收。
 
 ### `startToCloseTimeout` {/* #starttoclosetimeout */}
 
-选修的。设置单个活动（步骤）在 Temporal 取消并应用重试策略之前允许运行的最长时间。默认为`1 minute`.
+可选。指定单个活动（步骤）每次尝试可运行的最长时间。达到时限后，Temporal 会取消该次尝试并应用重试策略。默认值为 `1 minute`。
 
 ```ts title="src/mastra/temporal/index.ts"
 export const { createWorkflow, createStep } = init({
@@ -226,43 +226,43 @@ export const { createWorkflow, createStep } = init({
 
 ## 兼容性 {/* #compatibility */}
 
-`@mastra/temporal`是实验性的。它支持 Mastra Workflow API 的子集，任何它无法编译的内容都会在工作进程构建时失败，而不是在运行时失败。
+`@mastra/temporal` 目前处于实验阶段，仅支持部分 Mastra Workflow API。无法编译的写法会在 Worker 构建阶段报错。
 
-### 运行API {/* #run-apis */}
+### 运行 API {/* #run-apis */}
 
-|方法|时间支持 |
+| 方法 | Temporal 支持情况 |
 | - | - |
-|`start()`, `startAsync()` | Starts a Temporal workflow execution |
-| `resume()`, `resumeAsync()` | Signals the Temporal execution to resume a suspended step. Pass `step`, or omit it when only one step is suspended. Resuming by `label` isn't supported |
-| `cancel()` | Cancels the Temporal execution |
-| `stream()`, `streamLegacy()`, `resumeStream()` | Throws. Use `start()` or `startAsync()` instead |
-| `restart()`, `timeTravel()`, `timeTravelStream()` | Throws. Time travel is tracked in [#24025](https://github.com/mastra-ai/mastra/issues/24025) |
-| `observeStream()`, `watch()` | Not connected to Temporal. Runs emit no Mastra events |
+| `start()`, `startAsync()` | 启动一次 Temporal Workflow 执行 |
+| `resume()`, `resumeAsync()` | 向 Temporal 中正在执行的 Workflow 发送信号，恢复挂起的步骤。通过 `step` 指定步骤，只有一个步骤挂起时可省略。不支持按 `label` 恢复 |
+| `cancel()` | 取消 Temporal 中的执行 |
+| `stream()`, `streamLegacy()`, `resumeStream()` | 抛出异常。请使用 `start()` 或 `startAsync()` |
+| `restart()`, `timeTravel()`, `timeTravelStream()` | 抛出异常。时间回溯功能的进度见 [#24025](https://github.com/mastra-ai/mastra/issues/24025) |
+| `observeStream()`, `watch()` | 未接入 Temporal。运行不会发出 Mastra 事件 |
 
-运行状态、步骤结果和事件保留在 Temporal 中，不会写入 Mastra 存储，因此 Temporal 运行不会出现在 Studio 的运行历史记录中。 Studio 的Workflow运行程序调用`stream()`, which throws for Temporal workflows. Use the [Temporal UI](https://docs.temporal.io/web-ui) to inspect runs. Projecting Temporal runs into Mastra APIs and Studio is tracked in [#24016](https://github.com/mastra-ai/mastra/issues/24016).
+运行状态、步骤结果和事件都保留在 Temporal 中，不会写入 Mastra 存储，因此 Studio 的运行历史不会显示 Temporal 上的运行记录。Studio 的 Workflow 运行器调用 `stream()`，用于 Temporal Workflow 时会抛出异常。请在 [Temporal 界面](https://docs.temporal.io/web-ui)查看运行详情。有关在 Mastra API 和 Studio 中呈现 Temporal 运行记录的进展，请参阅 [#24016](https://github.com/mastra-ai/mastra/issues/24016)。
 
-### Workflow程方法 {/* #workflow-methods */}
+### Workflow 方法 {/* #workflow-methods */}
 
-工作线程构建静态读取每个Workflow链，因此参数必须在构建时可解析。步骤可以是标识符或内联`createStep()` call whose `id` is a string literal. Conditions for `.branch()`, `.dowhile()`, and `.dountil()` must be identifiers.
+构建 Worker 时会静态分析每条 Workflow 调用链，因此参数必须能在构建时解析。步骤可以是标识符，也可以是内联的 `createStep()` 调用，后者的 `id` 必须是字符串字面量。`.branch()`、`.dowhile()` 和 `.dountil()` 的条件必须用标识符传入。
 
-|方法|支持的论点 |
+| 方法 | 支持的参数 |
 | - | - |
-|`.then()` | A step or workflow |
-| `.parallel()` | An array literal of steps or workflows |
-| `.branch()` | An array literal of `[condition, step]` pairs |
-| `.dowhile()`, `.dountil()` | A step and a condition |
-| `.foreach()` | A step and an optional options object |
-| `.sleep()` | A numeric literal or a function identifier |
-| `.sleepUntil()` | A `new Date(...)` expression, a string or number literal, or a function identifier |
-| `.map()` | An inline function or a top-level function identifier. Declarative object mappings aren't supported |
-| `.commit()` | No arguments |
-| Any other method | Not supported |
+| `.then()` | 一个步骤或 Workflow |
+| `.parallel()` | 由步骤或 Workflow 组成的数组字面量 |
+| `.branch()` | 由多个 `[condition, step]` 对组成的数组字面量 |
+| `.dowhile()`, `.dountil()` | 一个步骤和一个条件 |
+| `.foreach()` | 一个步骤，可另传选项对象 |
+| `.sleep()` | 数字字面量或函数标识符 |
+| `.sleepUntil()` | `new Date(...)` 表达式、字符串或数字字面量，或函数标识符 |
+| `.map()` | 内联函数或顶层函数的标识符。不支持声明式对象映射 |
+| `.commit()` | 无参数 |
+| 其他方法 | 不支持 |
 
-条件函数和`.sleep()` or `.sleepUntil()` function identifiers are called as activities named after the identifier, but the plugin only generates activities for steps and `.map()` callbacks. Register these functions yourself in `Worker.create({ activities })`, or the run fails when it reaches them. These functions receive `inputData`, `runId`, `workflowId`, `resourceId`, and `requestContext` as a plain object. They don't receive `getInitData()`.
+条件函数以及通过标识符传给 `.sleep()` 或 `.sleepUntil()` 的函数，以同名活动的形式调用。插件只为步骤和 `.map()` 回调生成活动，因此必须在 `Worker.create({ activities })` 中自行注册这些函数，否则执行到这些函数时会失败。这些函数接收一个普通对象，其中包含 `inputData`、`runId`、`workflowId`、`resourceId` 和 `requestContext`，不包含 `getInitData()`。
 
-嵌套Workflow程传递给`.then()` or `.parallel()` run as Temporal child workflows. Each one is registered as its own workflow type and appears as a separate execution in the Temporal UI. A suspended step inside a child workflow can't be resumed through the parent run.
+传给 `.then()` 或 `.parallel()` 的嵌套 Workflow 会作为 Temporal 子 Workflow 运行。每个子 Workflow 都会注册为独立的 Workflow 类型，并在 Temporal 界面中显示为独立的执行记录。子 Workflow 中挂起的步骤无法通过父级运行恢复。
 
-不受支持的构造会停止工作线程构建，并出现命名Workflow程和文件的错误：
+遇到不支持的写法时，Worker 构建会中止，错误消息会指出涉及的 Workflow 和文件：
 
 ```ts
 // Build error: .map() does not yet support declarative object mappings; use a callback mapping
@@ -271,46 +271,46 @@ workflow.map({ city: { step: fetchWeather, path: 'city' } })
 
 ### 步骤执行上下文 {/* #step-execution-context */}
 
-每个步骤都作为临时活动运行。它是`execute` function receives:
+每个步骤都作为 Temporal 活动运行，其 `execute` 函数接收以下内容：
 
-* `inputData`并且，当恢复时，`resumeData`
-* `runId`, `workflowId`, and `resourceId`
+* `inputData`，以及恢复执行时的 `resumeData`
+* `runId`、`workflowId` 和 `resourceId`
 * `requestContext`
 * `getInitData()`
-* `suspend()`，除了在`.foreach()` steps
-* `mastra`，当步骤的模块可以导入Mastra实例时
+* `suspend()`，但 `.foreach()` 中的步骤不可用
+* `mastra`，前提是步骤所在的模块可以导入 Mastra 实例
 
-其他`execute` parameters, such as `state`, `setState()`, `getStepResult()`, `bail()`, `abort()`, `writer`, and `tracingContext`, aren't available. Steps in a nested workflow receive the parent's `runId`, `resourceId`, and request context, and the nested workflow's own `workflowId`.
+`execute` 的其他参数不可用，例如 `state`、`setState()`、`getStepResult()`、`bail()`、`abort()`、`writer` 和 `tracingContext`。嵌套 Workflow 中的步骤会收到父级的 `runId`、`resourceId` 和请求上下文，以及嵌套 Workflow 自身的 `workflowId`。
 
-### 捆扎及工人操作 {/* #bundling-and-worker-operation */}
+### 打包与 Worker 运行 {/* #bundling-and-worker-operation */}
 
-启动时，`MastraPlugin` bundles your Mastra entry file and writes the generated code to `node_modules/.mastra/`:
+Worker 启动时，`MastraPlugin` 会打包 Mastra 入口文件，并将生成的代码写入 `node_modules/.mastra/`：
 
-* `workflow.mjs`：Workflow包，在 Temporal 的确定性WorkflowSandbox中运行
-* `activities.mjs`：步骤和映射代码，作为常规 Node.js 活动运行
-* `activity-bindings.json`：从步骤 ID 到活动导出的映射
+* `workflow.mjs`：Workflow 的打包产物，在 Temporal 的确定性 Workflow Sandbox 中运行
+* `activities.mjs`：步骤和映射的代码，作为常规 Node.js 活动运行
+* `activity-bindings.json`：步骤 ID 与活动导出项之间的映射
 
-将 I/O、客户端、Agent、Tool、存储和 MCP 连接保持在步骤内`execute` functions. The workflow bundle can't import Node.js builtins such as `node:fs`. When it does, the build fails with `Temporal workflow bundle cannot depend on Node.js builtin`, and you need to move that dependency into a step. Check the generated files in `node_modules/.mastra/` when a build or activity lookup fails.
+将 I/O、客户端、Agent、Tool、存储和 MCP 连接放在步骤的 `execute` 函数内。Workflow 的打包产物不能导入 `node:fs` 等 Node.js 内置模块，否则构建会报错 `Temporal workflow bundle cannot depend on Node.js builtin`。遇到此错误时，请把相应依赖移入步骤。构建失败或找不到活动时，请检查 `node_modules/.mastra/` 中生成的文件。
 
-在没有工作线程轮询任务队列的情况下启动的运行将保持排队状态，不会出现错误。在发送流量之前，请确认工作人员正在轮询：
+如果启动运行时没有 Worker 轮询任务队列，该次运行会一直排队，且不会报错。接入流量前，请确认有 Worker 正在轮询：
 
 ```bash
 temporal task-queue describe --task-queue mastra
 ```
 
-## 限制和注释 {/* #constraints-and-notes */}
+## 限制和注意事项 {/* #constraints-and-notes */}
 
-* Workflow程 ID 必须是静态字符串文字。构建时转换器读取文字值以派生临时Workflow导出名称。
-* 活动是自动生成的`createStep()` handlers. Don't pass them in `Worker.create({ activities })`.
-* 每个步骤都会检查其输入`inputSchema` and its request context against `requestContextSchema` before it runs. A mismatch fails the step without retries. Only the steps inside a nested workflow are checked, not its own `inputSchema`.
-* 放[`validateInputs`](/reference/workflows/workflow#constructor-parameters) to `false` in `createWorkflow()` to skip these checks. This also skips the workflow input checks in `run.start()`.
-* 构建时变压器读取`validateInputs` from the `createWorkflow()` call. When it can't, for example with `options: sharedOptions`, it prints a warning. Runs started with `run.start()` or `run.startAsync()` still use the workflow's setting, and runs started another way, such as from a Temporal Schedule, check step input.
-* 步骤输入和请求上下文通过 Temporal 传递[data converter](https://docs.temporal.io/dataconversion), which turns a `Date` into a string. Use `z.coerce.date()` instead of `z.date()` in a step's `inputSchema` and `requestContextSchema`.
-* [生命周期回调](/docs/workflows/error-handling#lifecycle-callbacks) (`onStart`, `onFinish`, `onError`) run in the process that calls `run.start()` or `run.startAsync()`, not in the worker. After `run.startAsync()`, that process must keep running until the workflow finishes for `onFinish` and `onError` to run. Runs started another way, such as from a Temporal Schedule, don't run them.
-* 经过一个`.parallel()` that contains a nested workflow, the next step receives the nested workflow's output under its Temporal workflow type, for example `innerWorkflow` for id `inner`. The default workflow engine uses the id instead.
+* Workflow ID 必须是静态字符串字面量。转换器在构建时读取字面量的值，据此生成 Temporal Workflow 的导出名称。
+* 插件会自动从 `createStep()` 的处理函数生成活动。请勿在 `Worker.create({ activities })` 中再次传入这些自动生成的活动。
+* 每个步骤在执行前都会根据 `inputSchema` 校验输入，并根据 `requestContextSchema` 校验请求上下文。校验不通过时，步骤会直接失败且不会重试。对于嵌套 Workflow，只校验其内部步骤，不校验该 Workflow 自身的 `inputSchema`。
+* 在 `createWorkflow()` 中将 [`validateInputs`](/reference/workflows/workflow#constructor-parameters) 设为 `false`，即可跳过这些校验。这也会跳过 `run.start()` 中的 Workflow 输入校验。
+* 转换器会在构建时从 `createWorkflow()` 调用中读取 `validateInputs`。如果无法读取，例如使用了 `options: sharedOptions`，就会发出警告。通过 `run.start()` 或 `run.startAsync()` 启动的运行仍遵循该 Workflow 的设置。通过 Temporal Schedule 等其他方式启动时，则会校验步骤输入。
+* 步骤输入和请求上下文会经过 Temporal 的[数据转换器](https://docs.temporal.io/dataconversion)，它会将 `Date` 转成字符串。请在步骤的 `inputSchema` 和 `requestContextSchema` 中使用 `z.coerce.date()` 替代 `z.date()`。
+* [生命周期回调](/docs/workflows/error-handling#lifecycle-callbacks)（`onStart`、`onFinish`、`onError`）在调用 `run.start()` 或 `run.startAsync()` 的进程中执行。调用 `run.startAsync()` 后，该进程必须保持运行直到 Workflow 结束，`onFinish` 和 `onError` 才能执行。通过 Temporal Schedule 等其他方式启动的运行不会执行这些回调。
+* 如果 `.parallel()` 包含嵌套 Workflow，后续步骤会以该嵌套 Workflow 的 Temporal Workflow 类型作为键接收其输出。例如，ID 为 `inner` 时，键为 `innerWorkflow`。默认 Workflow 引擎使用 ID 作为键。
 
-## 有关的 {/* #related */}
+## 相关文档 {/* #related */}
 
-* [Workflow程运行器](/docs/deployment/workflow-runners)
-* [Workflow程概述](/docs/workflows/overview)
-* [时态文档](https://docs.temporal.io/)
+* [Workflow 运行器](/docs/deployment/workflow-runners)
+* [Workflow 概述](/docs/workflows/overview)
+* [Temporal 文档](https://docs.temporal.io/)

@@ -1,36 +1,36 @@
 ---
-title: "Reference: TokenCostControl | Processors"
-description: "The TokenCostControl enforces monetary cost limits across the agentic loop, blocking or warning when a configurable cost threshold is exceeded."
+title: "参考：TokenCostControl | 处理器"
+description: "TokenCostControl 在 Agent 执行循环中实施费用上限，超过可配置的费用阈值时阻止执行或发出警告。"
 packages:
   - "@mastra/core"
 ---
 
-# 代币成本控制
+# TokenCostControl
 
-这`TokenCostControl`在整个Agent循环中强制执行货币成本限制，当超出可配置的成本阈值时进行阻止或警告。
+`TokenCostControl` 在 Agent 执行循环中实施费用上限，超过可配置的费用阈值时阻止执行或发出警告。
 
-它使用`processInputStep` to check the cost limit before each LLM call. Cost data is queried from the observability storage APIs (`getMetricAggregate`）适用于所有范围。对于所有范围，除了`run`，它会汇总可配置时间窗口（默认为 7 天）内运行的成本。为了`run`范围，它查询当前跟踪的成本。
+它通过 `processInputStep` 在每次 LLM 调用前检查费用上限。所有作用范围的费用数据都通过可观测性存储 API（`getMetricAggregate`）查询。除 `run` 外，其他范围会汇总可配置时间窗口内多次运行的费用（默认窗口为 7 天）；`run` 范围查询当前 Trace 的费用。
 
-对于基于令牌的限制，请使用`TokenLimiterProcessor` instead.
+如需按 Token 数量限制，请改用 `TokenLimiterProcessor`。
 
-> **重命名自`CostGuardProcessor`.**&#x8FD9;`CostGuardProcessor` export (and its `CostGuard*` option and detail types) remains available as a deprecated alias for the same class, including the `'token-cost-control'` processor id. Migrate imports to `TokenCostControl`.
+> **原名为 `CostGuardProcessor`。** `CostGuardProcessor` 导出及其 `CostGuard*` 选项和详情类型仍可用，作为同一类的已弃用别名，处理器 ID 仍为 `'token-cost-control'`。请将导入改为 `TokenCostControl`。
 
-支持六种范围模式：
+支持以下六种作用范围：
 
-* **运行范围**：通过跟踪 ID 跟踪单个Agent运行中的成本
-* **资源范围**（默认）：跟踪每项的累计成本`resourceId` across runs
-* **线程范围**：跟踪每项的累计成本`threadId` across runs
-* **用户范围**：跟踪每项的累计成本`userId` across runs
-* **组织范围**：跟踪每项的累计成本`organizationId` across runs
-* **会话范围**：跟踪每项的累计成本`sessionId` across runs
+- **单次运行**：通过 Trace ID 追踪一次 Agent 运行的费用
+- **资源**（默认）：按 `resourceId` 追踪跨运行的累计费用
+- **线程**：按 `threadId` 追踪跨运行的累计费用
+- **用户**：按 `userId` 追踪跨运行的累计费用
+- **组织**：按 `organizationId` 追踪跨运行的累计费用
+- **会话**：按 `sessionId` 追踪跨运行的累计费用
 
-> **大致的成本控制。**&#x6210;本数据通过可观察性管道中的缓冲导出器异步保存。在指标可用于查询之前，快速运行的Agent可能会超出配置的限制。对待`maxCost` as an approximate threshold that fast-running agents may exceed.
+> **费用控制是近似值。** 可观测性流水线通过缓冲导出器异步保存费用数据。运行速度较快的 Agent 可能在指标可供查询之前就超过配置的上限。请将 `maxCost` 视为可能被快速运行的 Agent 超出的近似阈值。
 
-> **仅Agent归属。**&#x6210;本归因于`entityType: 'agent'` metric filter. Model calls made outside an agent run (for example, direct model usage in workflow steps) have no agent parent span and aren't counted by this guard.
+> **仅归属 Agent 的费用。** 费用通过 `entityType: 'agent'` 指标筛选器归属。Agent 运行之外的模型调用（例如 Workflow 步骤直接使用模型）没有 Agent 父级 Span，因此不会计入此防护器。
 
 ## 使用示例 {/* #usage-example */}
 
-跟踪每个资源的累积成本（默认范围）：
+按资源追踪累计费用（默认范围）：
 
 ```typescript
 import { TokenCostControl } from '@mastra/core/processors'
@@ -40,7 +40,7 @@ const tokenCostControl = new TokenCostControl({
 })
 ```
 
-使用 24 小时窗口跟踪每个线程的累积成本，并在达到限制的 80% 时发出软警告：
+按线程追踪 24 小时窗口内的累计费用，并在达到上限的 80% 时发出软性警告：
 
 ```typescript
 import { TokenCostControl } from '@mastra/core/processors'
@@ -53,7 +53,7 @@ const tokenCostControl = new TokenCostControl({
 })
 ```
 
-通过传递函数来使用每层预算`maxCost`:
+将函数传给 `maxCost`，为不同等级设置预算：
 
 ```typescript
 import { TokenCostControl } from '@mastra/core/processors'
@@ -64,7 +64,7 @@ const tokenCostControl = new TokenCostControl({
 })
 ```
 
-附加到Agent`onViolation` callback and a per-provider/model breakdown:
+将处理器附加到 Agent，并设置 `onViolation` 回调及按 Provider/模型细分的费用数据：
 
 ```typescript
 import { Agent } from '@mastra/core/agent'
@@ -103,21 +103,21 @@ const agent = new Agent({
   name: 'maxCost',
   type: 'number | ((requestContext?: RequestContext) => number)',
   description:
-    "Maximum estimated cost allowed (e.g. 0.50 for $0.50 USD). A number must be finite and positive. A function is called with the request's RequestContext on every check, enabling per-tier or per-user budgets; if it returns anything other than a finite positive number, the check is skipped for that request (fail-open) and a warning is logged. This is an approximate limit due to metric persistence delays.",
+      "允许的最高预估费用（例如 0.50 表示 0.50 美元）。数值必须是有限正数。函数会在每次检查时收到该请求的 RequestContext，可用于按等级或用户设置预算；如果返回值不是有限正数，则跳过该请求的检查（开放失败）并记录警告。由于指标持久化存在延迟，此上限是近似值。",
   isOptional: false,
 },
 {
   name: 'scope',
   type: "'run' | 'resource' | 'thread' | 'user' | 'organization' | 'session'",
   description:
-    "Scope for cost tracking. 'run' tracks cost within the current agent run via trace ID. 'resource' tracks cumulative cost per resourceId across runs (default). 'thread' tracks cumulative cost per threadId across runs. 'user', 'organization', and 'session' track cumulative cost per userId, organizationId, and sessionId respectively, read from the plain RequestContext keys 'userId', 'organizationId', and 'sessionId'. All scopes require observability storage with getMetricAggregate support.",
+      "费用追踪的作用范围。'run' 通过 Trace ID 追踪当前 Agent 运行的费用；'resource' 按 resourceId 追踪跨运行的累计费用（默认）；'thread' 按 threadId 追踪跨运行的累计费用；'user'、'organization' 和 'session' 分别按 userId、organizationId 和 sessionId 追踪累计费用，对应 ID 从 RequestContext 的普通键 'userId'、'organizationId' 和 'sessionId' 读取。所有范围都要求可观测性存储支持 getMetricAggregate。",
   isOptional: true,
   defaultValue: "'resource'",
 },
 {
   name: 'window',
   type: "'1h' | '6h' | '24h' | '7d' | '30d' | '365d'",
-  description: "Time window for cost aggregation for all scopes except 'run'.",
+    description: "除 'run' 外，其他作用范围用于汇总费用的时间窗口。",
   isOptional: true,
   defaultValue: "'7d'",
 },
@@ -125,14 +125,14 @@ const agent = new Agent({
   name: 'strategy',
   type: "'block' | 'warn'",
   description:
-    "Strategy when the cost limit is exceeded. 'block' aborts with a TripWire error. 'warn' logs a warning and calls onViolation at most once per request, then allows the step to proceed.",
+      "超过费用上限时的策略。'block' 会触发 TripWire 错误并中止；'warn' 会记录警告、每个请求至多调用一次 onViolation，然后继续执行该步骤。",
   isOptional: true,
   defaultValue: "'block'",
 },
 {
   name: 'message',
   type: 'string',
-  description: 'Custom message template for the abort reason. Supports {usage} and {limit} placeholders.',
+    description: '中止原因的自定义消息模板。支持 {usage} 和 {limit} 占位符。',
   isOptional: true,
   defaultValue: "'Cost control: estimated cost limit exceeded ({usage}/{limit})'",
 },
@@ -140,14 +140,14 @@ const agent = new Agent({
   name: 'warnAtPercent',
   type: 'number',
   description:
-    'Optional soft threshold as a percentage of maxCost (exclusive 0-100, e.g. 80). When the estimated cost reaches this percentage of the limit but is still below it, a warning is logged and onViolation is called once per request with threshold: "soft", regardless of strategy. Never aborts the step.',
+      '可选的软性阈值，表示 maxCost 的百分比（不含 0 和 100，例如 80）。预估费用达到该比例但尚未达到上限时，会记录警告，并针对每个请求调用一次 onViolation，传入 threshold: "soft"，无论采用哪种 strategy 都不会中止该步骤。',
   isOptional: true,
 },
 {
   name: 'includeBreakdown',
   type: 'boolean',
   description:
-    'When true, violations (soft and hard) include a per-provider/model cost breakdown queried via getMetricBreakdown. The breakdown is capped at the top 10 provider/model groups ranked by aggregated token volume, not by spend. The breakdown query runs only when a violation trips, never on the happy path. If the configured store does not support breakdown queries or the query fails, the violation fires without the breakdown field.',
+      '设为 true 时，软性及硬性违规都会包含通过 getMetricBreakdown 查询的 Provider/模型费用明细。明细按汇总 Token 量而非费用排序，最多包含前 10 个 Provider/模型组合。只有触发违规时才会查询明细，正常路径不会查询。如果配置的存储不支持明细查询，或查询失败，仍会触发违规，但不包含 breakdown 字段。',
   isOptional: true,
   defaultValue: 'false',
 },
@@ -161,27 +161,27 @@ const agent = new Agent({
 {
   name: 'id',
   type: "'token-cost-control'",
-  description: 'Processor identifier.',
+    description: '处理器标识符。',
   isOptional: false,
 },
 {
   name: 'name',
   type: "'Token Cost Control'",
-  description: 'Processor display name.',
+    description: '处理器显示名称。',
   isOptional: false,
 },
 {
   name: 'onViolation',
   type: '(violation: ProcessorViolation) => void | Promise<void>',
   description:
-    'Callback invoked when a cost violation is detected, regardless of strategy. For the warn strategy and for soft thresholds, the guard calls it with a TokenCostControlViolationDetail (usage, limit, threshold, and optional breakdown) at most once per request per threshold level. Errors thrown by the callback on this path are caught and logged through the Mastra logger. For the block strategy, the processor runner invokes it with the TripWire metadata as the detail (see Error behavior) and silently catches callback errors. Use for side effects like alerting, logging to external systems, or emailing users.',
+      '检测到费用违规时调用的回调，不受 strategy 影响。对于 warn 策略和软性阈值，防护器在每个请求、每个阈值级别至多调用一次，并传入 TokenCostControlViolationDetail（usage、limit、threshold 和可选的 breakdown）。在此路径上，回调抛出的错误会被捕获并通过 Mastra 日志记录。对于 block 策略，处理器运行器会以 TripWire 元数据作为详情调用回调（参见“错误行为”），并静默捕获回调错误。可用于告警、写入外部日志或向用户发送邮件等副作用。',
   isOptional: true,
 },
 {
   name: 'processInputStep',
   type: '(args: ProcessInputStepArgs) => Promise<void>',
   description:
-    'Checks cumulative estimated cost against the resolved maxCost before each LLM call. Queries observability storage for cost data: run scope filters by trace ID, all other scopes filter by their respective IDs with a time window. Calls abort() when the limit is exceeded (block strategy) or logs a warning (warn strategy). Cost checks are approximate due to metric persistence delays.',
+      '每次 LLM 调用前，检查累计预估费用是否超过解析出的 maxCost。通过可观测性存储查询费用数据：run 范围按 Trace ID 筛选，其他范围按各自 ID 和时间窗口筛选。超过上限时调用 abort()（block 策略）或记录警告（warn 策略）。由于指标持久化延迟，费用检查只能提供近似结果。',
   isOptional: false,
 },
 ]}
@@ -189,37 +189,37 @@ const agent = new Agent({
 
 ## 错误行为 {/* #error-behavior */}
 
-当`block` strategy is active (default), `TokenCostControl` calls `abort()` with `retry: false` when the cost limit is exceeded. The TripWire metadata includes:
+使用 `block` 策略（默认）时，费用超过上限后，`TokenCostControl` 会以 `retry: false` 调用 `abort()`。TripWire 元数据包含：
 
-* `processorId`: `'token-cost-control'`
-* `usage`：当前累计使用量（`estimatedCost`, `costUnit`)
-* `maxCost`：请求的已解决成本限制
-* `scope`：活动范围
-* `scopeKey`：非运行范围的范围标识符（如果适用）
-* `threshold`： 总是`'hard'`, since only the hard limit aborts
-* `breakdown`：每个Provider/模型的成本条目（仅当`includeBreakdown` is enabled and the breakdown query succeeds)
+- `processorId`：`'token-cost-control'`
+- `usage`：当前累计用量（`estimatedCost`、`costUnit`）
+- `maxCost`：为请求解析出的费用上限
+- `scope`：当前作用范围
+- `scopeKey`：非 run 范围的标识符（如适用）
+- `threshold`：始终为 `'hard'`，因为只有硬性上限会中止执行
+- `breakdown`：按 Provider/模型细分的费用条目（仅当启用 `includeBreakdown` 且明细查询成功时）
 
-随着`warn` strategy, the hard-limit warning and `onViolation` callback fire at most once per request. Subsequent steps in the same request proceed without repeating the warning.
+使用 `warn` 策略时，每个请求至多触发一次硬性上限警告和 `onViolation` 回调。同一请求的后续步骤继续执行，不会重复发出警告。
 
-内插到违规消息中的数字被标准化为最多 6 位小数，因此消息永远不会包含浮点精度伪影。
+插入违规消息的数字最多保留 6 位小数，因此消息不会出现浮点精度造成的尾数。
 
-## 范围界定行为 {/* #scoping-behavior */}
+## 作用范围行为 {/* #scoping-behavior */}
 
-|范围 |跨跑步轨迹 |过滤|需要上下文 |
+| 范围 | 是否跨运行追踪 | 筛选条件 | 所需上下文 |
 | - | - | - | - |
-|`run` | No | `traceId` from current span | Tracing context (automatic) |
-| `resource` | Yes | `resourceId` + time window | `resourceId` in `RequestContext` |
-| `thread` | Yes | `threadId` + time window | `threadId` in `RequestContext` |
-| `user` | Yes | `userId` + time window | `userId` key in `RequestContext` |
-| `organization` | Yes | `organizationId` + time window | `organizationId` key in `RequestContext` |
-| `session` | Yes | `sessionId` + time window | `sessionId` key in `RequestContext` |
+| `run` | 否 | 当前 Span 的 `traceId` | Trace 上下文（自动提供） |
+| `resource` | 是 | `resourceId` + 时间窗口 | `RequestContext` 中的 `resourceId` |
+| `thread` | 是 | `threadId` + 时间窗口 | `RequestContext` 中的 `threadId` |
+| `user` | 是 | `userId` + 时间窗口 | `RequestContext` 中的 `userId` 键 |
+| `organization` | 是 | `organizationId` + 时间窗口 | `RequestContext` 中的 `organizationId` 键 |
+| `session` | 是 | `sessionId` + 时间窗口 | `RequestContext` 中的 `sessionId` 键 |
 
-所有范围都需要Observability存储`getMetricAggregate` support; without configured observability storage, the Mastra instance throws an error at registration time.
+所有作用范围都要求可观测性存储支持 `getMetricAggregate`；如果未配置可观测性存储，Mastra 实例会在注册时抛出错误。
 
-为了`run` scope, the processor reads the trace ID from the current span's tracing context. If no tracing context is available, the check is skipped (fail-open).
+对于 `run` 范围，处理器从当前 Span 的 Trace 上下文读取 Trace ID。如果没有 Trace 上下文，就会跳过检查（开放失败）。
 
-对于所有其他作用域，如果在运行时缺少所需的上下文 ID，则会跳过检查。可观察性查询失败通过失败打开策略进行处理：如果查询失败，则通过 Mastra 记录器记录警告，然后该步骤继续进行。
+对于其他范围，如果运行时缺少所需的上下文 ID，也会跳过检查。可观测性查询失败时同样采用开放失败策略：通过 Mastra 日志记录警告，然后继续执行该步骤。
 
-> **这`user`, `organization`, and `session` scopes require annotated traces.**&#x8FD9;些范围根据其指标记录进行匹配`userId`, `organizationId`, and `sessionId` fields, which are populated from span metadata on the trace (for example, via tracing options metadata). Without matching trace metadata, these scopes match zero records and the guard never trips, because setting the RequestContext key alone isn't enough: both the RequestContext key (for scope resolution) and the span metadata (for cost attribution) must be present.
+> **`user`、`organization` 和 `session` 范围需要带有标注的 Trace。** 这些范围通过指标记录中的 `userId`、`organizationId` 和 `sessionId` 字段匹配费用，字段值来自 Trace 中的 Span 元数据（例如通过 Trace 选项中的 metadata 设置）。如果 Trace 元数据不匹配，就不会匹配到任何记录，防护器也不会触发。仅设置 RequestContext 键并不够：必须同时提供 RequestContext 键（用于确定范围）和 Span 元数据（用于归属费用）。
 
-> **关于度量持续延迟的注意事项。**&#x53EF;观察性管道使用异步刷新指标的缓冲导出器。 LLM 调用完成和其成本指标可用于查询之间存在短暂的延迟。在高频Agent执行期间，成本控制可能直到实际成本超过阈值后的一个或多个步骤才检测到限制突破。
+> **关于指标持久化延迟。** 可观测性流水线使用缓冲导出器异步写出指标。LLM 调用结束后，其费用指标需要短暂时间才能供查询。在高频运行 Agent 时，费用控制可能要到实际超过阈值之后的一步或多步才检测到超限。

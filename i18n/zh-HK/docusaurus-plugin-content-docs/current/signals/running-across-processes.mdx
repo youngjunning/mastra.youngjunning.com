@@ -1,6 +1,6 @@
 ---
-title: 'Running across processes | Signals'
-description: 'Run Mastra agent threads across multiple processes with a shared PubSub backend and thread leases.'
+title: '跨進程運行 | 訊號'
+description: '使用共用的 PubSub 後端及線程租約，在多個進程之間運行 Mastra Agent 的線程。'
 packages:
   - '@mastra/core'
   - '@mastra/redis-streams'
@@ -10,77 +10,77 @@ packages:
 
 # 跨進程運行
 
-當您執行多個 Mastra 進程時，訊號可能會到達與執行Agent程式的進程不同的進程。這些進程需要相互傳遞輸入並就哪個進程可以運行一個達成一致[thread](/docs/memory/message-history#threads-and-resources).
+運行多個 Mastra 進程時，收到訊號的進程未必是正在運行 Agent 的進程。各進程須互相傳遞輸入，並協調由哪個進程運行指定[線程](/docs/memory/message-history#threads-and-resources)。
 
-Mastra 使用共享[PubSub](/docs/server/pubsub) backend to carry signals between processes. A [lease](/reference/pubsub/lease-provider)，一種有時間限制的所有權聲明，賦予一個行程對執行緒的責任。共用儲存保存對話歷史記錄。當多個進程可以處理同一線程時，您需要全部三個。
+Mastra 使用共用的 [PubSub](/docs/server/pubsub) 後端在進程之間傳送訊號。[租約](/reference/pubsub/lease-provider)讓一個進程在限定時間內負責線程。共用儲存空間保存對話記錄。多個進程可處理同一線程時，三者缺一不可。
 
-## 為什麼需要共享後端 {/* #why-you-need-a-shared-backend */}
+## 為何需要共用後端 {/* #why-you-need-a-shared-backend */}
 
-預設[`EventEmitterPubSub`](/reference/pubsub/event-emitter) delivers events inside one process. That's enough for a single server, but it can't reach another instance.
+預設的 [`EventEmitterPubSub`](/reference/pubsub/event-emitter) 在單一進程內傳送事件，可供單一伺服器使用，但無法傳送至其他實例。
 
-考慮共享資料庫的兩個 API 實例。使用者在 A 上啟動運行，然後他們的下一則訊息到達 B。如果沒有共享後端，B 無法發佈到 A 的運行並在同一執行緒上啟動第二次運行。兩者都調用模型並寫入訊息，從而留下競爭運行。
+假設兩個 API 實例共用一個資料庫。用戶在 A 啟動執行，但下一則訊息送到 B。沒有共用後端時，B 無法將訊息發佈至 A 的執行，便會在同一線程啟動第二次執行。兩次執行都會調用模型及寫入訊息，造成競爭。
 
-共享後端修復交付：B 在線程主題上發布，A 進行消費。租約可確保只有一個程序聲明該執行緒。到達它的其他路線。
+有共用後端後，B 可向線程主題發佈訊息，由 A 接收並處理。租約確保只有一個進程可取得線程的控制權，其餘進程會將訊息轉送給它。
 
-每個可以處理相同執行緒的實例都需要相同的 PubSub 後端和儲存。不同的後端無法針對相同資料庫進行協調。
+可處理同一線程的所有實例均須使用相同的 PubSub 後端和儲存空間。即使使用同一資料庫，不同後端亦無法協調。
 
 ## 選擇拓撲 {/* #choose-a-topology */}
 
-根據進程運行的位置選擇後端。
+按進程運行的位置選擇後端。
 
-|部署|後端 |它提供什麼 |
+| 部署方式 | 後端 | 提供的功能 |
 | - | - | - |
-|一個流程 |[`EventEmitterPubSub`](/reference/pubsub/event-emitter) (default) | In-process delivery and leases |
-| Several processes on one host | [`UnixSocketPubSub`](/reference/pubsub/unix-socket-pubsub) | Delivery and leases over a Unix domain socket |
-| Several hosts | [`RedisStreamsPubSub`](/reference/pubsub/redis-streams) or [`ValkeyStreamsPubSub`](/reference/pubsub/valkey-streams) | Cross-host delivery, retained events, and leases |
-| Several hosts with Google Cloud Pub/Sub | [`GoogleCloudPubSub`](/reference/pubsub/google-cloud-pubsub) | Cross-host delivery without leases |
+| 單一進程 | [`EventEmitterPubSub`](/reference/pubsub/event-emitter)（預設） | 進程內傳送及租約 |
+| 同一主機上的多個進程 | [`UnixSocketPubSub`](/reference/pubsub/unix-socket-pubsub) | 透過 Unix 域通訊端傳送事件及提供租約 |
+| 多部主機 | [`RedisStreamsPubSub`](/reference/pubsub/redis-streams) 或 [`ValkeyStreamsPubSub`](/reference/pubsub/valkey-streams) | 跨主機傳送、事件保留及租約 |
+| 多部主機使用 Google Cloud Pub/Sub | [`GoogleCloudPubSub`](/reference/pubsub/google-cloud-pubsub) | 跨主機傳送，沒有租約 |
 
-[`UnixSocketPubSub`](/reference/pubsub/unix-socket-pubsub)選擇一個進程作為套接字Agent，如果退出則重新選擇一個新進程。它不能跨機器工作。
+[`UnixSocketPubSub`](/reference/pubsub/unix-socket-pubsub) 會選出一個進程作為通訊端代理，一旦該進程退出就重新選擇。它不能跨機器運作。
 
-[`GoogleCloudPubSub`](/reference/pubsub/google-cloud-pubsub)跨進程傳遞事件但不實現租約。 Mastra 無法判斷哪個實例擁有線程，因此任何接收到訊號的實例都可以嘗試運行它。僅當另一層保證每個執行緒一個行程時才使用它。
+[`GoogleCloudPubSub`](/reference/pubsub/google-cloud-pubsub) 可跨進程傳送事件，但沒有實作租約。Mastra 無法判斷線程由哪個實例持有，所以任何收到訊號的實例都可嘗試運行它。只有其他層能確保每個線程僅由一個進程運行時，才可使用此後端。
 
-## 線程所有權和租約 {/* #thread-ownership-and-leases */}
+## 線程控制權和租約 {/* #thread-ownership-and-leases */}
 
-Mastra 在開始跑步之前獲得了租約。只有持有者可以運行該線程，其他進程將訊號路由到它。
+Mastra 在啟動執行前會取得租約。只有租約持有者可運行該線程，其他進程會將訊號轉送給它。
 
-預設情況下，租約持續 15 秒，所有者每 5 秒更新一次。續約間隔是租約存活時間 (TTL) 的三分之一。這讓業主有時間在索賠到期之前從錯過的續約中恢復過來。看[Configuration](#configuration) to change these values.
+租約預設有效期為 15 秒，持有者每 5 秒續約一次。續約間隔是租約存留時間（TTL）的三分之一，讓持有者錯過續約時，有時間在租約到期前補救。如要更改數值，請參閱[設定](#configuration)。
 
-如果續約失敗且當地截止日期已過，業主將停止跑步。它無法再證明另一個進程沒有聲明該線程，並且繼續意味著兩個所有者向一個對話寫入內容。然後，新所有者從儲存中開始下一次運行。
+若續約失敗而且本機期限已過，持有者會停止執行。它已無法確認是否有其他進程取得控制權，繼續執行可能導致兩個持有者寫入同一段對話。新的持有者隨後會從儲存空間開始下一次執行。
 
-[持久劑](/docs/harness/durable-agents#run-ownership)當Workflow儲存不支援運行防護時，使用相同的租約。支援隔離的儲存體會記錄聲明並拒絕來自遺失聲明的執行的寫入。這[`LeaseProvider` reference](/reference/pubsub/lease-provider) documents the contract.
+當 Workflow 儲存後端不支援執行隔離（run fencing）時，[持久 Agent](/docs/harness/durable-agents#run-ownership) 會使用相同的租約。支援隔離的後端會記錄控制權，並拒絕由已失去控制權的執行發出的寫入。介面合約詳見 [`LeaseProvider` 參考文件](/reference/pubsub/lease-provider)。
 
-## 將訊號路由到另一個進程 {/* #route-signals-to-another-process */}
+## 將訊號轉送至其他進程 {/* #route-signals-to-another-process */}
 
-當訊號到達時，運行時會尋找執行緒的目前所有者。如果發布了一個訊號，則該訊號將在線程主題上發布，並且所有者將加入其活動運行或從其佇列啟動一個訊號。
+訊號到達時，執行環境會查找線程目前的持有者。若已有進程宣告持有線程，訊號會發佈至線程主題，由持有者接續目前的執行，或從佇列啟動一次執行。
 
-如果沒有通告擁有者，則接收程序會嘗試聲明該執行緒。獲勝意味著該進程運行Agent程式。丟失意味著另一個進程先聲明了它，因此該進程轉發信號並`accepted` resolves to `deliver` rather than `wake`. [`sendSignal()`](/reference/agents/agent#sendsignalsignal-options) documents the accepted result.
+若未有進程宣告持有線程，接收進程會嘗試取得控制權。成功後便可運行 Agent。如其他進程搶先取得控制權，接收進程會轉送訊號，`accepted` 會解析為 `deliver` 而非 `wake`。結果詳見 [`sendSignal()`](/reference/agents/agent#sendsignalsignal-options)。
 
-放`ifIdle.requireClaimedOwner: true` when an idle wake must not start a run on an arbitrary instance. The wake only reaches an advertised owner, and `accepted` rejects if none responds within the discovery window.
+若閒置喚醒不得在任意實例啟動執行，請設定 `ifIdle.requireClaimedOwner: true`。喚醒只會傳送至已宣告的持有者，如在探索時限內沒有回應，`accepted` 會被拒絕。
 
-## 交貨保證和副本 {/* #delivery-guarantees-and-duplicates */}
+## 傳送保證及重複傳送 {/* #delivery-guarantees-and-duplicates */}
 
-PubSub 後端可以在逾時、確認失敗或崩潰後重新傳送事件。因此，運行時假設至少傳遞一次。當所有者保留其簿記時，重新傳遞的訊號不會啟動相同邏輯訊息的第二次運行。
+PubSub 後端可能在逾時、確認失敗或崩潰後重送事件，因此執行環境假設事件至少傳送一次。只要持有者保留處理記錄，重送的訊號就不會為同一則邏輯訊息啟動第二次執行。
 
-這並不能保證每個事件都一次交付。如果您的處理程序寫入資料庫或觸發其他操作，請使其具有冪等性：處理相同事件兩次應該與處理一次具有相同的效果。
+這並不保證每個事件恰好傳送一次。若處理程式會寫入資料庫或觸發其他操作，請確保它具備冪等性，即處理同一事件兩次的效果與處理一次相同。
 
-## 信號和進程崩潰 {/* #signals-and-process-crashes */}
+## 訊號與進程崩潰 {/* #signals-and-process-crashes */}
 
-崩潰後什麼能存活取決於資料所在的位置：
+進程崩潰後可保留哪些資料，取決於資料存放的位置：
 
-* 運行時佇列駐留在進程記憶體中。在跑步消耗它們之前發生的碰撞會失去這些訊號。
-* 發送的訊號`persist` behavior are written to memory storage and survive a restart when that storage is shared.
-* [狀態訊號](/docs/signals/state-signals)它們的追蹤儲存在線程上，並透過共享儲存重新啟動後仍然存在。
-* [通知](/docs/signals/notifications)是通知儲存中的持久記錄。他們的調度員可以在重新啟動後重試交付。
-* 共享 PubSub 後端傳輸事件，但不是持久的輸入佇列。保留的事件可以幫助訂閱者重新連接，但它們不會取代儲存。
-* 持久Agent恢復從其檢查點恢復運行。它不會恢復崩潰進程的記憶體訊號佇列。
+- 執行環境的佇列位於進程記憶體。進程若在執行取用訊號前崩潰，這些訊號便會遺失。
+- 使用 `persist` 行為傳送的訊號會寫入 Memory 儲存空間。若此空間由各進程共用，重啟後仍會保留訊號。
+- [狀態訊號](/docs/signals/state-signals)及其追蹤記錄儲存在所屬線程。使用共用儲存空間時，重啟後仍會保留。
+- [通知](/docs/signals/notifications)是通知儲存空間中的持久記錄，派送程式可在重啟後重試傳送。
+- 共用 PubSub 後端負責傳送事件，不能充當持久的輸入佇列。已保留的事件可協助訂閱者重新連接，但不能取代儲存空間。
+- 持久 Agent 會從檢查點恢復執行，崩潰進程記憶體內的訊號佇列無法復原。
 
-如果訊號必須在接受它的進程中倖存下來，請將其保留或記錄在您自己的系統中。不要依賴 PubSub 保留作為記錄系統。
+若接收進程終止後仍須保留訊號，請將訊號持久儲存，或在自己的系統記錄。請勿依賴 PubSub 的事件保留功能作為正式記錄。
 
 ## 無伺服器 {/* #serverless */}
 
-無伺服器函數一旦回傳回應就會凍結。如果您的函數開始運行，請透過消耗其輸出流來使其保持活動狀態，直到運行完成。
+無伺服器函數回傳回應後可能立即凍結。如函數啟動了執行，請持續讀取輸出串流，讓函數保持運行，直到執行完成。
 
-將此工作傳遞給您的平台`waitUntil` so it can continue after the HTTP response:
+將工作交給平台的 `waitUntil`，讓它在傳回 HTTP 回應後繼續執行：
 
 ```typescript title="src/routes/signal.ts"
 const result = agent.sendSignal(signal, { resourceId, threadId })
@@ -94,19 +94,19 @@ ctx.waitUntil(
 )
 ```
 
-`accepted` resolves to `deliver` and there's no local output to drain. When this invocation wins the lease, it gets `wake` and must stay alive until the output settles.
+若線程由其他進程持有，`accepted` 會解析為 `deliver`，本機毋須讀取輸出。若本次調用取得租約，就會收到 `wake`，並須保持運行直至輸出結束。
 
-在無伺服器平台上也使用共享的 PubSub 後端和共享儲存。短暫的實例使得記憶體中的隊列特別脆弱。
+在無伺服器平台亦應使用共用的 PubSub 後端及儲存空間。實例的生命周期較短，記憶體內的佇列特別容易遺失。
 
-## 優雅關機 {/* #graceful-shutdown */}
+## 正常關閉 {/* #graceful-shutdown */}
 
-停止接受新的 webhook 或訊號請求，然後讓正在進行的工作穩定下來。產生的Mastra伺服器句柄`SIGINT` and `SIGTERM`, stops accepting connections, drains active requests, and calls [`mastra.shutdown()`](/docs/deployment/mastra-server#graceful-shutdown-and-rolling-deploys). If you embed Mastra in your own server, call it from your shutdown hook.
+停止接收新的 webhook 或訊號請求，再等候現有工作完成。所產生的 Mastra 伺服器會處理 `SIGINT` 及 `SIGTERM`，停止接收新連線，處理完現有請求後調用 [`mastra.shutdown()`](/docs/deployment/mastra-server#graceful-shutdown-and-rolling-deploys)。如將 Mastra 嵌入自己的伺服器，請在關閉掛鈎中調用此方法。
 
-訊號提供者有自己的生命週期。稱呼[`provider.stop()`](/reference/signals/signal-provider#stop) to stop polling and clear in-memory subscriptions. Stop routing webhooks to a [`WebhookSignalProvider`](/reference/signals/webhook-signal-provider) before shutdown so new requests don't arrive while the process exits.
+訊號 Provider 有自己的生命周期。調用 [`provider.stop()`](/reference/signals/signal-provider#stop) 以停止輪詢並清除記憶體內的訂閱。關閉前請停止將 webhook 轉送至 [`WebhookSignalProvider`](/reference/signals/webhook-signal-provider)，避免進程退出時收到新請求。
 
-## 配置 {/* #configuration */}
+## 設定 {/* #configuration */}
 
-共享的 Redis Streams 後端處理訊號傳遞和線程租用：
+共用的 Redis Streams 後端同時負責傳送訊號及管理線程租約：
 
 ```typescript title="src/mastra/index.ts"
 import { Mastra } from '@mastra/core'
@@ -126,13 +126,13 @@ export const mastra = new Mastra({
 })
 ```
 
-每個實例點`storage` at the same database, so persisted signals, state signals, and notification records survive a restart and are visible to whichever process owns the thread.
+各實例的 `storage` 須指向同一資料庫。持久儲存的訊號、狀態訊號及通知記錄在重啟後仍會保留，並可由持有線程的進程讀取。
 
-使用相同的`keyPrefix` on every coordinating instance, and a different prefix for environments sharing one Redis server. Vercel's managed Redis and Upstash Redis both work with `RedisStreamsPubSub`.
+參與協調的實例須使用相同的 `keyPrefix`。多個環境共用同一部 Redis 伺服器時，各環境須使用不同前綴。Vercel 託管的 Redis 及 Upstash Redis 均可配合 `RedisStreamsPubSub` 使用。
 
-租約設定是環境變數：
+租約透過以下環境變數設定：
 
-* `MASTRA_AGENT_THREAD_LEASE_TTL_MS`設定租賃期限。預設為`15000` milliseconds.
-* `MASTRA_AGENT_THREAD_LEASE_RENEW_INTERVAL_MS`設定更新間隔。預設值為 TTL 的三分之一，且不短於 TTL 的值將回退到該值。
+- `MASTRA_AGENT_THREAD_LEASE_TTL_MS` 設定租約有效期，預設為 `15000` 毫秒。
+- `MASTRA_AGENT_THREAD_LEASE_RENEW_INTERVAL_MS` 設定續約間隔，預設為 TTL 的三分之一。若設定值等於或大於 TTL，便會採用預設值。
 
-保持兩個值在實例之間保持一致。較短的 TTL 可以更快地釋放崩潰的所有者線程，但為緩慢更新留下的空間較小。較長的 TTL 會起到相反的作用。保留預設值，除非您的部署有理由更改它們。請參閱[`RedisStreamsPubSub` reference](/reference/pubsub/redis-streams) for other backends.
+各實例的這兩項設定須一致。較短的 TTL 會在持有者崩潰後更快釋放線程，但可容許的續約延誤較少。較長的 TTL 則相反。除非部署有需要，否則保留預設值。其他後端詳見 [`RedisStreamsPubSub` 參考文件](/reference/pubsub/redis-streams)。

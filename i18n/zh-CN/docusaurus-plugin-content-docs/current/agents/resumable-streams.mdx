@@ -1,32 +1,32 @@
 ---
-title: 'Resumable streams | Agents'
-description: 'Publish agent runs on a stream topic so clients can reconnect, other readers can follow a run with observe(), and any reader can stop it.'
+title: '可恢复流 | Agents'
+description: '将 Agent 运行发布到流主题，使客户端可以重连，其他读取方可以用 observe() 跟踪同一次运行，任意读取方都可以停止运行。'
 packages:
   - '@mastra/core'
   - '@mastra/server'
 ---
 
-# 可恢复的流
+# 可恢复流
 
-可恢复流将Agent运行的每个块发布到 PubSub 主题，并保留这些事件的重播缓存。断开连接的客户端可以重新连接并追上，另一个读者可以遵循相同的运行`observe()`，任何读者都可以阻止它。
+可恢复流会把一次 Agent 运行产生的每个数据块发布到 PubSub 主题，并缓存这些事件以供重放。客户端断线后可以重连并补收事件，其他读取方可以用 `observe()` 跟踪同一次运行，任意读取方都可以停止运行。
 
-可恢复的流并不能使运行本身持久。重新连接不是崩溃恢复：如果运行Agent的进程停止，则运行停止，观察者会看到错误或仅看到其他内容。对于在进程重新启动后仍然存在的运行，请使用[durable agents](/docs/harness/durable-agents), which publish through the same stream layer.
+可恢复流不会让运行本身具备持久性。运行 Agent 的进程一旦停止，本次运行也会结束，观察方会收到错误或不再收到事件。若要让运行在进程重启后继续，请使用[持久化 Agent](/docs/harness/durable-agents)，它通过同一流式传输层发布事件。
 
-## 默认值 {/* #defaults */}
+## 默认行为 {/* #defaults */}
 
-|Agent|流 |
+| Agent | 流 |
 | - | - |
-|注册于`Mastra` instance | On |
-| Standalone (`new Agent()` without `Mastra`)|关闭 |
-|普通Agent与`durable: true`|开启，包括独立Agent |
-|普通Agent与`durable: false`|关闭，包括注册Agent|
-|显式的`createDurableAgent()`包装|始终发布；经过`cache: false`到工厂禁用重播缓存，而不是传输历史记录|
+| 注册到 `Mastra` 实例 | 开启 |
+| 独立运行（通过 `new Agent()` 创建，未接入 `Mastra`） | 关闭 |
+| 设置 `durable: true` 的普通 Agent | 开启，独立 Agent 也适用 |
+| 设置 `durable: false` 的普通 Agent | 关闭，已注册的 Agent 也适用 |
+| 显式通过 `createDurableAgent()` 包装 | 始终发布。向工厂函数传入 `cache: false` 只禁用重放缓存，传输层的历史记录不受影响。 |
 
-注册Agent，无论是否持久，都会在`mastra.pubsub` and caches events in `mastra.serverCache`, or an in-memory cache when the server has none. Every `Mastra` instance that shares that PubSub and cache can observe the run. An agent-level `pubsub` takes precedence, except on the evented engine, whose steps always publish on `mastra.pubsub`.
+已注册的 Agent 无论是否持久化，都会通过 `mastra.pubsub` 发布事件，并将事件缓存到 `mastra.serverCache`。若服务器未配置缓存，则使用进程内存。共享该 PubSub 和缓存的所有 `Mastra` 实例都可以观察运行。Agent 级的 `pubsub` 优先，但事件驱动引擎的步骤始终通过 `mastra.pubsub` 发布。
 
 ## 配置流 {/* #configure-streams */}
 
-放`durable` on the agent to turn streams on or off, or to pass your own PubSub and cache:
+在 Agent 上设置 `durable`，可以启用或禁用流，也可以传入自己的 PubSub 和缓存：
 
 ```typescript title="src/mastra/agents/support-agent.ts"
 import { Agent } from '@mastra/core/agent'
@@ -43,22 +43,22 @@ export const supportAgent = new Agent({
 })
 ```
 
-|选项 |默认 |描述 |
+| 选项 | 默认值 | 说明 |
 | - | - | - |
-|`pubsub` | `mastra.pubsub` | Bus the run is published on. Use a shared bus to follow runs across processes. |
-| `cache` | `mastra.serverCache`, else an in-memory cache | Replay cache. Pass `false` to disable this cache. Transports such as Redis Streams can still replay retained history. |
-| `shouldCache` | Every topic | Return `false` for a topic to skip caching it. |
-| `cleanupTimeoutMs` | `30000` | How long after it finishes a run is cleared. `0`仅关闭此计时器。缓存自身的过期和驱逐仍然适用。 |
+| `pubsub` | `mastra.pubsub` | 用于发布运行事件的总线。使用共享总线可跨进程跟踪运行。 |
+| `cache` | `mastra.serverCache`，否则使用内存缓存 | 重放缓存。传入 `false` 可禁用此缓存。Redis Streams 等传输层仍可重放其保留的历史记录。 |
+| `shouldCache` | 所有主题 | 为某个主题返回 `false`，即可跳过该主题的缓存。 |
+| `cleanupTimeoutMs` | `30000` | 一次运行结束后到清理该运行的等待时间。`0` 仅关闭此计时器，缓存自身的过期和淘汰机制仍然生效。 |
 
-`durable: true`使用这些默认值打开流，包括独立Agent。
+`durable: true` 会按上述默认值启用流，独立 Agent 也适用。
 
-在平原上`Agent`, `durable` configures resumable streams only. For checkpoint-backed execution, wrap the agent explicitly with `createDurableAgent({ agent })`. To recover in-flight runs after a crash, also configure persistent workflow storage and `recovery: { durableAgents: 'auto' }`. For manual recovery instead, pass a `shouldPersistSnapshot` policy that includes `running` snapshots and call `recoverActiveRuns()` yourself. See [crash recovery](/docs/harness/durable-agents#crash-recovery) for setup and persistence policies.
+对普通 `Agent`，`durable` 只配置可恢复流。要在执行中保存检查点，需显式用 `createDurableAgent({ agent })` 包装 Agent。要在崩溃后恢复尚未结束的运行，还需配置持久化 Workflow 存储和 `recovery: { durableAgents: 'auto' }`。如需手动恢复，可传入包含 `running` 快照的 `shouldPersistSnapshot` 策略，并自行调用 `recoverActiveRuns()`。配置步骤和持久化策略见[崩溃恢复](/docs/harness/durable-agents#crash-recovery)。
 
-配置包装器的流缓存并通过工厂的传输`cache`, `pubsub`, `shouldCache`, and `cleanupTimeoutMs` options.
+通过工厂函数的 `cache`、`pubsub`、`shouldCache` 和 `cleanupTimeoutMs` 选项配置包装后的流缓存和传输。
 
 ## 关闭流 {/* #turn-streams-off */}
 
-流是有成本的。每个块都会发布到 PubSub，并且在启用缓存的情况下，每个事件都会被存储，直到运行被清理。内存中的缓存就是进程内存。对于远程 PubSub 或 Redis 等缓存，它是每个块的网络写入。对于从不重新连接或观察运行的大容量Agent，请关闭流：
+流会消耗资源。每个数据块都会发布到 PubSub。启用缓存后，每个事件还要保存到运行被清理为止。使用内存缓存会占用进程内存，使用远程 PubSub 或 Redis 等远程缓存则会为每个数据块产生一次网络写入。对于运行量大、且从不重连或观察运行的 Agent，可以关闭流：
 
 ```typescript title="src/mastra/agents/batch-agent.ts"
 import { Agent } from '@mastra/core/agent'
@@ -72,25 +72,25 @@ export const batchAgent = new Agent({
 })
 ```
 
-要保持实时观察但跳过重播缓存，请传递`durable: { cache: false }`.
+若要保留实时观察，但不使用重放缓存，请传入 `durable: { cache: false }`。
 
-### 运行时间可以保持多长时间 {/* #how-long-runs-stay-available */}
+### 运行可保留多久 {/* #how-long-runs-stay-available */}
 
-运行完成后，执行进程会安排清理其事件和所有权记录`cleanupTimeoutMs`. The timer allows the process to exit before cleanup. Shared cache data then remains until expiry or eviction. Redis Streams retains its native topic data until `clearTopic()` succeeds or its idle TTL expires. The transport's default idle TTL is seven days. Configure `streamIdleTtlMs` to change it, or set it to `0` to disable transport expiry. A run parked on a tool approval or suspension isn't cleared by that timer, because resuming it continues on the same topic.
+运行结束后，执行进程会安排在 `cleanupTimeoutMs` 后清理运行事件和归属记录。该计时器允许进程在清理前退出，此时共享缓存中的数据会一直保留到过期或被淘汰。Redis Streams 的原生主题数据会保留到 `clearTopic()` 成功执行或空闲 TTL 到期。传输层的默认空闲 TTL 是七天，可用 `streamIdleTtlMs` 修改，设为 `0` 则禁用传输层过期机制。等待工具审批或处于挂起状态的运行不会被此计时器清理，因为恢复后仍在同一主题上继续。
 
-缓存限制了其他一切：
+其余保留限制由缓存决定：
 
-* 运行日志和所有权记录向缓存请求 24 小时 TTL。内存缓存至少使用此 TTL 来存储索引运行日志，除非禁用缓存过期。缓存条目限制可以更快地驱逐数据。
-* 内存缓存默认保存 1,000 个条目。每次运行都使用多个条目（其事件日志、计数器及其所有权记录），因此大流量会更快地驱逐较旧的运行。
-* 当运行的所有权记录被逐出或过期时，服务器的观察和中止路由返回 404。无法重播已驱逐的运行事件。
+- 运行日志和归属记录向缓存请求 24 小时的 TTL。除非禁用缓存过期，内存缓存会为已建立索引的运行日志使用至少 24 小时的 TTL。缓存条目数达到上限时，数据可能更早被淘汰。
+- 内存缓存默认容纳 1,000 个条目。每次运行占用多个条目，包括事件日志、计数器和归属记录，所以流量越大，较早的运行越快被淘汰。
+- 运行的归属记录被淘汰或过期时，服务器的观察和中止路由返回 404。被淘汰的运行事件无法重放。
 
-当运行必须在服务器之间保持可观察性或需要长时间批准等待时，请使用根据您的流量调整大小的共享缓存，例如 Redis。
+如果需要跨服务器观察运行，或等待审批的时间较长，请使用 Redis 等共享缓存，并按流量配置容量。
 
-## 跟随跑步 {/* #follow-a-run */}
+## 跟踪运行 {/* #follow-a-run */}
 
-共享 PubSub 总线的Agent之间的运行 ID 必须是唯一的。
+共享同一 PubSub 总线的各个 Agent 之间，运行 ID 必须唯一。
 
-称呼`observe()` with the run's ID to follow it from any agent instance that shares the bus. Without an offset, `observe()` replays the cached events and then delivers live ones. Replay needs the same replay cache too. An instance with its own cache receives only live events, unless the PubSub keeps history. When a run waits on a tool approval, the observation receives the approval request and stays open until the approved run finishes, errors or is aborted. Call `detach()` to stop following a parked run:
+在共享总线的任意 Agent 实例上，传入运行 ID 调用 `observe()` 即可跟踪运行。不传偏移量时，`observe()` 先重放缓存中的事件，再传递实时事件。重放也需要共享同一重放缓存。各用独立缓存的实例只能收到实时事件，除非 PubSub 自身保留历史记录。运行等待工具审批时，观察方会收到审批请求，连接保持打开，直到获批的运行结束、报错或被中止。若要停止跟踪等待中的运行，请调用 `detach()`：
 
 ```typescript title="src/server/reconnect.ts"
 import { supportAgent } from '../mastra/agents/support-agent'
@@ -107,38 +107,38 @@ export async function followRun(runId: string, request: Request) {
 }
 ```
 
-每个块来自`observe()` carries its run-log position as `chunk.index`. To resume an observation after a dropped connection, pass `index + 1` of the last chunk that has an index as `offset`. Chunks from a plain agent's `stream()`, and chunks delivered without a replay cache, carry no `index`, so a client that lost one of those connections should observe without an `offset`. The [`observe()` reference](/reference/agents/durable-agent#observerunid-options) covers which chunks carry no index, structured output, and replay limits.
+`observe()` 返回的数据块通过 `chunk.index` 标明它在运行日志中的位置。要在断线后接续观察，请找到最后一个带索引的数据块，将其 `index + 1` 作为 `offset` 传入。普通 Agent 的 `stream()` 产生的数据块，以及不经重放缓存传送的数据块，都没有 `index`，因此这类连接断开后，应在观察时省略 `offset`。哪些数据块没有索引，以及结构化输出和重放限制，见 [`observe()` 参考](/reference/agents/durable-agent#observerunid-options)。
 
-通过 HTTP，观察无法恢复的运行会失败，而不是返回空流。未知的运行，或者其所有权记录过期或被驱逐的运行，回答 404，并且客户端以`MastraClientError` carrying that status rather than resolving to an empty, closed stream.
+通过 HTTP 观察无法恢复的运行时，请求会失败。如果运行未知，或其归属记录已过期或被淘汰，服务器会返回 404，客户端会以带有该状态码的 `MastraClientError` 拒绝请求的 Promise，不会返回一个已关闭的空流。
 
-`agent.hasResumableStreams()`报告该Agent是否发布其运行，以及是否与它们一起发布`observe()` and the server's observe and abort routes can reach them. It's `true` for a durable agent and for any agent with streams on.
+`agent.hasResumableStreams()` 表示当前 Agent 是否会发布运行事件，以及 `observe()` 和服务器的观察、中止路由是否可访问这些运行。持久化 Agent 和任何启用流的 Agent 都会返回 `true`。
 
-### 直到空闲流 {/* #until-idle-streams */}
+### 持续到空闲的流 {/* #until-idle-streams */}
 
-`streamUntilIdle()`和`resumeStreamUntilIdle()` combine the initial run and background-task continuations in their `fullStream`. Without an offset, `observe(returnedRunId)` replays only the initial segment and closes at its finish event. It doesn't reconnect to the combined until-idle stream or replay later background-task answers. Supplying an explicit run ID doesn't change this limit. The same limit applies to durable agents.
+`streamUntilIdle()` 和 `resumeStreamUntilIdle()` 将初始运行及后台任务接续执行合并到各自的 `fullStream` 中。不传偏移量时，`observe(returnedRunId)` 只重放初始片段，并在该片段的结束事件处关闭。它既不能接续这条合并后的流，也不会重放后续后台任务的回答。显式指定运行 ID 不会改变这一限制。持久化 Agent 同样受此限制。
 
-## 停止跑步 {/* #stop-a-run */}
+## 停止运行 {/* #stop-a-run */}
 
-当流打开时，关闭的读取器不会停止运行。当客户端与服务器的流路由断开连接时，服务器会分离该读取器并且运行继续进行：它不断生成令牌、调用Tool并运行`onFinish`, so the client can reconnect. Stop it explicitly, or set `durable: false` on a plain agent whose runs should end with the request. A durable agent's run always continues after a disconnect. A detached run still ends when it finishes, when it's stopped, or when its step budget is spent. With neither `maxSteps` nor `stopWhen` set, each loop stops after five steps, excluding processor retries. The budget applies per loop invocation, with a fresh loop after an approval or background continuation.
+启用流时，读取方关闭连接不会停止运行。客户端从服务器的流路由断开时，服务器会解除与该读取方的关联，运行会继续生成 token、调用工具并执行 `onFinish`，等待客户端重连。可以显式停止运行。如果普通 Agent 的运行应随请求结束，请设置 `durable: false`。持久化 Agent 在断线后始终继续运行。脱离读取方的运行仍会在完成、被停止或用完步骤预算时结束。如果没有设置 `maxSteps` 或 `stopWhen`，每次循环在五步后停止，处理器重试不计在内。预算按每次循环调用计算，审批或后台接续后会启动新一轮循环。
 
-使用以下之一显式停止运行：
+可通过以下方式显式停止运行：
 
-* `observe(runId)`返回一个`abort()` function that asks a running run to stop wherever it executes. The request is best effort. It doesn't wait for confirmation, and a failed publish is only logged. Use the abort route below when you need confirmation. A run parked on an approval no longer listens for it, so stop a parked run with the abort route below, or with `POST /agents/:agentId/threads/abort` for a run in a memory thread.
-* `agent.abortRunStream(runId)`停止此进程中的运行，并要求同一总线上的其他进程停止它。它返回`true` for a running run stopped in this process. A run parked on an approval outside a memory thread is cancelled here too, but the call returns `false`. A later approval in this process fails. The cancellation fence is process-local and leaves the shared snapshot intact. Another process can still approve that snapshot, so use the abort route below to stop a parked run in an app with more than one server. For a run elsewhere the request is best effort.
-* 服务器的`POST /agents/:agentId/runs/:runId/abort` route stops a run on any server that shares the PubSub and cache, after checking the caller owns it. It returns `{ aborted: true }` once the process executing the run confirms it stopped. For a run of a durable agent (`DurableAgent` or `createDurableAgent`, including evented agents) parked on an approval, the route also records the cancellation in storage and returns `{ aborted: true }` after that write is saved. A later approval or resume of that run is then refused with `409 Conflict` (`AGENT_RESUME_ABORTED_RUN`) on every server that shares the storage. If a resume claims the run first, no cancellation is recorded, and the route stops the resumed run like any running run. On storage adapters without concurrent updates, such as Redis, Valkey and LanceDB, an abort and an approval that arrive at the same moment aren't serialized, so an approval that overlaps the abort can still run its tool even though the abort returns `{ aborted: true }`. Wait for that response before relying on the recorded cancellation, which Inngest agents don't write. The route returns `{ aborted: false }` for a finished run, and when nothing stopped the run and no process answers in time. Runs in a memory thread can also be stopped with `POST /agents/:agentId/threads/abort`, but that route doesn't record the cancellation in storage, so use the run abort route to stop a parked durable run in an app with more than one server.
+- `observe(runId)` 返回一个 `abort()` 函数，向正在执行的运行发出停止请求，无论它在哪执行。该请求尽力发送，不等待确认，发布失败时只记录日志。需要确认时，请使用下文的中止路由。等待审批的运行已不再监听此请求，请使用下文的中止路由。对于记忆线程中的运行，也可用 `POST /agents/:agentId/threads/abort`。
+- `agent.abortRunStream(runId)` 会停止当前进程中的运行，并请求同一总线上的其他进程停止该运行。如果在当前进程中停止了正在执行的运行，返回 `true`。不在记忆线程中且正等待审批的运行也会在当前进程取消，但此时返回 `false`，之后在当前进程审批会失败。取消限制仅在当前进程生效，共享快照不会改变，其他进程仍可审批该快照。应用使用多台服务器时，请用下文的中止路由来停止等待中的运行。若运行在其他进程，停止请求仅尽力送达。
+- 服务器的 `POST /agents/:agentId/runs/:runId/abort` 路由会先验证调用方是否拥有该运行，然后可在任意共享 PubSub 和缓存的服务器上停止运行。执行进程确认运行已停止后，路由返回 `{ aborted: true }`。如果持久化 Agent（`DurableAgent` 或 `createDurableAgent`，包括事件驱动 Agent）的运行正在等待审批，路由还会把取消写入存储，保存成功后返回 `{ aborted: true }`。之后，任何共享该存储的服务器都会拒绝审批或恢复该运行，返回 `409 Conflict`（`AGENT_RESUME_ABORTED_RUN`）。如果恢复操作先取得运行，不会写入取消记录，路由会按普通运行的方式停止已恢复的运行。对于不支持并发更新的存储适配器，如 Redis、Valkey 和 LanceDB，同时到达的中止与审批不会串行处理。因此即使中止返回 `{ aborted: true }`，与其重叠的审批仍可能执行工具。请等到收到该响应，再依赖已保存的取消记录。Inngest Agent 不写入此记录。如果运行已结束，或没有停止运行且没有进程及时响应，路由返回 `{ aborted: false }`。记忆线程中的运行也可通过 `POST /agents/:agentId/threads/abort` 停止，但该路由不会将取消写入存储。因此在有多台服务器的应用中，应使用运行中止路由来停止正在等待的持久化运行。
 
-和`durable: false` on a non-durable agent, closing the HTTP request aborts the run, as before.
+非持久化 Agent 设置 `durable: false` 时，关闭 HTTP 请求仍会像以前一样中止运行。
 
-## 跨服务器 {/* #across-servers */}
+## 跨服务器使用 {/* #across-servers */}
 
-当多个服务器共享 PubSub 和缓存（例如 Redis）时，可以通过其中任何一个服务器来观察和停止在一台服务器上启动的运行：
+多台服务器共享 PubSub 和缓存（如 Redis）时，可以通过其中任意一台服务器观察或停止在另一台服务器上启动的运行：
 
-* 每次运行都会在第一个事件之前将所有权记录（Agent、运行、资源和线程）写入缓存。服务器的观察和中止路由会根据该记录检查调用者，因此每个服务器上都会保留租户和线程检查。
-* 未知、过期或被逐出的记录返回 404。如果无法读取缓存，路由将返回 503，而不是跳过检查。
-* 和`durable: { cache: false }` the record is kept in `mastra.serverCache`, so ownership still works across servers. Replay then depends on the PubSub: one that keeps history, like Redis Streams, replays it, and an in-process bus delivers only live events.
-* 使用默认的内存缓存和 PubSub，不会共享任何内容，因此只有运行Agent的服务器才能观察或停止其运行。
+- 每次运行在发布首个事件前，会将归属记录（Agent、运行、资源和线程）写入缓存。服务器的观察和中止路由用该记录核验调用方，因此租户和线程检查在每台服务器上都生效。
+- 找不到记录，或记录已过期或被淘汰时，返回 404。如果无法读取缓存，路由会返回 503，不会跳过检查。
+- 设置 `durable: { cache: false }` 时，归属记录会保留在 `mastra.serverCache` 中，因此跨服务器归属校验仍然有效。能否重放取决于 PubSub：Redis Streams 等保留历史记录的实现可重放，进程内总线只传递实时事件。
+- 默认的内存缓存和 PubSub 不共享数据，所以只有执行 Agent 的服务器才能观察或停止其运行。
 
-## 有关的 {/* #related */}
+## 相关文档 {/* #related */}
 
-* [持久剂](/docs/harness/durable-agents)
-* [Agent参考](/reference/agents/agent)
+- [持久化 Agent](/docs/harness/durable-agents)
+- [Agent 参考](/reference/agents/agent)

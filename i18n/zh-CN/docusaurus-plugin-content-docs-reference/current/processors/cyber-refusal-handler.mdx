@@ -1,40 +1,40 @@
 ---
-title: "Reference: CyberRefusalHandler | Processors"
-description: "The CyberRefusalHandler retries once when an OpenAI or Anthropic cybersecurity safeguard refuses a step."
+title: "参考：CyberRefusalHandler | Processors"
+description: "当 OpenAI 或 Anthropic 的网络安全防护机制拒绝某个步骤时，CyberRefusalHandler 会重试一次。"
 packages:
   - "@mastra/core"
 ---
 
-# 网络拒绝处理程序
+# CyberRefusalHandler
 
-这`CyberRefusalHandler`当Provider的网络安全保护措施拒绝时重试某个步骤。这些保护措施可以在长期Agent运行过程中拒绝普通编码工作。其中许多拒绝都是误报，要求模型继续通常会绕过它们。如果重试的步骤再次被拒绝，则拒绝将继续存在并表现为正常错误或停止。
+当 Provider 的网络安全防护机制拒绝某个步骤时，`CyberRefusalHandler` 会重试该步骤一次。在 Agent 长时间运行的过程中，这类防护机制也可能拒绝普通的编码任务。许多此类拒绝属于误报，要求模型继续通常能让任务继续推进。如果重试后仍被拒绝，拒绝结果会保留，并以正常错误或停止的形式呈现。
 
-该处理程序涵盖两个Provider，它们以不同的方式报告拒绝：
+该处理器支持两个 Provider，它们报告拒绝的方式不同：
 
-* **开放人工智能**模型调用失败`cyber_policy` error ("This content was flagged for possible cybersecurity risk"). The handler matches the error code or the message, whether the refusal arrives as an HTTP error or as a failed stream. It's handled in `processAPIError`, which only runs for processors in `errorProcessors`.
-* **人择**完成该步骤`content-filter` finish reason and `stopDetails.category: 'cyber'` in the provider metadata. It's handled in `processOutputStep`, which runs for processors in `outputProcessors`. The refused step is rolled back, including any partial text, before the retry.
+- **OpenAI**：模型调用因 `cyber_policy` 错误（"This content was flagged for possible cybersecurity risk"）而失败。无论拒绝以 HTTP 错误还是流失败的形式返回，处理器都会匹配错误代码或错误消息。此类拒绝由 `processAPIError` 处理，该方法仅对 `errorProcessors` 中的处理器运行。
+- **Anthropic**：步骤结束时，Provider 元数据中的结束原因为 `content-filter`，且 `stopDetails.category: 'cyber'`。此类拒绝由 `processOutputStep` 处理，该方法对 `outputProcessors` 中的处理器运行。重试前会回滚被拒绝的步骤，包括已生成的部分文本。
 
-## 它是如何运作的 {/* #how-it-works */}
+## 工作原理 {/* #how-it-works */}
 
-对于 OpenAI 拒绝：
+对于 OpenAI 的拒绝：
 
-1. 模型调用失败并显示`cyber_policy` error
-2. `CyberRefusalHandler`检查这是否是该步骤的第一次重试尝试
-3. 它发送一个`system-reminder` signal with `continue` as its contents
-4. 它返回`{ retry: true }`, and the same model is called again
+1. 模型调用因 `cyber_policy` 错误而失败
+1. `CyberRefusalHandler` 检查这是否是该步骤的首次重试
+1. 发送 `system-reminder` 信号，其内容为 `continue`
+1. 返回 `{ retry: true }`，然后再次调用同一个模型
 
-对于人为拒绝：
+对于 Anthropic 的拒绝：
 
-1. 该步骤以`cyber` classifier refusal
-2. `CyberRefusalHandler`检查这是否是该步骤的第一次重试尝试
-3. 它调用`abort('continue', { retry: true })`
-4. 回滚被拒绝的步骤并再次调用模型`continue` appended as a system reminder
+1. 步骤因 `cyber` 分类器的拒绝而结束
+1. `CyberRefusalHandler` 检查这是否是该步骤的首次重试
+1. 调用 `abort('continue', { retry: true })`
+1. 回滚被拒绝的步骤，将 `continue` 作为系统提醒追加后再次调用模型
 
-每个步骤仅运行一次重试。成功的步骤会重置计数，因此同一运行中稍后的拒绝会再次重试。
+每个步骤最多重试一次。步骤成功后，重试计数会重置，因此同一次运行中后续步骤若遭拒绝，仍可重试一次。
 
 ## 使用示例 {/* #usage-example */}
 
-添加`CyberRefusalHandler` to both `errorProcessors` and `outputProcessors` to cover both providers:
+将 `CyberRefusalHandler` 同时添加到 `errorProcessors` 和 `outputProcessors`，以处理两个 Provider 的拒绝：
 
 ```typescript title="src/mastra/agents/coding-agent.ts"
 import { Agent } from '@mastra/core/agent'
@@ -51,52 +51,52 @@ export const agent = new Agent({
 })
 ```
 
-在`errorProcessors`, place it before [`StreamErrorRetryProcessor`](/reference/processors/stream-error-retry-processor). Error processors stop at the first one that returns `{ retry: true }`, and a retry processor placed first would resend the refused request unchanged.
+在 `errorProcessors` 中，将其放在 [`StreamErrorRetryProcessor`](/reference/processors/stream-error-retry-processor) 之前。错误处理器遇到第一个返回 `{ retry: true }` 的处理器后就会停止；如果先执行通用重试处理器，被拒绝的请求将原样重发。
 
-输出步骤重试计数`maxProcessorRetries`, and unlike the error lane they have no implicit default. Set it explicitly whether or not the agent has `errorProcessors`, or the Anthropic retry is treated as an abort.
+输出步骤的重试会计入 `maxProcessorRetries`，而且与错误处理路径不同，这里没有隐式默认值。无论 Agent 是否配置了 `errorProcessors`，都应显式设置该值，否则 Anthropic 的重试会被视为中止。
 
-[`createCodingAgent()`](/reference/coding-agent/create-coding-agent)默认情况下，在两个通道中都包含处理程序。
+[`createCodingAgent()`](/reference/coding-agent/create-coding-agent) 默认会在两个处理器列表中加入该处理器。
 
 ## 构造函数参数 {/* #constructor-parameters */}
 
-这`CyberRefusalHandler` takes no constructor parameters.
+`CyberRefusalHandler` 不接受构造函数参数。
 
-## 特性 {/* #properties */}
+## 属性 {/* #properties */}
 
 <PropertiesTable
   content={[
 {
   name: 'id',
   type: "'cyber-refusal-handler'",
-  description: 'Processor identifier.',
+  description: '处理器标识符。',
   isOptional: false,
 },
 {
   name: 'name',
   type: "'Cyber Refusal Handler'",
-  description: 'Processor display name.',
+  description: '处理器显示名称。',
   isOptional: false,
 },
 {
   name: 'processAPIError',
   type: '(args: ProcessAPIErrorArgs) => Promise<ProcessAPIErrorResult | void>',
   description:
-    'Handles OpenAI cybersecurity refusals by sending a `continue` system reminder and signaling retry. Only triggers on the first retry attempt.',
+    '通过发送内容为 `continue` 的系统提醒并发出重试信号，处理 OpenAI 的网络安全拒绝。仅在首次重试时触发。',
   isOptional: false,
 },
 {
   name: 'processOutputStep',
   type: '(args: ProcessOutputStepArgs) => ProcessorMessageResult',
   description:
-    'Handles Anthropic cybersecurity classifier refusals by aborting the step with `retry: true`. Only triggers on the first retry attempt.',
+    '通过以 `retry: true` 中止步骤，处理 Anthropic 网络安全分类器的拒绝。仅在首次重试时触发。',
   isOptional: false,
 },
 ]}
 />
 
-## 有关的 {/* #related */}
+## 相关内容 {/* #related */}
 
-* [处理器接口](/reference/processors/processor-interface)
-* [预填充错误处理程序](/reference/processors/prefill-error-handler)
-* [流错误重试处理器](/reference/processors/stream-error-retry-processor)
-* [处理器](/docs/agents/processors#retry-mechanism)
+- [处理器接口](/reference/processors/processor-interface)
+- [PrefillErrorHandler](/reference/processors/prefill-error-handler)
+- [StreamErrorRetryProcessor](/reference/processors/stream-error-retry-processor)
+- [Processors](/docs/agents/processors#retry-mechanism)

@@ -1,17 +1,17 @@
 ---
-title: "Reference: WorkspaceSandbox | Workspace"
-description: "The WorkspaceSandbox interface defines how workspaces execute commands and manage background processes."
+title: "WorkspaceSandbox 參考文件 | Workspace"
+description: "WorkspaceSandbox 介面定義 Workspace 如何執行命令及管理背景程序。"
 packages:
   - "@mastra/core"
 ---
 
-# Workspace沙箱
+# WorkspaceSandbox
 
-**添加於：** `@mastra/core@1.1.0`
+**加入版本：** `@mastra/core@1.1.0`
 
-這`WorkspaceSandbox` interface defines how workspaces execute commands and manage background processes.
+`WorkspaceSandbox` 介面定義 Workspace 如何執行命令及管理背景程序。
 
-## 特性 {/* #properties */}
+## 屬性 {/* #properties */}
 
 <PropertiesTable
   content={[
@@ -19,21 +19,21 @@ packages:
   name: 'processes',
   type: 'SandboxProcessManager',
   description:
-    "Background process manager. If not implemented, process management tools won't be available. See SandboxProcessManager reference.",
+    "背景程序管理器。若未實作，程序管理工具將無法使用。請參閱 SandboxProcessManager 參考文件。",
   isOptional: true,
 },
 {
   name: 'computer',
   type: 'SandboxComputer',
   description:
-    "Computer-use (desktop) capability. If not implemented, computer tools won't be available. See [Computer capability](#computer-capability).",
+    "電腦操作（桌面）功能。若未實作，電腦操作工具將無法使用。請參閱[電腦操作功能](#computer-capability)。",
   isOptional: true,
 },
 {
   name: 'filesystem',
   type: 'WorkspaceFilesystem',
   description:
-    "Direct access to the sandbox's disk through the provider's file API, one request per operation instead of a shell command. See [Native filesystem](#native-filesystem).",
+    "透過 Provider 的檔案 API 直接存取 Sandbox 磁碟；每項操作只需一次請求，無須執行 shell 命令。請參閱[原生檔案系統](#native-filesystem)。",
   isOptional: true,
 },
 ]}
@@ -43,7 +43,7 @@ packages:
 
 ### `start()` {/* #start */}
 
-啟動沙箱並被自動調用`workspace.init()` or the first `executeCommand()` call.
+啟動 Sandbox。呼叫 `workspace.init()` 或首次呼叫 `executeCommand()` 時，會自動執行此方法。
 
 ```typescript
 const result = await sandbox.start()
@@ -54,7 +54,7 @@ const result = await sandbox.start()
 
 **返回：** `void | Promise<SandboxStartResult | void>`
 
-使用已知建造的沙箱`id` resolves that id on `start()`: reconnect or resume the sandbox if it exists, create it if not (get-or-create). Providers that support this report a `SandboxStartResult`:
+若建構 Sandbox 時提供了已知的 `id`，`start()` 會解析該 ID：已有 Sandbox 則重新連線或恢復，否則建立一個（取得或建立）。支援此機制的 Provider 會回傳 `SandboxStartResult`：
 
 <PropertiesTable
   content={[
@@ -62,26 +62,26 @@ const result = await sandbox.start()
   name: 'outcome',
   type: "'created' | 'connected'",
   description:
-    "`'created'` when a brand-new sandbox VM (or working directory) was provisioned; `'connected'` when the call reconnected to or resumed an existing one.",
+    "建立全新的 Sandbox 虛擬機器（或工作目錄）時為 `'created'`；重新連線或恢復既有執行個體時為 `'connected'`。",
 },
 ]}
 />
 
-合約返還之前的提供商`void`, which the base class treats as unknown.
+在此契約引入前實作的 Provider 會回傳 `void`，基底類別會將結果視為未知。
 
-Provider使用以下方法之一實現啟動生命週期（按優先順序列出）。基類處理並發啟動呼叫和狀態管理，以及`onStart` hook and mount processing:
+Provider 可依下列優先順序選擇一種方式實作啟動生命週期。基底類別負責處理並行啟動呼叫、狀態管理、`onStart` 鉤子與掛載作業：
 
-1. **採集原語**：實施保護`find()` (side-effect-free lookup by logical id, returning a provider-native handle or `undefined`), `connect(handle)` (wake/resume/adopt), and `create()` (provision fresh) without overriding `start()`. The base orchestrates find → connect → `{ outcome: 'connected' }`, else create → `{ outcome: 'created' }`。結果在結構上源自於運行的分支。使用者`E2BSandbox`, `DaytonaSandbox`， 和`LocalSandbox`.
-2. **`start()`覆蓋返回`SandboxStartResult`**：對於其 API 是融合獲取或創建的提供商，其中分解會添加往返（`PlatformSandbox`, `RailwaySandbox`).
-3. **`start()`覆蓋返回`void`**：遺留Provider，結果未知。
+1. **取得原語**：實作受保護的 `find()`（依邏輯 ID 查詢，不產生副作用，回傳 Provider 原生控制代碼或 `undefined`）、`connect(handle)`（喚醒、恢復或接管）及 `create()`（建立新執行個體），無須覆寫 `start()`。基底類別執行 find → connect → `{ outcome: 'connected' }`；找不到時則執行 create → `{ outcome: 'created' }`。結果由實際執行的分支決定。`E2BSandbox`、`DaytonaSandbox` 與 `LocalSandbox` 採用此方式。
+2. **覆寫 `start()` 並回傳 `SandboxStartResult`**：適用於 Provider API 將取得與建立合為一次呼叫、拆開後會增加請求往返次數的情況（`PlatformSandbox`、`RailwaySandbox`）。
+3. **覆寫 `start()` 並回傳 `void`**：適用於舊版 Provider，啟動結果未知。
 
-並行`start()` calls on one instance coalesce onto a single in-flight attempt, and joined callers share that attempt's result (all observe `outcome: 'created'` when the shared attempt created the VM). The in-flight slot is cleared when the attempt settles, so a failed start can be retried. For a sandbox already in the `running` state, `start()` resolves `{ outcome: 'connected' }` without re-invoking the provider.
+同一執行個體上的並行 `start()` 呼叫會合併為一次啟動嘗試，所有呼叫端共用其結果（若該次嘗試建立了虛擬機器，所有呼叫端都會看到 `outcome: 'created'`）。嘗試結束後會清除進行中的紀錄，因此啟動失敗後可以重試。對於已處於 `running` 狀態的 Sandbox，`start()` 會直接回傳 `{ outcome: 'connected' }`，不會再次呼叫 Provider。
 
-結果也轉給`onStart` lifecycle hook as `{ sandbox, outcome }`.
+啟動結果也會以 `{ sandbox, outcome }` 的形式傳給 `onStart` 生命週期鉤子。
 
-### `onStart`（構造函數選項） {/* #onstart-constructor-option */}
+### `onStart`（建構函式選項） {/* #onstart-constructor-option */}
 
-`onStart`在沙箱到達後，在啟動生命週期內運行`running` status and before pending mounts are processed. It fires on every start regardless of trigger, whether an explicit call, a lazy `ensureRunning()` from a command, or a revival after the provider replaced the VM. Use this hook for once-per-VM setup: check `outcome` to decide whether to run setup or check that it already completed.
+`onStart` 在啟動生命週期內執行：此時 Sandbox 已達到 `running` 狀態，但待處理的掛載尚未執行。無論是明確呼叫、命令觸發的延遲 `ensureRunning()`，或 Provider 更換虛擬機器後的恢復，每次啟動都會觸發此鉤子。可用它完成每台虛擬機器的初始化，並依 `outcome` 判斷要執行初始化，還是確認初始化已完成。
 
 ```typescript
 new E2BSandbox({
@@ -101,17 +101,17 @@ new E2BSandbox({
 
 語意：
 
-* 拋出的錯誤是致命的：`start()` rejects with the hook's error and the sandbox is marked `error`. A caller never observes a running sandbox whose setup hook failed. Nothing is latched, and the next `start()` (including the one triggered by the next lazy command) retries the hook. `onStop` and `onDestroy` remain non-fatal observers, because teardown proceeds best-effort.
-* `outcome`區分分支：`'created'` means this start provisioned a fresh VM (run setup), `'connected'` means it reconnected or resumed (setup normally already ran, so probe when the hook must self-heal a crash between create and setup-complete). `undefined` means the provider doesn't report.
-* 保持設定工作冪等。每當探測器決定應該重新運行時，鉤子就會重新運行，並且檢查點恢復的新虛擬機器報告`outcome: 'created'`.
-* 沙箱狀態翻轉為`running` before the hook executes (the hook runs commands through the sandbox's own command path), so commands issued concurrently through `ensureRunning()` can interleave with it. Callers awaiting the original `start()` always observe a sandbox whose hook finished.
-* 該鉤子在處理掛起的檔案系統掛載之前運行，因此它不能依賴掛載的路徑。
+* 鉤子擲出的錯誤會使啟動失敗：`start()` 會以該錯誤拒絕，Sandbox 狀態變為 `error`。呼叫端不會看到初始化鉤子失敗卻仍在執行的 Sandbox。失敗不會被鎖定；下次 `start()`（包括下一個延遲命令觸發的啟動）會重試鉤子。`onStop` 與 `onDestroy` 仍是非致命的觀察鉤子，因為清理作業會盡力繼續。
+* `outcome` 用於區分啟動路徑：`'created'` 表示此次啟動建立了新虛擬機器，應執行初始化；`'connected'` 表示重新連線或恢復，初始化通常已完成。若鉤子需處理建立後、初始化完成前發生的當機，此時應先探測狀態。`undefined` 表示 Provider 未回報結果。
+* 保持初始化作業的冪等性。探測結果顯示需要初始化時，鉤子可能再次執行；從檢查點恢復的新虛擬機器會回報 `outcome: 'created'`。
+* Sandbox 會在鉤子執行前變為 `running`，讓鉤子透過 Sandbox 自身的命令路徑執行命令。因此，經 `ensureRunning()` 並行發出的命令可能與鉤子交錯執行。等待原始 `start()` 呼叫完成的呼叫端，則一定會看到鉤子已執行完畢。
+* 鉤子在待處理的檔案系統掛載執行前運作，因此不能依賴已掛載的路徑。
 
 ### `setOnStart(update)` {/* #setonstartupdate */}
 
-在建置後附加一個啟動鉤子，用於接收未建置的沙箱的執行時間。如果沒有它，建構沙箱的每個主機都必須接受一個鉤子並將其傳遞給Provider建構函數，並且忘記的主機會使安裝程式不運行而不會出現錯誤。
+在建構之後附加啟動鉤子，供執行階段接收並非由自身建構的 Sandbox 使用。否則，每個建構 Sandbox 的宿主都必須接收鉤子並傳給 Provider 建構函式；若有宿主忘記傳遞，初始化就會悄然缺失。
 
-更新程式接收目前安裝的掛鉤，無論是`onStart` constructor option or one a previous call left behind, and returns the hook to install. Composing this way means a caller never discards a hook it didn't know about:
+更新函式接收目前已安裝的鉤子（可能來自建構函式的 `onStart` 選項，也可能由先前呼叫安裝），並回傳要安裝的鉤子。如此組合鉤子，就不會無意間捨棄呼叫端不知道的既有鉤子：
 
 ```typescript
 sandbox.setOnStart?.(previous => async args => {
@@ -122,15 +122,15 @@ sandbox.setOnStart?.(previous => async args => {
 
 語意：
 
-* 錯誤仍然是致命的，與建構函數選項完全相同。因為每個鉤子都等待下一個鉤子，所以拋出會停止在其之後排序的鉤子。
-* 呼叫者選擇順序。等待`previous` first when your hook needs the workspace it prepares, or last when yours is the one preparing it.
-* 忽略`previous` replaces the installed hook. That's supported, and it's how a caller takes over setup a runtime installed.
-* 每個呼叫都會包裝當前的鉤子，因此每個沙箱實例附加一次。附加到按請求運行的路徑會在每次啟動時堆疊重複的工作。
-* 僅在呼叫後開始才能看到新的掛鉤。
+* 與建構函式選項一樣，錯誤仍會使啟動失敗。各鉤子依序等待前一個鉤子，因此某個鉤子擲錯後，後續鉤子不會執行。
+* 呼叫端決定執行順序。若自己的鉤子依賴 `previous` 準備的 Workspace，就先等待 `previous`；若自己的鉤子負責準備工作，就最後執行 `previous`。
+* 忽略 `previous` 會取代已安裝的鉤子。此行為受到支援，可用於接管執行階段安裝的初始化邏輯。
+* 每次呼叫都會包裝目前的鉤子，因此每個 Sandbox 執行個體只應附加一次。若在每個請求都會經過的路徑上附加鉤子，每次啟動都會重複執行累積的作業。
+* 新鉤子只對呼叫之後開始的啟動生效。
 
-### `workingDirectory`（構造函數選項） {/* #workingdirectory-constructor-option */}
+### `workingDirectory`（建構函式選項） {/* #workingdirectory-constructor-option */}
 
-設定命令執行和進程產生的預設目錄。當命令不提供每個命令時`cwd`, the sandbox runs it from this directory. A per-command `cwd` always wins. When neither is provided, each provider keeps its own default (E2B home, Docker `/workspace`, Vercel serverless `/tmp`, and so on).
+設定執行命令與啟動程序時的預設目錄。若命令未指定自己的 `cwd`，Sandbox 就從此目錄執行；命令指定的 `cwd` 一律優先。若兩者都未指定，則使用各 Provider 的預設目錄（例如 E2B 主目錄、Docker 的 `/workspace` 或 Vercel Serverless 的 `/tmp`）。
 
 ```typescript
 const sandbox = new E2BSandbox({ workingDirectory: '/home/user/my-repo' })
@@ -138,16 +138,16 @@ await sandbox.executeCommand('pwd') // /home/user/my-repo
 await sandbox.executeCommand('pwd', [], { cwd: '/tmp' }) // /tmp
 ```
 
-有效值可透過以下方式讀取`sandbox.workingDirectory` getter. Providers that compute their value, such as Daytona's automatic probe or Docker's `/workspace` default, report the effective directory through the same getter.
+可透過 `sandbox.workingDirectory` getter 讀取實際生效的目錄。Daytona 自動探測所得的目錄、Docker 預設的 `/workspace` 等由 Provider 計算出的目錄，也會透過同一 getter 回傳。
 
 語意：
 
-* 該值按原樣傳遞給提供程序，沙箱不會建立目錄。推薦絕對路徑：`~`-prefixed paths only work where the provider documents expansion.
-* 一些Provider將早期的選項名稱保留為提供相同欄位的已棄用別名：`workingDir` on Docker and Apple container, `workdir` on Modal. When both the alias and `workingDirectory` are set, `workingDirectory` wins.
+* 此值會原樣傳給 Provider，Sandbox 不會建立目錄。建議使用絕對路徑；以 `~` 開頭的路徑僅在 Provider 明確支援展開時才有效。
+* 部分 Provider 保留指向同一欄位的舊選項名稱，現已棄用：Docker 與 Apple container 使用 `workingDir`，Modal 使用 `workdir`。若同時設定舊選項與 `workingDirectory`，以後者為準。
 
 ### `stop()` {/* #stop */}
 
-停止沙箱。
+停止 Sandbox。
 
 ```typescript
 await sandbox.stop?.()
@@ -155,7 +155,7 @@ await sandbox.stop?.()
 
 ### `destroy()` {/* #destroy */}
 
-清理沙箱資源。呼叫者`workspace.destroy()`.
+清理 Sandbox 資源。`workspace.destroy()` 會呼叫此方法。
 
 ```typescript
 await sandbox.destroy()
@@ -163,7 +163,7 @@ await sandbox.destroy()
 
 ### `snapshot()` {/* #snapshot */}
 
-當Provider支援快照時，保留沙箱的目前狀態。其他Provider無需做任何工作即可解決。
+若 Provider 支援快照，則儲存 Sandbox 的目前狀態。其他 Provider 會直接回傳，不執行任何操作。
 
 ```typescript
 await sandbox.snapshot()
@@ -173,7 +173,7 @@ await sandbox.snapshot()
 
 ### `executeCommand(command, args?, options?)` {/* #executecommandcommand-args-options */}
 
-執行外殼命令。
+執行 shell 命令。
 
 ```typescript
 const result = await sandbox.executeCommand('ls', ['-la', '/docs'])
@@ -187,18 +187,18 @@ const result = await sandbox.executeCommand('npm', ['install', 'lodash'])
 {
   name: 'command',
   type: 'string',
-  description: 'Command to execute',
+  description: '要執行的命令',
 },
 {
   name: 'args',
   type: 'string[]',
-  description: 'Command arguments',
+  description: '命令參數',
   isOptional: true,
 },
 {
   name: 'options',
   type: 'Options',
-  description: 'Configuration options.',
+  description: '設定選項。',
   isOptional: true,
   properties: [
     {
@@ -207,33 +207,33 @@ const result = await sandbox.executeCommand('npm', ['install', 'lodash'])
         {
           name: 'timeout',
           type: 'number',
-          description: 'Execution timeout in milliseconds',
+          description: '執行逾時時間，單位為毫秒',
           isOptional: true,
         },
         {
           name: 'cwd',
           type: 'string',
           description:
-            "Working directory for this command. Defaults to the sandbox's configured `workingDirectory`, then the provider default.",
+            "此命令的工作目錄。預設使用 Sandbox 設定的 `workingDirectory`；若未設定，則使用 Provider 的預設目錄。",
           isOptional: true,
         },
         {
           name: 'env',
           type: 'Record<string, string>',
           description:
-            'Additional environment variables for this command. These take precedence over the sandbox environment for this command execution only.',
+            '此命令的額外環境變數。僅在本次執行時，這些變數的優先順序高於 Sandbox 的執行階段環境。',
           isOptional: true,
         },
         {
           name: 'onStdout',
           type: '(data: string) => void',
-          description: 'Callback for stdout streaming',
+          description: '標準輸出串流的回呼函式',
           isOptional: true,
         },
         {
           name: 'onStderr',
           type: '(data: string) => void',
-          description: 'Callback for stderr streaming',
+          description: '標準錯誤串流的回呼函式',
           isOptional: true,
         },
       ],
@@ -245,15 +245,15 @@ const result = await sandbox.executeCommand('npm', ['install', 'lodash'])
 
 ### `setEnv(update)` {/* #setenvupdate */}
 
-更新沙箱的運作環境。這些值被合併到沙箱運行的每個命令中，包括`executeCommand()` and `processes.spawn()`, so credentials installed or rotated after the sandbox was created reach every subsequent command. Optional, so check for support or use optional chaining.
+更新 Sandbox 的執行階段環境。這些變數會合併到 Sandbox 執行的每個命令中，包括透過 `executeCommand()` 與 `processes.spawn()` 啟動的命令。因此，在建構 Sandbox 後新增或輪替的憑證也會用於後續命令。此方法為選用，請先檢查是否支援，或使用可選鏈呼叫。
 
 ```typescript
 sandbox.setEnv?.(env => ({ ...env, GH_TOKEN: token }))
 ```
 
-更新程式接收目前環境的副本並傳回替換，因此單一呼叫可以設定、取消設定或批次更新變數。刪除金鑰只會將其從沙箱的執行時間環境中刪除，因此Provider本身提供的值仍然適用。播種初始值`env` constructor option.
+更新函式接收目前環境的副本，並回傳取代後的環境，因此一次呼叫即可設定、移除或批次更新變數。刪除某個鍵只會將其從 Sandbox 的執行階段環境中移除；Provider 自行提供的同名變數仍可能生效。初始值可透過建構函式的 `env` 選項設定。
 
-運行時環境適用於透過沙箱執行的命令，而不是虛擬機自己的環境，因此它永遠不會寫入虛擬機，並且在提供程序暫停和恢復後仍然存在。當命令運行時，首先應用Provider預設值，沙箱的運行時環境將覆蓋它們，並且每次調用`env` option on `executeCommand()` wins over both.
+執行階段環境作用於透過 Sandbox 執行的命令，而非虛擬機器本身的環境，因此不會寫入虛擬機器，並且在 Provider 暫停、恢復後仍會保留。執行命令時，先套用 Provider 的預設值，再由 Sandbox 的執行階段環境覆寫；`executeCommand()` 單次呼叫的 `env` 選項優先順序最高。
 
 **參數：**
 
@@ -262,7 +262,7 @@ sandbox.setEnv?.(env => ({ ...env, GH_TOKEN: token }))
 {
   name: 'update',
   type: '(env: Record<string, string | undefined>) => Record<string, string | undefined>',
-  description: "Receives a copy of the sandbox's current runtime environment and returns the replacement.",
+  description: "接收 Sandbox 目前執行階段環境的副本，並回傳取代後的環境。",
 },
 ]}
 />
@@ -271,7 +271,7 @@ sandbox.setEnv?.(env => ({ ...env, GH_TOKEN: token }))
 
 ### `getEnv()` {/* #getenv */}
 
-可用於`MastraSandbox`, not declared on the `WorkspaceSandbox` interface. Returns a copy of the sandbox's current runtime environment; because mutations to the returned object don't change the sandbox, use `setEnv()` for updates.
+此方法可用於 `MastraSandbox`，但未在 `WorkspaceSandbox` 介面中宣告。它會回傳 Sandbox 目前執行階段環境的副本；修改回傳的物件不會改變 Sandbox，請使用 `setEnv()` 更新環境。
 
 ```typescript
 const token = sandbox.getEnv().GH_TOKEN
@@ -281,7 +281,7 @@ const token = sandbox.getEnv().GH_TOKEN
 
 ### `getInfo()` {/* #getinfo */}
 
-取得沙箱狀態和資源資訊。
+取得 Sandbox 的狀態與資源資訊。
 
 ```typescript
 const info = await sandbox.getInfo()
@@ -290,7 +290,7 @@ const info = await sandbox.getInfo()
 
 ### `getInstructions(opts?)` {/* #getinstructionsopts */}
 
-傳回此沙箱如何運作的說明。當Workspace分配給Agent程式時，注入Agent的系統訊息中。
+回傳此 Sandbox 運作方式的說明。當 Workspace 指派給 Agent 時，這段說明會加入 Agent 的系統訊息。
 
 ```typescript
 const instructions = sandbox.getInstructions?.()
@@ -304,7 +304,7 @@ const instructions = sandbox.getInstructions?.()
 {
   name: 'opts.requestContext',
   type: 'RequestContext',
-  description: 'Forwarded to the `instructions` function if one was provided in the constructor.',
+  description: '若建構函式提供了 `instructions` 函式，此參數會傳給該函式。',
   isOptional: true,
 },
 ]}
@@ -312,11 +312,11 @@ const instructions = sandbox.getInstructions?.()
 
 **返回：** `string`
 
-## 本機檔案系統 {/* #native-filesystem */}
+## 原生檔案系統 {/* #native-filesystem */}
 
-其Provider俱有文件 API 的沙箱將其公開在可選的`filesystem` property. Reads, writes, and listings take one request each, where the same work through `executeCommand()` takes a command per step. Paths are absolute inside the sandbox.
+若 Provider 提供檔案 API，Sandbox 會透過選用的 `filesystem` 屬性將其提供出來。讀取、寫入與列出檔案各只需一次請求；透過 `executeCommand()` 完成相同操作時，每一步都需要執行一個命令。路徑必須是 Sandbox 內的絕對路徑。
 
-Provider擁有遏制：`filesystem` doesn't confine paths or symlinks to a workspace root. Fall back to `executeCommand()` when the property is absent:
+路徑範圍由 Provider 負責控制：`filesystem` 本身不會將路徑或符號連結限制在 Workspace 根目錄內。若沒有此屬性，可改用 `executeCommand()`：
 
 ```typescript
 const pkg = sandbox.filesystem
@@ -324,83 +324,83 @@ const pkg = sandbox.filesystem
   : (await sandbox.executeCommand?.('cat', ['/workspace/app/package.json']))?.stdout
 ```
 
-`E2BSandbox`總是暴露`filesystem`. With `PlatformSandbox`, the property is available only when the provider is `e2b` and returns `undefined` otherwise. To use it in a `Workspace`, pass it explicitly as the workspace `filesystem`, or call it directly.
+`E2BSandbox` 一律提供 `filesystem`。對於 `PlatformSandbox`，只有使用 `e2b` Provider 時才提供此屬性；其他情況會回傳 `undefined`。若要在 Workspace 中使用，可明確將其傳入 Workspace 的 `filesystem`，也可以直接呼叫。
 
-## 計算機能力 {/* #computer-capability */}
+## 電腦操作功能 {/* #computer-capability */}
 
-具有可控桌面環境的沙箱實現了可選的`SandboxComputer` interface on the `computer` property. When present on a statically configured sandbox, the workspace tools factory registers the `mastra_workspace_computer_*` tools automatically. See [Computer-use tools](/docs/sandbox/computer#computer-tools).
+具有可控制桌面環境的 Sandbox 會透過 `computer` 屬性實作選用的 `SandboxComputer` 介面。若靜態設定的 Sandbox 提供此屬性，Workspace 工具工廠會自動註冊 `mastra_workspace_computer_*` 工具。請參閱[電腦操作工具](/docs/sandbox/computer#computer-tools)。
 
-座標是距顯示器左上角的像素。Provider將他們的 SDK 語義（鍵名、滾動單元）規範化到這個表面上，並透過他們自己的存取器公開更豐富的本機 API。
+座標以螢幕左上角為原點，單位為像素。Provider 會將各自 SDK 的語意（例如按鍵名稱、捲動單位）統一到此介面，並透過自身的存取器提供更豐富的原生 API。
 
 <PropertiesTable
   content={[
 {
   name: 'screenshot()',
   type: '() => Promise<{ data: Uint8Array; mediaType: "image/png" }>',
-  description: 'Capture the current display as a PNG image.',
+  description: '將目前畫面擷取為 PNG 影像。',
 },
 {
   name: 'leftClick(x, y)',
   type: '(x: number, y: number) => Promise<void>',
-  description: 'Left-click at the given coordinates.',
+  description: '在指定座標按一下滑鼠左鍵。',
 },
 {
   name: 'rightClick(x, y)',
   type: '(x: number, y: number) => Promise<void>',
-  description: 'Right-click at the given coordinates.',
+  description: '在指定座標按一下滑鼠右鍵。',
 },
 {
   name: 'doubleClick(x, y)',
   type: '(x: number, y: number) => Promise<void>',
-  description: 'Double-click (left button) at the given coordinates.',
+  description: '在指定座標按兩下滑鼠左鍵。',
 },
 {
   name: 'moveMouse(x, y)',
   type: '(x: number, y: number) => Promise<void>',
-  description: 'Move the cursor without clicking.',
+  description: '移動滑鼠游標，不執行點擊。',
 },
 {
   name: 'drag(from, to)',
   type: '(from: ComputerPosition, to: ComputerPosition) => Promise<void>',
-  description: 'Press the left button at `from`, drag to `to`, and release.',
+  description: '在 `from` 按住滑鼠左鍵，拖曳至 `to` 後放開。',
 },
 {
   name: 'scroll(direction, amount)',
   type: "(direction: 'up' | 'down', amount: number) => Promise<void>",
-  description: 'Scroll the display by the given amount of ticks.',
+  description: '依指定刻度數捲動畫面。',
 },
 {
   name: 'type(text)',
   type: '(text: string) => Promise<void>',
-  description: 'Type text into the focused element.',
+  description: '在目前取得焦點的元素中輸入文字。',
 },
 {
   name: 'press(key)',
   type: '(key: string | string[]) => Promise<void>',
   description:
-    "Press a key or key combination. A string presses one key (for example 'Enter'); an array presses a chord (for example ['ctrl', 's']).",
+    "按下單一按鍵或組合鍵。字串代表單一按鍵（例如 'Enter'）；陣列代表同時按下的組合鍵（例如 ['ctrl', 's']）。",
 },
 {
   name: 'getScreenSize()',
   type: '() => Promise<{ width: number; height: number }>',
-  description: 'Get the display dimensions.',
+  description: '取得螢幕尺寸。',
 },
 {
   name: 'getCursorPosition()',
   type: '() => Promise<{ x: number; y: number }>',
-  description: 'Get the current cursor position.',
+  description: '取得目前滑鼠游標位置。',
 },
 {
   name: 'streamUrl()',
   type: '() => Promise<string | null>',
   description:
-    'Get a URL for a live view of the desktop, such as noVNC, or null when unavailable. Optional, not all providers expose a viewer.',
+    '取得桌面即時畫面的 URL（例如 noVNC）；無法使用時回傳 null。此方法為選用，並非所有 Provider 都提供畫面檢視器。',
   isOptional: true,
 },
 ]}
 />
 
-使用`supportsComputer()` type guard to check for the capability:
+使用 `supportsComputer()` 型別守衛檢查是否支援此功能：
 
 ```typescript
 import { supportsComputer } from '@mastra/core/workspace'
@@ -410,11 +410,11 @@ if (supportsComputer(sandbox)) {
 }
 ```
 
-`DaytonaSandbox`和`E2BDesktopSandbox` implement this capability. See the [Daytona](/integrations/sandboxes/daytona#computer-use-desktop) and [E2B Desktop](/integrations/sandboxes/e2b-desktop) integration pages.
+`DaytonaSandbox` 與 `E2BDesktopSandbox` 實作了此功能。請參閱 [Daytona](/integrations/sandboxes/daytona#computer-use-desktop) 與 [E2B Desktop](/integrations/sandboxes/e2b-desktop) 整合文件。
 
-## 有關的 {/* #related */}
+## 相關文件 {/* #related */}
 
-* [SandboxProcessManager 參考](/reference/workspace/process-manager)
+* [SandboxProcessManager 參考文件](/reference/workspace/process-manager)
 * [Sandbox](/docs/sandbox/overview)
-* [工作空間類](/reference/workspace/workspace-class)
+* [Workspace 類別](/reference/workspace/workspace-class)
 * [檔案系統介面](/reference/workspace/filesystem)

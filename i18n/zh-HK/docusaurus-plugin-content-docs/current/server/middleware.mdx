@@ -1,31 +1,22 @@
 ---
-title: "Middleware | Server"
-description: "Add Mastra server middleware for authentication, authorization, CORS, request logging, route blocking, and request-specific context injection."
+title: "中間件 | 伺服器"
+description: "為 Mastra 伺服器加入中間件，處理身份驗證、授權、CORS、請求日誌、路由封鎖和請求上下文注入。"
 packages:
   - "@mastra/core"
   - "@mastra/server"
 ---
 
-# 中介軟體
+# 中間件
 
-Mastra 伺服器可以在 API 之前或之後執行自訂中間件功能
-呼叫路由處理程序。這對於諸如身份驗證之類的事情很有用，
-記錄、注入特定於請求的上下文或新增 CORS 標頭。
+Mastra 伺服器可在呼叫 API 路由處理函數前後執行自訂中間件，例如驗證身份、寫入日誌、注入個別請求的上下文，或加入 CORS 標頭。
 
-中介軟體接收[Hono](https://hono.dev) `Context` (`c`）和一個`next`功能。如果它回傳一個`Response`請求被短路。呼喚`next()`繼續處理下一個中介軟體或路由處理程序。
+中間件接收 [Hono](https://hono.dev) 的 `Context`（`c`）及 `next` 函數。傳回 `Response` 會提前結束請求處理。呼叫 `next()` 就會繼續執行下一個中間件或路由處理函數。
 
-：：：筆記
+:::note
 
-中間件處理程序使用 Hono 的簽名，因此它們在基於 Hono 的服務上運行
-路徑：`mastra dev` and `mastra build`, the
-[Hono adapter](/reference/server/hono-adapter), and adapters built on it such as
-`@mastra/next` and `@mastra/tanstack-start`. Adapters for other frameworks
-(Elysia, Express, Fastify, Koa, NestJS) can't run Hono handlers and log a
-warning at startup when middleware is configured. Register middleware through
-the framework's own API there instead.
+中間件處理函數採用 Hono 的簽署格式，可在 `mastra dev`、`mastra build`、[Hono 介接器](/reference/server/hono-adapter) 及建基於它的 `@mastra/next`、`@mastra/tanstack-start` 等環境執行。其他框架（Elysia、Express、Fastify、Koa、NestJS）的介接器無法執行 Hono 處理函數，若已設定中間件，啟動時會寫入警告日誌。請透過各框架本身的 API 註冊中間件。
 
-用戶中間件永遠不會在聲明為公共的路由上運行`requiresAuth: false`, so it can't block endpoints the framework needs to keep
-reachable, such as the Studio sign-in routes.
+以 `requiresAuth: false` 宣告為公開的路由一律略過用戶中間件，因此框架必須保持可用的端點（例如 Studio 登入路由）不受封鎖。
 
 :::
 
@@ -57,8 +48,7 @@ export const mastra = new Mastra({
 })
 ```
 
-若要將中介軟體附加到單一路由，請透過`middleware` option to
-`registerApiRoute`:
+如要為個別路由加入中間件，請在呼叫 `registerApiRoute` 時傳入 `middleware` 選項：
 
 ```typescript
 registerApiRoute('/my-custom-route', {
@@ -76,11 +66,11 @@ registerApiRoute('/my-custom-route', {
 })
 ```
 
-## 常見範例 {/* #common-examples */}
+## 常見例子 {/* #common-examples */}
 
-### 封鎖內建路由組 {/* #block-built-in-route-groups */}
+### 封鎖內置路由組 {/* #block-built-in-route-groups */}
 
-Mastra 不提供用於刪除或將內建路由列入白名單的設定選項。在基於 Hono 的服務路徑上，您可以透過回傳回應而不呼叫來使所選路由組不可用`next()`:
+Mastra 沒有移除內置路由或設定許可清單的選項。在使用 Hono 的服務中，可直接傳回回應並略過 `next()`，令指定路由組無法存取：
 
 ```typescript title="src/mastra/index.ts"
 import { Mastra } from '@mastra/core'
@@ -98,19 +88,19 @@ export const mastra = new Mastra({
 })
 ```
 
-每個通配符模式都會阻止路由組本身及其嵌套路由。例如，`/api/logs/*` blocks `/api/logs` and `/api/logs/transports`. Other route groups remain available.
+每個萬用字元模式會同時封鎖路由組本身及其下層路由。例如，`/api/logs/*` 會封鎖 `/api/logs` 及 `/api/logs/transports`。其他路由組仍然可用。
 
-`server.apiPrefix` to the Hono adapter's [`prefix` constructor option](/reference/server/hono-adapter#constructor-parameters), which prefixes built-in routes. Middleware paths are registered unchanged, so they must explicitly include the configured prefix. For example, with `apiPrefix: '/api/v2'`, use `/api/v2/memory/*`. Custom API routes must live outside the configured API prefix and aren't blocked by these patterns.
+產生的伺服器會將 `server.apiPrefix` 傳給 Hono 介接器的 [`prefix` 建構選項](/reference/server/hono-adapter#constructor-parameters)，為內置路由加上前綴。中間件路徑按原樣註冊，必須寫明已設定的前綴。例如，設定 `apiPrefix: '/api/v2'` 時，請用 `/api/v2/memory/*`。自訂 API 路由必須位於已設定的 API 前綴以外，因此不會被這些模式封鎖。
 
-此方法無法阻止公開的路由`requiresAuth: false`, because Mastra skips user middleware for those routes. With a non-Hono server adapter, register equivalent middleware through the server framework instead.
+Mastra 會略過以 `requiresAuth: false` 宣告為公開的路由，所以這種做法無法封鎖它們。使用非 Hono 伺服器介接器時，請透過框架註冊同等的中間件。
 
-期間`mastra dev`, inspect the full built-in route list, including MCP routes, in the [OpenAPI specification](http://localhost:4111/api/openapi.json). See the [server overview](/docs/server/overview#rest-api) for API exploration and production settings.
+執行 `mastra dev` 期間，可以在 [OpenAPI 規格](http://localhost:4111/api/openapi.json)查看完整的內置路由清單，包括 MCP 路由。探索 API 及生產環境設定請參閱[伺服器概覽](/docs/server/overview#rest-api)。
 
-如果您使用中間件進行驗證而不使用`server.auth`, prefer default-deny middleware that authenticates requests before allowing access, rather than enumerating protected paths. Include the full API prefix so REST routes alongside MCP transports are covered.
+若使用中間件驗證身份而沒有使用 `server.auth`，建議預設拒絕存取，請求通過驗證後才放行，毋須逐一列出受保護的路徑。請涵蓋整個 API 前綴，讓 REST 路由及 MCP 傳輸都受到保護。
 
-### 使用`RequestContext` {/* #using-requestcontext */}
+### 使用 `RequestContext` {/* #using-requestcontext */}
 
-您可以填充`RequestContext` in a runtime server middleware by extracting information from the request. In this example, the `temperature-unit` is set based on the Cloudflare `CF-IPCountry` header to ensure responses match the user's locale.
+伺服器執行時，可由中間件從請求擷取資料並填入 `RequestContext`。這個例子根據 Cloudflare 的 `CF-IPCountry` 標頭設定 `temperature-unit`，讓回應配合用戶所在的地區。
 
 ```typescript title="src/mastra/index.ts"
 import { Mastra } from '@mastra/core'
@@ -134,7 +124,7 @@ export const mastra = new Mastra({
 })
 ```
 
-### 驗證 {/* #authentication */}
+### 身份驗證 {/* #authentication */}
 
 ```typescript oxfmt:false
 {
@@ -151,15 +141,15 @@ export const mastra = new Mastra({
 }
 ```
 
-### 授權（使用者隔離） {/* #authorization-user-isolation */}
+### 授權（用戶隔離） {/* #authorization-user-isolation */}
 
-身份驗證驗證使用者是誰，而授權控制他們可以存取的內容。
+身份驗證用來確認用戶身份，授權則決定用戶可存取哪些內容。
 
-如果沒有伺服器強制的資源範圍或其他授權策略，經過驗證的呼叫者可以跨資源列出執行緒並存取其訊息和工作記憶體。呼叫者不需要猜測執行緒 ID：無範圍列表可以公開它們。對於每用戶或每租戶的私有內存，配置`mapUserToResourceId` or set a trusted resource ID in middleware.
+若伺服器未強制限制資源範圍，也沒有其他授權政策，已驗證身份的呼叫端可以跨資源列出對話串，並存取其中的訊息及工作記憶。沒有範圍限制的清單就可能披露對話串 ID，呼叫端毋須猜測。若要按用戶或租戶隔離記憶，請設定 `mapUserToResourceId`，或在中間件設定可信的資源 ID。
 
-在共享應用程式中，跨資源存取可能是有意的。資源 ID 可以識別使用者、租用戶、項目或其他分組。選擇與誰可以存取這些資源相符的授權策略。
+共享應用程式可能有意容許跨資源存取。資源 ID 可識別用戶、租戶、項目或其他分組。請按可存取資源的人員選擇授權政策。
 
-將記憶體和執行緒範圍限定給經過驗證的使用者最簡單的方法是`mapUserToResourceId` callback in the auth config:
+如要按已驗證身份的用戶限制記憶及對話串，最簡單的方法是在身份驗證設定中加入 `mapUserToResourceId` 回呼：
 
 ```typescript
 import { Mastra } from '@mastra/core'
@@ -176,15 +166,15 @@ export const mastra = new Mastra({
 })
 ```
 
-認證成功後，`mapUserToResourceId` is called with the authenticated user object. The returned value is set as `MASTRA_RESOURCE_ID_KEY` on the request context, which works across all server adapters (Hono, Express, Next.js, etc.).
+身份驗證成功後，系統會將已驗證身份的用戶物件傳給 `mapUserToResourceId`，並將傳回值寫入請求上下文的 `MASTRA_RESOURCE_ID_KEY`。所有伺服器介接器（Hono、Express、Next.js 等）均適用。
 
-配置後，回呼必須傳回非空字串。如果它拋出或返回`null`, `undefined`, an empty or whitespace-only string, or a non-string value, authentication middleware rejects the request with a 500 error before the route runs. This applies to all requests that run authentication, including non-memory routes. A client-provided resource ID can't override a failed mapping.
+設定回呼後，必須傳回非空字串。如回呼拋出例外，或傳回 `null`、`undefined`、空字串、只含空白的字串或非字串值，身份驗證中間件會在執行路由前拒絕請求並傳回 500。所有須進行身份驗證的請求均適用，包括與記憶無關的路由。客戶端提供的資源 ID 無法覆蓋失敗的映射。
 
-和`CompositeAuth`, this requirement applies to the provider that authenticated the request. A provider without a mapper keeps its existing behavior, even if another provider in the composite has one. The same validation applies to configured Studio auth mappers.
+使用 `CompositeAuth` 時，這項要求適用於實際驗證請求的 Provider。未設定映射函數的 Provider 會沿用原有行為，即使組合內的其他 Provider 已設定映射函數。Studio 已設定的身份驗證映射函數亦須通過同樣的檢查。
 
-如果沒有映射器，身份驗證將無法實現使用者隔離：您負責在中間件中設定可信任資源 ID 或以其他方式強制執行授權。
+沒有映射函數時，單靠身份驗證無法隔離用戶。請在中間件設定可信的資源 ID，或以其他方式強制執行授權。
 
-資源 ID 不必是`user.id`. Common patterns:
+資源 ID 可用 `user.id` 以外的值。以下是常見做法：
 
 ```typescript
 // Per-user within an organization
@@ -197,18 +187,18 @@ mapUserToResourceId: user => user.tenantId
 mapUserToResourceId: user => `${user.workspaceId}:${user.projectId}:${user.id}`
 ```
 
-設定資源 ID 後，伺服器會自動：
+設定資源 ID 後，伺服器會自動執行以下操作：
 
-* **過濾線程列表**僅傳回配置的資源範圍內的執行緒
-* **驗證線程訪問**如果存取屬於不同資源的線程，則傳回 403
-* **強制創建線程**使用配置的資源 ID
-* **驗證訊息操作**包括刪除，確保訊息屬於配置的資源範圍內的線程
+- **篩選對話串清單**，只傳回已設定資源範圍內的對話串。
+- **檢查對話串存取權限**，如要存取其他資源的對話串，便傳回 403。
+- **限制建立對話串**，新對話串必須使用已設定的資源 ID。
+- **檢查訊息操作**（包括刪除），確保訊息所屬的對話串在已設定的資源範圍內。
 
-即使客戶通過了`?resourceId=other-resource-id`, the server-set value takes precedence. Attempts to access threads or messages belonging to a different resource return a 403 error. Users mapped to the same resource ID share that resource scope.
+即使客戶端傳入 `?resourceId=other-resource-id`，仍以伺服器設定的值為準。嘗試存取其他資源的對話串或訊息會收到 403。映射至同一資源 ID 的用戶共享該資源範圍。
 
-#### 進階：在中間件中設定資源ID {/* #advanced-setting-resource-id-in-middleware */}
+#### 進階：在中間件設定資源 ID {/* #advanced-setting-resource-id-in-middleware */}
 
-對於更複雜的場景（例如，從資料庫中尋找資源ID），您可以設定`MASTRA_RESOURCE_ID_KEY` directly in middleware:
+遇上較複雜的情況，例如要從資料庫查詢資源 ID，可直接在中間件設定 `MASTRA_RESOURCE_ID_KEY`：
 
 ```typescript
 import { Mastra } from '@mastra/core'
@@ -249,11 +239,11 @@ export const mastra = new Mastra({
 })
 ```
 
-`server.middleware`在 Mastra 的每個路由身份驗證檢查之前運行。當中間件需要經過身份驗證的使用者時，請調用`getAuthenticatedUser()` to resolve it from the configured auth provider without changing the default route auth flow.
+`server.middleware` 會先於 Mastra 的每條路由身份驗證檢查執行。中間件如需已驗證身份的用戶，可呼叫 `getAuthenticatedUser()` 從已設定的身份驗證 Provider 取得用戶，並沿用路由原有的驗證流程。
 
-#### 使用`MASTRA_THREAD_ID_KEY` {/* #using-mastra_thread_id_key */}
+#### 使用 `MASTRA_THREAD_ID_KEY` {/* #using-mastra_thread_id_key */}
 
-您也可以設定`MASTRA_THREAD_ID_KEY` to override the client-provided thread ID:
+亦可設定 `MASTRA_THREAD_ID_KEY`，覆蓋客戶端提供的對話串 ID：
 
 ```typescript
 import { MASTRA_RESOURCE_ID_KEY, MASTRA_THREAD_ID_KEY } from '@mastra/core/request-context'
@@ -262,9 +252,9 @@ import { MASTRA_RESOURCE_ID_KEY, MASTRA_THREAD_ID_KEY } from '@mastra/core/reque
 requestContext.set(MASTRA_THREAD_ID_KEY, validatedThreadId)
 ```
 
-當您想要將操作限製到已透過其他方式驗證的特定執行緒時，這非常有用。
+這樣可將操作限於已循其他途徑驗證的指定對話串。
 
-### CORS 支持 {/* #cors-support */}
+### CORS 支援 {/* #cors-support */}
 
 ```typescript oxfmt:false
 {
@@ -288,7 +278,7 @@ requestContext.set(MASTRA_THREAD_ID_KEY, validatedThreadId)
 }
 ```
 
-### 請求記錄 {/* #request-logging */}
+### 請求日誌 {/* #request-logging */}
 
 ```typescript oxfmt:false
 {
@@ -301,7 +291,7 @@ requestContext.set(MASTRA_THREAD_ID_KEY, validatedThreadId)
 }
 ```
 
-## 有關的 {/* #related */}
+## 相關文件 {/* #related */}
 
-* [請求上下文](/docs/server/request-context)
-* [保留鍵](/docs/server/request-context#reserved-keys)
+- [請求上下文](/docs/server/request-context)
+- [保留鍵](/docs/server/request-context#reserved-keys)

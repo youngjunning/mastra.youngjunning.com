@@ -1,81 +1,81 @@
 ---
-title: "Amazon Bedrock AgentCore | Deploy"
-description: "Deploy a containerized Mastra agent to Amazon Bedrock AgentCore Runtime with the AgentCore CLI, AWS CodeBuild, configuration, and endpoint verification."
+title: "Amazon Bedrock AgentCore | 部署"
+description: "使用 AgentCore CLI 和 AWS CodeBuild 将容器化的 Mastra Agent 部署到 Amazon Bedrock AgentCore Runtime，并完成部署配置和端点验证。"
 ---
 
-# 亚马逊基岩Agent核心
+# Amazon Bedrock AgentCore
 
-将您的 Mastra 应用程序部署到[Amazon Bedrock AgentCore Runtime](https://docs.aws.amazon.com/bedrock-agentcore/)使用[AgentCore CLI](https://github.com/aws/agentcore-cli)。 CLI 搭建了一个自带代码 (BYO) TypeScript 项目的支架，使用 AWS CodeBuild 构建容器，并配置运行时。部署不需要本地 Docker 守护程序。
+使用 [AgentCore CLI](https://github.com/aws/agentcore-cli) 将 Mastra 应用部署到 [Amazon Bedrock AgentCore Runtime](https://docs.aws.amazon.com/bedrock-agentcore/)。CLI 会为自带代码（BYO）的 TypeScript 项目生成脚手架，通过 AWS CodeBuild 构建容器，并创建运行时资源。部署时无需运行本地 Docker 守护进程。
 
-本指南遵循[official AgentCore TypeScript walkthrough](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-get-started-cli-typescript.html) and adapts it to call a Mastra agent from the invocation handler.
+本指南以 [AgentCore 官方 TypeScript 入门教程](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-get-started-cli-typescript.html)为基础，将示例改为在调用处理函数中调用 Mastra Agent。
 
-：：：笔记
+:::note
 
-有关完整 Mastra 服务器的基于 Lambda 的部署，请参阅[AWS Lambda guide](/integrations/deploy/aws-lambda). For a long-lived virtual machine, see the [Amazon EC2 guide](/integrations/deploy/amazon-ec2).
+如需使用 Lambda 部署完整的 Mastra 服务器，请参阅 [AWS Lambda 指南](/integrations/deploy/aws-lambda)。如需在长期运行的虚拟机上部署，请参阅 [Amazon EC2 指南](/integrations/deploy/amazon-ec2)。
 
 :::
 
-## 开始之前 {/* #before-you-begin */}
+## 前置条件 {/* #before-you-begin */}
 
 你需要：
 
-* 一个[AWS account](https://aws.amazon.com/) with permissions for Amazon Bedrock AgentCore, AWS CodeBuild, Amazon ECR, and AWS IAM
-* [AWS CLI](https://aws.amazon.com/cli/)安装并经过身份验证（`aws configure` or `aws sso login`)
-* Node.js`v22.13.0` or later installed
-* [码头工人](https://www.docker.com/), [Podman](https://podman.io/), or [Finch](https://runfinch.com/) for local testing with `agentcore dev` (not required for `agentcore deploy`)
+* 一个有权访问 Amazon Bedrock AgentCore、AWS CodeBuild、Amazon ECR 和 AWS IAM 的 [AWS 账号](https://aws.amazon.com/)
+* 已安装并完成身份验证的 [AWS CLI](https://aws.amazon.com/cli/)（使用 `aws configure` 或 `aws sso login`）
+* 已安装 Node.js `v22.13.0` 或更高版本
+* [Docker](https://www.docker.com/)、[Podman](https://podman.io/) 或 [Finch](https://runfinch.com/)，用于通过 `agentcore dev` 进行本地测试（执行 `agentcore deploy` 时无需安装）
 
-Amazon Bedrock AgentCore 运行时适用于[a subset of AWS Regions](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/agentcore-regions.html). Use a region where AgentCore is available and where the foundation models you plan to call are enabled.
+Amazon Bedrock AgentCore Runtime 仅在[部分 AWS 区域](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/agentcore-regions.html)提供。请选择支持 AgentCore 且已启用你打算调用的基础模型的区域。
 
-## 创建一个新的AgentCore项目 {/* #create-a-new-agentcore-project */}
+## 创建 AgentCore 项目 {/* #create-a-new-agentcore-project */}
 
-运行以下命令创建新的AgentCore项目：
+运行以下命令创建 AgentCore 项目：
 
 ```bash npm2yarn
 npx @aws/agentcore create --name MastraOnAgentCore --no-agent
 ```
 
-导航到新创建的`MastraOnAgentCore` directory:
+进入刚创建的 `MastraOnAgentCore` 目录：
 
 ```bash
 cd MastraOnAgentCore
 ```
 
-初始化将在内部创建的 BYO TypeScript Agent`app/MastraAgent`:
+初始化一个自带代码（BYO）的 TypeScript Agent，创建位置为 `app/MastraAgent`：
 
 ```bash npm2yarn
 npx @aws/agentcore add agent --name MastraAgent --type byo --build Container --language TypeScript --framework Strands --model-provider Bedrock --code-location app/MastraAgent
 ```
 
-CLI 将修改`agentcore/agentcore.json` file and create an empty `app/MastraAgent` directory.
+CLI 会修改 `agentcore/agentcore.json`，并创建空的 `app/MastraAgent` 目录。
 
-## 设置Agent项目 {/* #set-up-the-agent-project */}
+## 配置 Agent 项目 {/* #set-up-the-agent-project */}
 
-导航至`app/MastraAgent` directory and initialize a new Node.js project:
+进入 `app/MastraAgent` 目录，初始化 Node.js 项目：
 
 ```bash
 cd app/MastraAgent
 npm init --init-type=module -y
 ```
 
-安装所需的依赖项。这`bedrock-agentcore` package provides the `BedrockAgentCoreApp` HTTP server that implements the [AgentCore Runtime service contract](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-service-contract.html). The `@ai-sdk/amazon-bedrock` and `@aws-sdk/credential-providers` packages let the Mastra agent call Bedrock through the AgentCore Runtime execution role:
+安装所需依赖。`bedrock-agentcore` 包提供 `BedrockAgentCoreApp` HTTP 服务器，该服务器实现了 [AgentCore Runtime 服务契约](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-service-contract.html)。借助 `@ai-sdk/amazon-bedrock` 和 `@aws-sdk/credential-providers`，Mastra Agent 可以使用 AgentCore Runtime 的执行角色调用 Bedrock。
 
 ```bash npm2yarn
 npm install bedrock-agentcore @opentelemetry/auto-instrumentations-node @ai-sdk/amazon-bedrock @aws-sdk/credential-providers --legacy-peer-deps
 ```
 
-还要安装 TypeScript 和相关的开发依赖项：
+接着安装 TypeScript 和相关开发依赖：
 
 ```bash npm2yarn
 npm install --save-dev typescript @types/node tsx
 ```
 
-跑步[`mastra init`](/reference/cli/mastra#mastra-init) to set up a new Mastra project. The provider you choose at the prompt is overwritten in the next step, so any value works:
+运行 [`mastra init`](/reference/cli/mastra#mastra-init) 初始化 Mastra 项目。提示选择 Provider 时任选一项即可，下一步会覆盖该设置。
 
 ```bash npm2yarn
 npx mastra@latest init
 ```
 
-替换生成的`src/mastra/agents/weather-agent.ts` to use Amazon Bedrock. The original `memory: new Memory()` is removed because the storage layer is removed in the next step:
+替换生成的 `src/mastra/agents/weather-agent.ts`，让 Agent 使用 Amazon Bedrock。由于下一步会移除存储层，此处也要删掉原有的 `memory: new Memory()`。
 
 ```ts title="app/MastraAgent/src/mastra/agents/weather-agent.ts"
 import { Agent } from '@mastra/core/agent'
@@ -97,13 +97,13 @@ export const weatherAgent = new Agent({
 })
 ```
 
-：：：笔记
+:::note
 
-`fromNodeProviderChain()`让Agent通过标准 SDK 解析链（环境变量、共享配置文件、SSO 以及容器或 EC2 角色）获取 AWS 凭证，而不仅仅是环境变量。
+`fromNodeProviderChain()` 让 Agent 按 SDK 的标准凭证解析链获取 AWS 凭证，来源包括环境变量、共享配置文件、SSO 以及容器或 EC2 角色。
 
 :::
 
-替换生成的`src/mastra/index.ts` to remove the default file-based storage and observability config. AgentCore Runtime containers run as a non-root user with a read-only application directory, so the default `LibSQLStore` can't open `./mastra.db` and the runtime fails at startup:
+替换生成的 `src/mastra/index.ts`，移除默认的文件存储和可观测性配置。AgentCore Runtime 容器以非 root 用户身份运行，应用目录为只读。默认的 `LibSQLStore` 因此无法打开 `./mastra.db`，导致运行时启动失败。
 
 ```ts title="app/MastraAgent/src/mastra/index.ts"
 import { Mastra } from '@mastra/core/mastra'
@@ -121,7 +121,7 @@ export const mastra = new Mastra({
 })
 ```
 
-创建一个`tsconfig.json` file with the following content:
+创建 `tsconfig.json`，写入以下内容：
 
 ```json title="app/MastraAgent/tsconfig.json"
 {
@@ -143,9 +143,9 @@ export const mastra = new Mastra({
 }
 ```
 
-：：：笔记
+:::note
 
-添加后`tsconfig.json` file your editor will show errors inside the generated `src/mastra` project. This is expected since the configuration now requires file extensions on imports. You can fix these by adding `.js`, for example:
+添加 `tsconfig.json` 后，编辑器会在生成的 `src/mastra` 项目中报错，因为新配置要求导入路径包含文件扩展名。在相应路径末尾补上 `.js` 即可修复，例如：
 
 ```ts title="app/MastraAgent/src/mastra/index.ts"
 // Before
@@ -156,15 +156,15 @@ import { weatherWorkflow } from './workflows/weather-workflow.js'
 
 :::
 
-更新您的`package.json` to set the entry point and build scripts. Using `npm pkg set` preserves the dependencies that `mastra init` added:
+更新 `package.json`，设置入口文件和构建脚本。使用 `npm pkg set` 可以保留 `mastra init` 添加的依赖。
 
 ```bash
 npm pkg set main=dist/agent.js scripts.build=tsc scripts.start="node dist/agent.js" scripts.dev="npx tsx --watch agent.ts"
 ```
 
-## 初始化Agent {/* #initialize-the-agent */}
+## 初始化 Agent {/* #initialize-the-agent */}
 
-创建一个`agent.ts` file. This handler is called for every `POST /invocations` request. Resolve the Mastra agent and call it inside the handler:
+创建 `agent.ts`。每个 `POST /invocations` 请求都会触发这里定义的处理函数。在函数中获取并调用 Mastra Agent：
 
 ```ts title="app/MastraAgent/agent.ts"
 import { BedrockAgentCoreApp } from 'bedrock-agentcore/runtime'
@@ -188,11 +188,11 @@ const app = new BedrockAgentCoreApp({
 app.run()
 ```
 
-跑步`npm run build` to verify that your project compiles successfully.
+运行 `npm run build`，确认项目能够成功编译。
 
 ## 创建 Dockerfile {/* #create-a-dockerfile */}
 
-创建一个`Dockerfile` in the `app/MastraAgent` directory. Container-based deployment uses a multi-stage Docker build: the builder stage compiles TypeScript to JavaScript, and the production stage runs only the compiled output. The image runs as a non-root user for security, and exposes port 8080 (HTTP), port 8000 (MCP), and port 9000 (A2A). OpenTelemetry instrumentation is included automatically at startup.
+在 `app/MastraAgent` 目录下创建 `Dockerfile`。容器部署采用 Docker 多阶段构建。构建阶段将 TypeScript 编译为 JavaScript，生产阶段仅运行编译产物。出于安全考虑，容器以非 root 用户身份运行，并暴露 8080（HTTP）、8000（MCP）和 9000（A2A）端口。启动时会自动加载 OpenTelemetry 插桩。
 
 ```dockerfile title="app/MastraAgent/Dockerfile"
 FROM node:22-slim AS builder
@@ -217,13 +217,13 @@ EXPOSE 8080 8000 9000
 CMD ["node", "--require", "@opentelemetry/auto-instrumentations-node/register", "dist/agent.js"]
 ```
 
-：：：笔记
+:::note
 
-选择一个`AWS_REGION` that pairs with your Bedrock model ID prefix (`us.`, `jp.`, `eu.`, or `global.`).
+将 `AWS_REGION` 设置为与 Bedrock 模型 ID 前缀（`us.`、`jp.`、`eu.` 或 `global.`）匹配的区域。
 
 :::
 
-还创建一个`.dockerignore` file to exclude unnecessary files from the Docker build context:
+再创建 `.dockerignore`，将不需要的文件排除在 Docker 构建上下文之外：
 
 ```bash
 node_modules
@@ -232,29 +232,29 @@ dist
 *.log
 ```
 
-## 测试你的Agent {/* #test-your-agent */}
+## 测试 Agent {/* #test-your-agent */}
 
-返回项目根目录：
+回到项目根目录：
 
 ```bash
 cd ../..
 ```
 
-在本地测试您的Agent：
+在本地启动 Agent 进行测试：
 
 ```bash npm2yarn
 npx @aws/agentcore dev --runtime MastraAgent
 ```
 
-在单独的终端中，发送测试请求：
+另开一个终端，发送测试请求：
 
 ```bash npm2yarn
 npx @aws/agentcore dev "What is the weather in Tokyo?"
 ```
 
-## 部署您的Agent {/* #deploy-your-agent */}
+## 部署 Agent {/* #deploy-your-agent */}
 
-设置 AWS 账户和区域`agentcore/aws-targets.json`:
+在 `agentcore/aws-targets.json` 中设置 AWS 账号和区域：
 
 ```json title="agentcore/aws-targets.json"
 [
@@ -266,33 +266,33 @@ npx @aws/agentcore dev "What is the weather in Tokyo?"
 ]
 ```
 
-部署到 AgentCore 运行时。 CLI 使用 AWS CodeBuild 构建映像，将其推送到 Amazon ECR，并创建运行时和`DEFAULT` endpoint:
+部署到 AgentCore Runtime。CLI 会使用 AWS CodeBuild 构建镜像，将镜像推送到 Amazon ECR，并创建运行时及 `DEFAULT` 端点。
 
 ```bash npm2yarn
 npx @aws/agentcore deploy
 ```
 
-：：：笔记
+:::note
 
-设置Provider API 密钥和其他机密`agentcore/agentcore.json` under the agent's `environmentVariables` field before deploying.
+部署前，在 `agentcore/agentcore.json` 中该 Agent 的 `environmentVariables` 字段下设置 Provider API 密钥和其他机密信息。
 
 :::
 
-## 验证您的部署 {/* #verify-your-deployment */}
+## 验证部署 {/* #verify-your-deployment */}
 
-跑步`agentcore status` to view the runtime ARN, endpoint, and recent invocations. Then call the deployed agent from the CLI:
+运行 `agentcore status` 查看运行时 ARN、端点和近期调用记录，然后通过 CLI 调用已部署的 Agent：
 
 ```bash
 npx @aws/agentcore invoke "What is the weather in Tokyo?"
 ```
 
-要在生成令牌时流式传输令牌，请使用`--stream`:
+如需在生成 token 时实时接收输出，请使用 `--stream`：
 
 ```bash
 npx @aws/agentcore invoke --stream "Plan a 3-day trip to Tokyo"
 ```
 
-## 有关的 {/* #related */}
+## 相关资料 {/* #related */}
 
 * [Amazon Bedrock AgentCore 文档](https://docs.aws.amazon.com/bedrock-agentcore/)
 * [GitHub 上的 AgentCore CLI](https://github.com/aws/agentcore-cli)

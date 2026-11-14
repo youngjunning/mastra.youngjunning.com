@@ -4,7 +4,13 @@ import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const sourceRoot = path.join(root, 'src/content/en/models')
-const targetRoot = path.join(root, 'i18n/zh-HK/docusaurus-plugin-content-docs-models/current')
+const targetRoot = process.env.MASTRA_MODEL_DOCS_OUTPUT_DIR
+  ? path.resolve(process.env.MASTRA_MODEL_DOCS_OUTPUT_DIR)
+  : path.join(root, 'i18n/zh-HK/docusaurus-plugin-content-docs-models/current')
+
+function isGeneratedGateway(file) {
+  return file === path.join('gateways', 'merge-gateway.mdx') || file === path.join('gateways', 'requesty.mdx')
+}
 
 async function listMdxFiles(directory, prefix = '') {
   const entries = await fs.readdir(directory, { withFileTypes: true })
@@ -125,17 +131,17 @@ const exactTranslations = new Map([
   ['### Azure Responses API', '### Azure Responses API'],
   ['### Azure Responses WebSocket transport', '### Azure Responses WebSocket 傳輸'],
   ['## Configuration Reference', '## 設定參考'],
-  ['## Models', '## 模型'],
-  ['## Advanced configuration', '## 進階設定'],
-  ['## Advanced Configuration', '## 進階設定'],
-  ['### Custom headers', '### 自訂標頭'],
-  ['### Custom Headers', '### 自訂標頭'],
-  ['### Dynamic model selection', '### 動態選擇模型'],
-  ['### Dynamic Model Selection', '### 動態選擇模型'],
-  ['## Direct provider installation', '## 直接安裝 Provider'],
-  ['## Installation', '## 安裝'],
-  ['## Provider Options', '## Provider 選項'],
-  ['### Available Options', '### 可用選項'],
+  ['## Models', '## 模型 {/* #models */}'],
+  ['## Advanced configuration', '## 進階設定 {/* #advanced-configuration */}'],
+  ['## Advanced Configuration', '## 進階設定 {/* #advanced-configuration */}'],
+  ['### Custom headers', '### 自訂標頭 {/* #custom-headers */}'],
+  ['### Custom Headers', '### 自訂標頭 {/* #custom-headers */}'],
+  ['### Dynamic model selection', '### 動態選擇模型 {/* #dynamic-model-selection */}'],
+  ['### Dynamic Model Selection', '### 動態選擇模型 {/* #dynamic-model-selection */}'],
+  ['## Direct provider installation', '## 直接安裝 Provider {/* #direct-provider-installation */}'],
+  ['## Installation', '## 安裝 {/* #installation */}'],
+  ['## Provider Options', '## Provider 選項 {/* #provider-options */}'],
+  ['### Available Options', '### 可用選項 {/* #available-options */}'],
   ['### Example: LMStudio', '### 範例：LMStudio'],
   ['| Name | Model prefix | Environment variables |', '| 名稱 | 模型前綴 | 環境變數 |'],
   ['| Model |', '| 模型 |'],
@@ -762,6 +768,66 @@ const proseTranslations = new Map([
 
 function translateGeneratedPatterns(segment) {
   return segment
+    .replace(
+      "To use Bedrock models through a model router string, use the full ID that [LLM Gateway](/models/providers/llmgateway-providers) lists, including its provider prefix, for example `llmgateway-providers/aws-bedrock/claude-opus-4-6`. Dropping the `llmgateway-providers/` prefix leaves an ID that doesn't resolve.",
+      '如要透過模型路由字串使用 Bedrock 模型，請填上 [LLM Gateway](/models/providers/llmgateway-providers) 所列的完整 ID，例如 `llmgateway-providers/aws-bedrock/claude-opus-4-6`。省略 `llmgateway-providers/` 前綴後，路由器便無法解析該 ID。',
+    )
+    .replace(
+      "Some router providers serve Azure-hosted models, for example `llmgateway-providers/azure/gpt-5.4` from [LLM Gateway](/models/providers/llmgateway-providers) and `edenai/azure/gpt-4.1-nano` from [Eden AI](/models/providers/edenai). Use the full ID the provider lists, including its prefix. Dropping the prefix leaves an `azure/...` ID that doesn't resolve. To use your own Azure OpenAI deployments through the model router, register the [Azure OpenAI gateway](/models/gateways/azure-openai).",
+      '部分已接入路由器的 Provider 提供由 Azure 託管的模型，例如 [LLM Gateway](/models/providers/llmgateway-providers) 的 `llmgateway-providers/azure/gpt-5.4`、[Eden AI](/models/providers/edenai) 的 `edenai/azure/gpt-4.1-nano`。請使用 Provider 所列的完整 ID。省略前綴後，剩下的 `azure/...` 將無法解析。如要透過模型路由器使用自己的 Azure OpenAI 部署，請註冊 [Azure OpenAI Gateway](/models/gateways/azure-openai)。',
+    )
+    .replace(
+      /^description: "Browse (\d+) (.+?) model IDs and learn how to configure authentication and use the gateway in TypeScript with Mastra's model router\."$/gm,
+      'description: "查閱 $2 的 $1 個模型 ID，並了解如何設定驗證，以及如何在 TypeScript 透過 Mastra 的模型路由器使用這個 Gateway。"',
+    )
+    .replace(
+      /^(.+?) aggregates models from multiple providers with enhanced features like rate limiting and failover\. Access (\d+) models through Mastra's model router\.$/gm,
+      '$1 匯集多個 Provider 的模型，並提供速率限制、故障轉移等功能。你可透過 Mastra 的模型路由器使用 $2 個模型。',
+    )
+    .replace(/^## Usage$/gm, '## 用法 {/* #usage */}')
+    .replace(/^## Configuration$/gm, '## 設定 {/* #configuration */}')
+    .replace(/^## Available models$/gm, '## 可用模型 {/* #available-models */}')
+    .replace(/^\| Model \|$/gm, '| 模型 |')
+    .replace(/^title: "(.+) Models: IDs, Pricing & Usage"$/gm, 'title: "$1 模型 ID、收費及用法"')
+    .replace(/^title: "(.+) Models: IDs, Context & Usage"$/gm, 'title: "$1 模型 ID、上下文視窗及用法"')
+    .replace(
+      /^description: "Browse (.+) model IDs(, capabilities, context windows, and pricing|, capabilities, and context windows| and capabilities)\. Learn how to use them in TypeScript with Mastra's model router\."$/gm,
+      (_, provider, details) => {
+        const fields = details.endsWith('pricing')
+          ? '模型 ID、功能、上下文視窗及收費'
+          : details.endsWith('windows')
+            ? '模型 ID、功能及上下文視窗'
+            : '模型 ID 及功能'
+        return `description: "查閱 ${provider} 的${fields}。了解如何在 TypeScript 透過 Mastra 的模型路由器使用這些模型。"`
+      },
+    )
+    .replace(
+      /^description: "Use (.+) models in Mastra through the AI SDK provider package\."$/gm,
+      'description: "透過 AI SDK 的 Provider 套件，即可在 Mastra 使用 $1 模型。"',
+    )
+    .replace(
+      /^description: "Direct access to AI model providers through their AI SDK provider packages\."$/gm,
+      'description: "透過各 AI SDK Provider 套件直接使用相應的模型。"',
+    )
+    .replace(
+      /^Model availability, capabilities, context windows, and pricing are sourced from \[models\.dev\]\(https:\/\/models\.dev\) and may change\.$/gm,
+      '模型供應情況、功能、上下文視窗及收費資料均來自 [models.dev](https://models.dev)，日後或會變更。',
+    )
+    .replace(
+      /^Access (\d+) (.+?) models? through Mastra's model router\. Authentication is handled automatically using the `([^`]+)` environment variable\.(?: Configure `([^`]+)` as well\.)?$/gm,
+      (_, count, provider, variable, requiredVariable) => {
+        const intro = `Mastra 的模型路由器可供你使用 ${provider} 提供的這 ${count} 個模型。Mastra 會自動讀取 \`${variable}\` 環境變數進行驗證。`
+        return requiredVariable ? intro + `你亦須設定 \`${requiredVariable}\`。` : intro
+      },
+    )
+    .replace(
+      /^Access (\d+) (.+?) models? through Mastra's model router\. Authentication is handled automatically using one of the following environment variables: (.+)\.$/gm,
+      'Mastra 的模型路由器可供你使用 $2 提供的這 $1 個模型。Mastra 會自動使用以下其中一個環境變數進行驗證：$3。',
+    )
+    .replace(
+      /^(.+?) isn't a model router provider, so model strings like `([^`]+)` don't resolve\. Pass a model instance from `([^`]+)` to the agent's `model` option instead\.$/gm,
+      '$1 未有接入模型路由器，因此 `$2` 這類模型字串無法解析。請將 `$3` 提供的模型實例傳入 Agent 的 `model` 選項。',
+    )
     .replace(/title: "(.+?) \| Models(?: \| Mastra)?"/g, 'title: "$1 | 模型"')
     .replace(
       /description: "Use (.+?) models with Mastra\. (\d+) models available\."/g,
@@ -839,7 +905,12 @@ function translateOutsideCode(segment) {
   let translated = translateGeneratedPatterns(segment)
 
   for (const [source, target] of exactTranslations) {
-    translated = translated.replaceAll(source, target)
+    translated = source.startsWith('#')
+      ? translated
+          .split('\n')
+          .map(line => (line === source ? target : line))
+          .join('\n')
+      : translated.replaceAll(source, target)
   }
   for (const [source, target] of proseTranslations) {
     translated = translated.replaceAll(source, target)
@@ -860,7 +931,8 @@ if (files.length < 188) {
   throw new Error(`Expected at least 188 English model files, found ${files.length}`)
 }
 
-for (const relativePath of files) {
+const generatedFiles = files.filter(file => file.startsWith(`providers${path.sep}`) || isGeneratedGateway(file))
+for (const relativePath of generatedFiles) {
   const sourcePath = path.join(sourceRoot, relativePath)
   const targetPath = path.join(targetRoot, relativePath)
   const source = await fs.readFile(sourcePath, 'utf8')
@@ -869,4 +941,6 @@ for (const relativePath of files) {
   await fs.writeFile(targetPath, localize(source))
 }
 
-console.log(`Generated ${files.length} zh-HK model localization files from the English source.`)
+console.log(
+  `Generated ${generatedFiles.length} zh-HK model localization files; skipped ${files.length - generatedFiles.length} manual files.`,
+)

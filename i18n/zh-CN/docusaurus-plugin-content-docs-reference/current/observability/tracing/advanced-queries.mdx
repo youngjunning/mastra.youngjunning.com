@@ -1,77 +1,77 @@
 ---
-title: 'Reference: Query traces and spans | Observability'
-description: 'Find, count, and measure completed traces and spans with structured predicates. List matching traces or spans, aggregate them into grouped measures, paginate, poll, and discover query fields.'
+title: '参考：查询 Trace 和 Span | 可观测性'
+description: '使用结构化谓词查找、统计和衡量已完成的 Trace 与 Span。列出匹配结果、按组聚合指标、分页、轮询，并发现可查询字段。'
 packages:
   - '@mastra/client-js'
   - '@mastra/server'
 ---
 
-# 查询轨迹和跨度
+# 查询 Trace 和 Span
 
-使用结构化过滤器查询完整的跟踪或跨度，或将它们聚合为计数、错误率、延迟百分位数、令牌和成本。每个操作都可以通过客户端 SDK、HTTP API 和 CLI 进行：
+使用结构化过滤条件查询已完成的 Trace 或 Span，也可以聚合统计数量、错误率、延迟百分位数、token 用量和成本。每项操作都可通过客户端 SDK、HTTP API 和 CLI 使用：
 
-|运营|用它来 |客户端SDK | HTTP 端点 | CLI 命令 |
+| 操作 | 用途 | 客户端 SDK | HTTP 端点 | CLI 命令 |
 | - | - | - | - | - |
-|[Query traces](#query-traces) | List traces matching root-span fields or conditions on related spans. | `queryTraces()` | `POST /api/observability/traces/query` | `mastra api trace query` |
-| [查询跨度](#query-spans)|列出跨跟踪的各个跨度，包括嵌套Agent运行和Tool调用。 |`querySpans()` | `POST /api/observability/spans/query` | `mastra api span query` |
-| [聚合痕迹](#aggregate-traces)|计算匹配轨迹的测量值，可以选择按时间分组或分桶。 |`aggregateTraces()` | `POST /api/observability/traces/aggregate` | `mastra api trace aggregate` |
-| [聚合跨度](#aggregate-spans)|计算任意深度的单个匹配跨度的测量值。 |`aggregateSpans()` | `POST /api/observability/spans/aggregate` | `mastra api span aggregate` |
+| [查询 Trace](#query-traces) | 根据根 Span 字段或关联 Span 的条件列出匹配的 Trace。 | `queryTraces()` | `POST /api/observability/traces/query` | `mastra api trace query` |
+| [查询 Span](#query-spans) | 列出各个 Trace 中的 Span，包括嵌套的 Agent 运行和 Tool 调用。 | `querySpans()` | `POST /api/observability/spans/query` | `mastra api span query` |
+| [聚合 Trace](#aggregate-traces) | 计算匹配 Trace 的指标，可按字段分组或按时间分桶。 | `aggregateTraces()` | `POST /api/observability/traces/aggregate` | `mastra api trace aggregate` |
+| [聚合 Span](#aggregate-spans) | 计算任意层级中匹配的各个 Span 的指标。 | `aggregateSpans()` | `POST /api/observability/spans/aggregate` | `mastra api span aggregate` |
 
-跟踪操作共享一个[trace selection](#select-traces): root-span predicates and `spans.some` / `spans.none` clauses. The span operations share a direct span predicate, without nested `spans` clauses. Reuse a selection between the query and aggregate operations for the same record type.
+Trace 操作共用一组 [Trace 选择条件](#select-traces)：根 Span 谓词以及 `spans.some` / `spans.none` 子句。Span 操作共用直接作用于 Span 的谓词，不支持嵌套的 `spans` 子句。查询与聚合同一类记录时，可以复用选择条件。
 
-|选项 |查询踪迹 |查询范围 |聚合迹线或跨度 |
+| 选项 | 查询 Trace | 查询 Span | 聚合 Trace 或 Span |
 | - | - | - | - |
-|最大时间范围持续时间 |无上限 |无上限 | 365 天 |
-|分页 |键集、编号页面或增量轮询 |仅按键组 |没有分页；`limit` selects groups |
-| `orderBy` shape | One-item array | One-item array | One object |
+| 时间范围的最大长度 | 无上限 | 无上限 | 365 天 |
+| 分页 | 键集分页、页码分页或增量轮询 | 仅支持键集分页 | 不分页；`limit` 指定返回的分组数 |
+| `orderBy` 的形式 | 单元素数组 | 单元素数组 | 单个对象 |
 
-CLI 命令将过滤器和请求选项一起作为一个 JSON 参数，并将响应包装在`data`. To inspect a query result, use its `traceId` to [retrieve the full trace](/reference/client-js/observability#getting-a-specific-trace), or call `getSpan(traceId, spanId)` to retrieve one span.
+CLI 命令将过滤条件和请求选项合并为一个 JSON 参数，并把响应包在 `data` 中。要查看查询结果的详情，可用其 `traceId` [获取完整 Trace](/reference/client-js/observability#getting-a-specific-trace)，或调用 `getSpan(traceId, spanId)` 获取单个 Span。
 
-端点使用与其他可观察性路由相同的身份验证，并且需要`observability:read` permission. Every request requires a time range.
+这些端点采用与其他可观测性路由相同的身份验证机制，并要求 `observability:read` 权限。每个请求都必须指定时间范围。
 
-这些 API 时间范围限制与数据保留是分开的。对于托管跟踪，您的平台计划的保留期适用。看[Query observability data on Mastra Platform](/docs/mastra-platform/observability#query-observability-data) for retention, project credentials, and regional endpoints.
+这些 API 的时间范围限制与数据保留期限互不相关。托管 Trace 适用当前 Platform 套餐的保留期限。保留期限、项目凭据和区域端点详见 [在 Mastra Platform 上查询可观测性数据](/docs/mastra-platform/observability#query-observability-data)。
 
 ## 检查能力 {/* #check-capabilities */}
 
-配置的Observability存储必须支持每个 API。称呼`getObservabilityCapabilities()` or `GET /api/observability/capabilities` and check these flags before showing a feature:
+配置的可观测性存储必须支持相应 API。展示功能前，调用 `getObservabilityCapabilities()` 或 `GET /api/observability/capabilities`，检查以下能力标志：
 
-|能力|店铺特色|启用|
+| 能力 | 存储功能 | 支持的操作 |
 | - | - | - |
 |`traceQuery` | `trace-query` | `queryTraces()` |
 | `spanQuery` | `span-query` | `querySpans()` |
-| `spanQueryDurationSort` | `span-query-duration-sort` | `orderBy` on `durationMs` in `querySpans()` |
-| `spanQueryModelProviderSort` | `span-query-model-provider-sort` | `orderBy` on `model` or `provider` in `querySpans()` |
-| `spanQueryContextFields` | `span-query-context-fields` | Additional identity, context, and parent/root entity predicates in span queries and aggregates |
-| `spanQueryModelFields` | `span-query-model-fields` | `model`和`provider`跨度查询和聚合中的谓词 |
+| `spanQueryDurationSort` | `span-query-duration-sort` | 在 `querySpans()` 中通过 `orderBy` 按 `durationMs` 排序 |
+| `spanQueryModelProviderSort` | `span-query-model-provider-sort` | 在 `querySpans()` 中通过 `orderBy` 按 `model` 或 `provider` 排序 |
+| `spanQueryContextFields` | `span-query-context-fields` | 在 Span 查询和聚合中增加身份、上下文及父级或根实体谓词 |
+| `spanQueryModelFields` | `span-query-model-fields` | 在 Span 查询和聚合中使用 `model` 与 `provider` 谓词 |
 |`traceAggregate` | `trace-aggregate` | `aggregateTraces()` |
 | `spanAggregate` | `span-aggregate` | `aggregateSpans()` |
-| `traceQueryRootDuration` | `trace-query-root-duration`|跟踪范围`durationMs`谓词 |
-|`traceQueryTimeToFirstChunk` | `trace-query-time-to-first-chunk` | `timeToFirstChunkMs`谓词和结果 |
-|`traceQueryTimeToFirstChunkSort` | `trace-query-time-to-first-chunk-sort` | `orderBy`在`timeToFirstChunkMs` |
-| `traceQueryTimeToFirstToken` | `trace-query-time-to-first-token` | `timeToFirstTokenMs`谓词和结果 |
-|`traceQueryTimeToFirstTokenSort` | `trace-query-time-to-first-token-sort` | `orderBy`在`timeToFirstTokenMs` |
-| `aggregateTimeToFirstMeasures` | `aggregate-time-to-first-measures` | `timeToFirstToken.*`和`timeToFirstChunk.*`措施`aggregateTraces()`和`aggregateSpans()` |
-| `traceQueryContextIds` | `trace-query-context-ids` | `runId`, `sessionId`, `userId`， 和`organizationId`谓词 |
-|`traceQueryContextFields` | `trace-query-context-fields` | `requestId`, `serviceName`， 和`experimentId`谓词 |
-|`traceQueryRootSpanFields` | `trace-query-root-span-fields`|跟踪范围`name`和`spanType`谓词、维度和`countDistinct`措施|
-|`traceQueryRootEntityId` | `trace-query-root-entity-id`|跟踪范围`entityId`谓词、维度和`countDistinct`措施|
-|`traceQueryOutcomeFields` | `trace-query-outcome-fields` | `outcome`和`stopReason`在跟踪和`spans.some` / `spans.none`谓词、跟踪维度和值发现，以及跟踪结果上的根跨度的结果字段 |
-|`spanQueryOutcomeFields` | `span-query-outcome-fields` | `outcome`和`stopReason`在`querySpans()`和`aggregateSpans()`谓词、维度和`countDistinct`度量，加上跨度结果的结果字段 |
-|`traceQueryDiscovery` | `trace-query-discovery` | [领域和价值发现](#discover-fields-and-values) |
+| `traceQueryRootDuration` | `trace-query-root-duration` | Trace 范围内的 `durationMs` 谓词 |
+| `traceQueryTimeToFirstChunk` | `trace-query-time-to-first-chunk` | `timeToFirstChunkMs` 谓词及结果 |
+| `traceQueryTimeToFirstChunkSort` | `trace-query-time-to-first-chunk-sort` | 通过 `orderBy` 按 `timeToFirstChunkMs` 排序 |
+| `traceQueryTimeToFirstToken` | `trace-query-time-to-first-token` | `timeToFirstTokenMs` 谓词及结果 |
+| `traceQueryTimeToFirstTokenSort` | `trace-query-time-to-first-token-sort` | 通过 `orderBy` 按 `timeToFirstTokenMs` 排序 |
+| `aggregateTimeToFirstMeasures` | `aggregate-time-to-first-measures` | 在 `aggregateTraces()` 和 `aggregateSpans()` 中使用 `timeToFirstToken.*` 与 `timeToFirstChunk.*` 指标 |
+| `traceQueryContextIds` | `trace-query-context-ids` | `runId`、`sessionId`、`userId` 和 `organizationId` 谓词 |
+| `traceQueryContextFields` | `trace-query-context-fields` | `requestId`、`serviceName` 和 `experimentId` 谓词 |
+| `traceQueryRootSpanFields` | `trace-query-root-span-fields` | Trace 范围内的 `name` 与 `spanType` 谓词、维度及 `countDistinct` 指标 |
+| `traceQueryRootEntityId` | `trace-query-root-entity-id` | Trace 范围内的 `entityId` 谓词、维度及 `countDistinct` 指标 |
+| `traceQueryOutcomeFields` | `trace-query-outcome-fields` | Trace 和 `spans.some` / `spans.none` 谓词中的 `outcome` 与 `stopReason`、Trace 维度和值发现，以及 Trace 结果中的根 Span 结果字段 |
+| `spanQueryOutcomeFields` | `span-query-outcome-fields` | `querySpans()` 和 `aggregateSpans()` 中的 `outcome` 与 `stopReason` 谓词、维度及 `countDistinct` 指标，以及 Span 结果中的结果字段 |
+| `traceQueryDiscovery` | `trace-query-discovery` | [发现字段和值](#discover-fields-and-values) |
 | `traceQueryTenantScope` | `trace-query-tenant-scope` | [可信租户范围](#trusted-tenant-scope) |
 
-一个失踪的`traceAggregate` value means the server doesn't support aggregation. Servers without the aggregate route return `404`, and stores without the feature return `501 TRACE_AGGREGATE_UNSUPPORTED`. A missing `spanAggregate` value means the same for span aggregation, and stores without the feature return `501 SPAN_AGGREGATE_UNSUPPORTED`. Against a store without a sub-feature, a request that uses a gated field returns `501` before storage runs. Unsupported root span `name`, `spanType`, and `entityId`, and span predicates requiring `spanQueryContextFields`, return `422` with a `field_not_allowed` issue instead. A store without `spanQuery` returns `501 SPAN_QUERY_UNSUPPORTED`.
+缺少 `traceAggregate` 表示服务器不支持 Trace 聚合：没有聚合路由的服务器返回 `404`，存储不支持该功能时返回 `501 TRACE_AGGREGATE_UNSUPPORTED`。缺少 `spanAggregate` 对 Span 聚合含义相同；存储不支持时返回 `501 SPAN_AGGREGATE_UNSUPPORTED`。若存储缺少某项子功能，使用受该功能限制的字段会在执行存储操作前返回 `501`。不支持的根 Span `name`、`spanType`、`entityId` 字段，以及需要 `spanQueryContextFields` 的 Span 谓词，则返回 `422` 和 `field_not_allowed` 问题。不支持 `spanQuery` 的存储返回 `501 SPAN_QUERY_UNSUPPORTED`。
 
-## 选择轨迹 {/* #select-traces */}
+## 选择 Trace {/* #select-traces */}
 
-每个请求都会选择具有两个字段的跟踪：
+每个请求使用以下两个字段选择 Trace：
 
-|领域 |必填|描述 |
+| 字段 | 必填 | 说明 |
 | - | - | - |
-|`timeRange` | Yes | Trace start-time boundary. `from` is inclusive and `to` is exclusive. Both values must be ISO timestamps, and `from` must be earlier than `to`. |
-| `where` | No | Recursive trace predicate. Supports scalar conditions and `spans.some` or `spans.none` clauses. |
+| `timeRange` | 是 | Trace 开始时间范围。`from` 为闭区间端点，`to` 为开区间端点。两者必须是 ISO 时间戳，且 `from` 必须早于 `to`。 |
+| `where` | 否 | 递归的 Trace 谓词，支持标量条件及 `spans.some` 或 `spans.none` 子句。 |
 
-此选择与 8 月第一周的跟踪相匹配，其中包含有错误的Tool调用：
+以下选择条件匹配 8 月第一周内包含出错 Tool 调用的 Trace：
 
 ```typescript
 const selection = {
@@ -93,34 +93,34 @@ const selection = {
 }
 ```
 
-相同的选择会从任一 API 返回相同的跟踪。聚合精确计算查询将列出的跟踪。
+同一组选择条件在两个 API 中匹配相同的 Trace。聚合统计的正是查询会列出的那些 Trace。
 
-一个`spans.some` clause matches when one span satisfies all its conditions. In this example, the same span must be a tool call and have an error. Use `spans.none` to find traces with no spans matching the conditions.
+`spans.some` 子句要求同一个 Span 满足其全部条件。在此例中，该 Span 既必须是 Tool 调用，又必须包含错误。使用 `spans.none` 可查找不存在符合条件的 Span 的 Trace。
 
-Span 子句检查当前根跨度和当前子跨度。根`timeRange` applies only to the selected current root's `startedAt`. Related spans can participate even when their own timestamps are outside that range. Related records correlate only through a matching non-null `traceId`.
+Span 子句检查当前根 Span 和当前子 Span。根级 `timeRange` 仅约束所选当前根 Span 的 `startedAt`；关联 Span 自身的时间戳即使落在该范围外，仍可参与匹配。关联记录仅通过相同且非空的 `traceId` 关联。
 
 ### 字段和运算符 {/* #fields-and-operators */}
 
-|谓词上下文 |领域 |运营商|
+| 谓词范围 | 字段 | 运算符 |
 | - | - | - |
-|追踪|`traceId`, `threadId`, `resourceId`, `runId`, `sessionId`, `userId`, `organizationId`, `requestId`, `serviceName`, `experimentId`, `entityId`, `entityName`, `entityType`, `name`, `spanType`, `environment`, `status`, `outcome`, `stopReason` | `eq`, `ne`, `in`, `notIn`, `exists`, `notExists` |
-| Trace metadata | `metadata.<key>` | `eq`, `ne`, `in`, `notIn`, `exists`, `notExists` |
+| Trace | `traceId`, `threadId`, `resourceId`, `runId`, `sessionId`, `userId`, `organizationId`, `requestId`, `serviceName`, `experimentId`, `entityId`, `entityName`, `entityType`, `name`, `spanType`, `environment`, `status`, `outcome`, `stopReason` | `eq`, `ne`, `in`, `notIn`, `exists`, `notExists` |
+| Trace 元数据 | `metadata.<key>` | `eq`, `ne`, `in`, `notIn`, `exists`, `notExists` |
 | Trace | `startedAt`, `endedAt`, `durationMs`, `timeToFirstChunkMs`, `timeToFirstTokenMs` | `eq`, `ne`, `in`, `notIn`, `lt`, `lte`, `gt`, `gte`, `exists`, `notExists` |
 | Trace | `tags` | `includes`, `notIncludes`, `exists`, `notExists` |
 | Span | `name` | `eq`, `ne`, `in`, `notIn`, `exists`, `notExists`, `matches`, `notMatches` |
 | Span | `spanType`, `model`, `provider`, `status`, `outcome`, `stopReason`, `entityType`, `entityId`, `entityName`, `entityVersionId`, `parentEntityVersionId`, `rootEntityVersionId`, `runId`, `sessionId`, `userId`, `organizationId`, `requestId`, `serviceName`, `experimentId` | `eq`, `ne`, `in`, `notIn`, `exists`, `notExists` |
-| Span | `startedAt`, `endedAt`, `durationMs`, `timeToFirstChunkMs`, `timeToFirstTokenMs` | `eq`, `ne`, `in`, `notIn`, `lt`, `lte`, `gt`, `gte`, `exists`, `notExists`|
-|跨度|`error` | `exists`, `notExists` |
+| Span | `startedAt`, `endedAt`, `durationMs`, `timeToFirstChunkMs`, `timeToFirstTokenMs` | `eq`, `ne`, `in`, `notIn`, `lt`, `lte`, `gt`, `gte`, `exists`, `notExists` |
+| Span | `error` | `exists`, `notExists` |
 
-跟踪范围`name`, `spanType`, and `entityId` read the current root span, so `{ op: 'eq', left: { path: 'spanType' }, right: { literal: 'workflow_run' } }` selects traces started by a workflow run. Inside `spans.some` or `spans.none`, the same fields match any span in the trace.
+Trace 范围内的 `name`、`spanType` 和 `entityId` 读取当前根 Span，因此 `{ op: 'eq', left: { path: 'spanType' }, right: { literal: 'workflow_run' } }` 会选择由 Workflow 运行启动的 Trace。在 `spans.some` 或 `spans.none` 内，相同字段可以匹配 Trace 中的任意 Span。
 
-组成谓词`{ op: 'and', args: [...] }`, `{ op: 'or', args: [...] }`, and `{ op: 'not', arg: ... }`. Comparison predicates place a field reference on the left and a literal on the right. Membership predicates use a field reference in `value` and a homogeneous literal array in `set`. Tag predicates name the stored tag collection in `path`. `includes` and `notIncludes` also take one tag in `value`, while `exists` and `notExists` take only `op` and `path`. See [Filter by tags](#filter-by-tags). Text predicates use the comparison shape with a string literal. See [Filter by text](#filter-by-text).
+使用 `{ op: 'and', args: [...] }`、`{ op: 'or', args: [...] }` 和 `{ op: 'not', arg: ... }` 组合谓词。比较谓词将字段引用放在左侧、字面值放在右侧。成员谓词在 `value` 中使用字段引用，在 `set` 中使用同类型字面值数组。标签谓词通过 `path` 指定存储的标签集合。`includes` 和 `notIncludes` 还需在 `value` 中指定一个标签，而 `exists` 和 `notExists` 只需 `op` 与 `path`。参阅[按标签过滤](#filter-by-tags)。文本谓词采用比较谓词的形式，字面值为字符串。参阅[按文本过滤](#filter-by-text)。
 
-字符串比较区分大小写，并且文字永远不会被强制。`matches` and `notMatches` are the exception: they compare words case-insensitively. Canonical string fields compare exact stored values. Metadata string values are trimmed before comparison, as described below. Duration, time-to-first-chunk, and time-to-first-token predicates require numbers, while timestamp predicates require ISO timestamp strings. A missing value satisfies neither positive nor ordered predicates, although it does satisfy the negative operators `ne` and `notIn`. Combine a negative predicate with `exists` when the field must also be present.
+字符串比较区分大小写，且不会强制转换字面值。`matches` 和 `notMatches` 例外：它们不区分大小写地比较单词。标准字符串字段按存储的原值精确比较；元数据字符串值在比较前会去掉首尾空白，详见下文。耗時、首个数据块耗时及首个 token 耗时谓词要求数字，时间戳谓词要求 ISO 时间戳字符串。缺失值既不满足正向谓词，也不满足有序比较，但满足否定运算符 `ne` 和 `notIn`。如果字段也必须存在，应将否定谓词与 `exists` 组合。
 
-#### 按根持续时间过滤 {/* #filter-by-root-duration */}
+#### 按根 Span 耗时过滤 {/* #filter-by-root-duration */}
 
-在跟踪范围内，`durationMs` is the current completed root span's elapsed time in milliseconds. The value is derived from `endedAt - startedAt` when the query runs:
+在 Trace 范围内，`durationMs` 是当前已完成根 Span 的耗时，单位为毫秒。查询执行时根据 `endedAt - startedAt` 计算：
 
 ```typescript
 const slowRootTraces = {
@@ -130,27 +130,27 @@ const slowRootTraces = {
 }
 ```
 
-此顶级谓词不检查子跨度。相比之下，`spans.some` with a `durationMs` predicate examines the current root span and current child spans, so a long child can satisfy that clause even when its root is shorter.
+这个顶层谓词不检查子 Span。相比之下，`spans.some` 中的 `durationMs` 谓词会检查当前根 Span 和当前子 Span；即使根 Span 较短，耗时较长的子 Span 也能满足该子句。
 
-跟踪查询在评估谓词之前排除不完整的根。因此，`{ op: 'notExists', path: 'durationMs' }` doesn't find running traces or malformed roots without a usable `endedAt`.
+Trace 查询在评估谓词前会排除未完成的根 Span。因此，`{ op: 'notExists', path: 'durationMs' }` 找不到运行中的 Trace，也找不到缺少可用 `endedAt` 的异常根 Span。
 
-#### 按第一个块或标记的时间进行过滤和排序 {/* #filter-and-sort-by-time-to-first-chunk-or-token */}
+#### 按首个数据块或 token 的耗时过滤和排序 {/* #filter-and-sort-by-time-to-first-chunk-or-token */}
 
-`timeToFirstChunkMs`持有一个跨度[time to first chunk (TTFC)](#time-to-first-chunk-ttfc), and `timeToFirstTokenMs` holds its [time to first token (TTFT)](#time-to-first-token-ttft). At trace scope, the fields read the root span's value. Inside `spans.some` or `spans.none`, they read each related span. Both fields also work in `orderBy`.
+`timeToFirstChunkMs` 记录 Span 的[首个数据块耗时（TTFC）](#time-to-first-chunk-ttfc)，`timeToFirstTokenMs` 记录其[首个 token 耗时（TTFT）](#time-to-first-token-ttft)。在 Trace 范围内，这些字段读取根 Span 的值；在 `spans.some` 或 `spans.none` 内，则读取各关联 Span 的值。两个字段也都可用于 `orderBy`。
 
-此谓词查找根Agent等待模型第一个令牌超过 2 秒的跟踪：
+以下谓词查找根 Agent 等待模型首个 token 超过 2 秒的 Trace：
 
 ```typescript
 const slowFirstToken = { op: 'gt', left: { path: 'timeToFirstTokenMs' }, right: { literal: 2000 } }
 ```
 
-看[Missing first chunk and token values](#missing-first-chunk-and-token-values) for `null`, `0`, and the capabilities each use needs.
+关于 `null`、`0` 以及各项操作所需的能力，请参阅[缺失的首个数据块与 token 耗时值](#missing-first-chunk-and-token-values)。
 
-#### 按结果过滤 {/* #filter-by-outcome */}
+#### 按结束结果过滤 {/* #filter-by-outcome */}
 
-`outcome`记录一个跨度如何结束，例如`success`, `error`, `abort`, `limit`, or `unknown`. `stopReason` records why, for example `max_steps`. Both are free strings, so custom spans can record their own values. They're separate from `status`, which still reads only whether the span recorded an error.
+`outcome` 记录 Span 如何结束，例如 `success`、`error`、`abort`、`limit` 或 `unknown`。`stopReason` 记录结束原因，例如 `max_steps`。两者都是自由格式字符串，因此自定义 Span 可以记录自己的值。它们不同于 `status`；后者只表示 Span 是否记录了错误。
 
-在跟踪范围内，这两个字段都会读取当前的根范围，即没有启动跟踪的父范围的范围。里面`spans.some` or `spans.none`, they read each related span. A trace whose root succeeded but whose tool call hit a step limit doesn't match a trace-scope `outcome` of `limit`. Find it through `spans.some`:
+在 Trace 范围内，这两个字段读取启动该 Trace、没有父 Span 的当前根 Span。在 `spans.some` 或 `spans.none` 内，它们读取各关联 Span。若根 Span 成功，但某次 Tool 调用触及步骤上限，该 Trace 不会匹配 Trace 范围内值为 `limit` 的 `outcome`；应通过 `spans.some` 查找：
 
 ```typescript
 const hitALimit = {
@@ -160,15 +160,15 @@ const hitALimit = {
 }
 ```
 
-由早于这些字段的 SDK 编写的 Span，或者仍在运行的根 Span，不会产生任何结果。缺失结果意味着“未记录”，永远不会成功。选择那些跨度`{ op: 'notExists', path: 'outcome' }`. As with other optional string fields, `ne` and `notIn` match spans with no value.
+由尚不支持这些字段的旧版 SDK 写入的 Span，以及仍在运行的根 Span，都没有结束结果。缺少 结束结果表示“未记录”，绝不表示成功。可用 `{ op: 'notExists', path: 'outcome' }` 选择此类 Span。与其他可选字符串字段一样，`ne` 和 `notIn` 也会匹配缺失值的 Span。
 
-两个字段都支持`eq`, `ne`, `in`, `notIn`, `exists`, and `notExists`, group trace and span aggregates, and return values from value discovery. They can't sort individual trace or span query results. In aggregates, either field can be used in `orderBy` when it's included in `groupBy`. Results also return `stopReasonContext`, an object with details about the stop reason such as `{ maxSteps: 5 }`. `stopReasonContext` is returned only and can't be filtered, grouped, or sorted.
+两个字段都支持 `eq`、`ne`、`in`、`notIn`、`exists` 和 `notExists`，可用于 Trace 和 Span 聚合分组，并可通过值发现返回取值。它们不能用于单条 Trace 或 Span 查询结果的排序。在聚合中，只要字段包含在 `groupBy` 中，就能用于 `orderBy`。结果还会返回 `stopReasonContext`，其中包含结束原因的细节，例如 `{ maxSteps: 5 }`。`stopReasonContext` 只供读取，不能用于过滤、分组或排序。
 
-商店通过以下方式宣传支持`trace-query-outcome-fields` feature for trace queries and aggregates, and the `span-query-outcome-fields` feature for span queries and aggregates. The server reports them as the `traceQueryOutcomeFields` and `spanQueryOutcomeFields` capabilities. Against an older store, results omit the fields, and a request that uses them returns `501` before storage runs.
+存储通过 `trace-query-outcome-fields` 功能声明支持 Trace 查询和聚合，通过 `span-query-outcome-fields` 声明支持 Span 查询和聚合。服务器将它们报告为 `traceQueryOutcomeFields` 和 `spanQueryOutcomeFields` 能力。使用旧版存储时，结果会省略这些字段；使用这些字段的请求会在执行存储操作前返回 `501`。
 
 #### 按上下文标识符过滤 {/* #filter-by-context-identifiers */}
 
-`runId`, `sessionId`, `userId`, and `organizationId` are available at trace scope and inside `spans.some` / `spans.none`. Trace-scope predicates read the current root span. Span-scope predicates bind to one related current span, so a run recorded only on a child span is found through `spans.some`:
+`runId`、`sessionId`、`userId` 和 `organizationId` 可在 Trace 范围内及 `spans.some` / `spans.none` 内使用。Trace 范围的谓词读取当前根 Span；Span 范围的谓词绑定到单个关联的当前 Span。因此，只记录在子 Span 上的运行可以通过 `spans.some` 找到：
 
 ```typescript
 const sessionTracesWithRun = {
@@ -185,9 +185,9 @@ const sessionTracesWithRun = {
 }
 ```
 
-这些标识符支持`eq`, `ne`, `in`, `notIn`, `exists`, and `notExists`. Field discovery lists them, but value discovery doesn't return their recorded values. Stores advertise support through the `trace-query-context-ids` feature. A predicate on one of these fields against an older store returns `501` before storage runs, and field discovery omits them for that store.
+这些标识符支持 `eq`、`ne`、`in`、`notIn`、`exists` 和 `notExists`。字段发现会列出它们，但值发现不会返回其记录值。存储通过 `trace-query-context-ids` 功能声明支持。对旧版存储中的这些字段使用谓词，会在执行存储操作前返回 `501`；字段发现也会省略它们。
 
-`requestId`, `serviceName`, and `experimentId` work the same way, at trace scope and inside `spans.some` / `spans.none`. This predicate finds checkout requests that reached the `payments` service on a child span. The child span records `metadata: { serviceName: 'payments' }`; the root keeps `checkout`:
+`requestId`、`serviceName` 和 `experimentId` 采用相同语义，可在 Trace 范围内及 `spans.some` / `spans.none` 内使用。以下谓词查找某个子 Span 到达 `payments` 服务的结账请求。子 Span 记录 `metadata: { serviceName: 'payments' }`，根 Span 则保留 `checkout`：
 
 ```typescript
 const checkoutRequestsThroughPayments = {
@@ -204,11 +204,11 @@ const checkoutRequestsThroughPayments = {
 }
 ```
 
-商店通过以下方式宣传对这三个领域的支持`trace-query-context-fields` feature, reported as the `traceQueryContextFields` capability. Against an older store, a predicate on one of them returns `501` before storage runs, and field discovery omits them.
+存储通过 `trace-query-context-fields` 功能声明对这三个字段的支持，服务器将其报告为 `traceQueryContextFields` 能力。对旧版存储中的任一字段使用谓词，会在执行存储操作前返回 `501`；字段发现也会省略它们。
 
-#### 按跨度属性过滤 {/* #filter-by-span-properties */}
+#### 按 Span 属性过滤 {/* #filter-by-span-properties */}
 
-里面的每一个条件`spans.some` or `spans.none` clause applies to the same current span. For example, this predicate finds a failed tool span whose name is `medication_lookup`; a matching name on one span and an error on another don't satisfy it:
+同一 `spans.some` 或 `spans.none` 子句中的所有条件都作用于同一个当前 Span。例如，下列谓词查找名为 `medication_lookup` 的失败 Tool Span；一个 Span 名称匹配、另一个 Span 含有错误，并不能满足条件：
 
 ```typescript
 const failedMedicationLookup = {
@@ -225,9 +225,9 @@ const failedMedicationLookup = {
 }
 ```
 
-使用`status` for the derived `success` or `error` outcome. Use `error` when you only need to test whether error details are present.
+使用 `status` 判断派生出的 `success` 或 `error` 状态；如果只需检查是否存在错误详情，则使用 `error`。
 
-`durationMs`是跨度经过的时间（以毫秒为单位）。跨度`startedAt` and `endedAt` conditions filter related spans independently of the top-level root `timeRange`:
+`durationMs` 是 Span 的耗时，单位为毫秒。Span 的 `startedAt` 与 `endedAt` 条件独立于顶层根 Span 的 `timeRange`，用于过滤关联 Span：
 
 ```typescript
 const slowModelCalls = {
@@ -248,7 +248,7 @@ const slowModelCalls = {
 }
 ```
 
-`model`和`provider` read the span's `model` and `provider` columns. When a column is empty, they fall back to the string `attributes.model` and `attributes.provider` values that older `@mastra/observability` versions exported, so existing filters keep matching older spans. Trace results omit `model` and `provider`, because a trace can match through one span while its other spans used a different model.
+`model` 和 `provider` 读取 Span 对应的 `model` 与 `provider` 列。若列为空，则回退到旧版 `@mastra/observability` 导出的字符串值 `attributes.model` 和 `attributes.provider`，使现有过滤条件仍能匹配旧 Span。Trace 结果不返回 `model` 和 `provider`，因为 Trace 可能通过某个 Span 匹配，而其他 Span 使用了不同模型。
 
 ```typescript
 const selectedModel = {
@@ -268,7 +268,7 @@ const selectedModel = {
 }
 ```
 
-使用通用实体字段作为Tool和检索标识。版本字段让一个子句通过其实体谱系限定同一跨度：
+用通用实体字段标识 Tool 和检索操作。版本字段使同一子句能够按实体谱系限定同一个 Span：
 
 ```typescript
 const versionedRetrieval = {
@@ -288,7 +288,7 @@ const versionedRetrieval = {
 
 #### 按元数据过滤 {/* #filter-by-metadata */}
 
-使用`metadata.<key>` paths for custom dimensions stored on the current root span. Metadata predicates compare trimmed, non-empty string values exactly and case-sensitively. Leading and trailing whitespace in a stored string value is ignored. Values empty after trimming count as missing. Null, numeric, boolean, object, and array values also count as missing.
+使用 `metadata.<key>` 路径过滤当前根 Span 上存储的自定义维度。元数据谓词对去除首尾空白后的非空字符串进行精确且区分大小写的比较；存储值中的首尾空白会被忽略。去除空白后为空的值视为缺失。null、数字、布尔值、对象和数组也视为缺失。
 
 ```typescript
 const messageTrace = {
@@ -309,13 +309,13 @@ const messageTrace = {
 }
 ```
 
-该键必须命名一个顶级属性。空键和嵌套路径将被拒绝。元数据键不会被修剪，因此前导和尾随空格仍然是确切键标识的一部分。当元数据重复规范跟踪字段时，例如`resourceId`, `threadId`, or `environment`, prefer the canonical field because it uses the dedicated storage column. The `metadata.<key>` form remains available when you specifically need the value from the metadata object. Metadata and canonical values may differ.
+键必须指向一个顶层属性；空键和嵌套路径会被拒绝。元数据键不会去除空白，因此首尾空白仍属于键标识的一部分。如果元数据与 `resourceId`、`threadId` 或 `environment` 等标准 Trace 字段重复，优先使用标准字段，因为它使用专用存储列。仅当需要元数据对象中的值时，才使用 `metadata.<key>`；元数据值与标准字段值可能不同。
 
-跟踪查询发现返回在选定时间范围内观察到的可执行顶级字符串元数据字段。
+Trace 查询的字段发现会返回在所选时间范围内观察到、可用于查询的顶层字符串元数据字段。
 
 #### 按标签过滤 {/* #filter-by-tags */}
 
-标签是存储在当前根跨度上的字符串列表，因此它们使用集合运算符而不是标量`in` and `notIn` operators. This query finds production traces tagged for manual review that don't carry the `archived` tag:
+标签是存储在当前根 Span 上的字符串列表，因此使用集合运算符，而不是标量 `in` 和 `notIn`。以下查询查找带有人工审核标签、且不含 `archived` 标签的生产环境 Trace：
 
 ```typescript
 const manualReview = {
@@ -328,20 +328,20 @@ const manualReview = {
 }
 ```
 
-|操作员|匹配时间 |
+| 运算符 | 匹配条件 |
 | - | - |
-|`includes` | The trace has the requested tag |
-| `notIncludes` | The trace has at least one tag, but not the requested tag |
-| `exists` | The trace has at least one tag |
-| `notExists` | The trace has no tags |
+| `includes` | Trace 含有指定标签 |
+| `notIncludes` | Trace 至少含有一个标签，但不含指定标签 |
+| `exists` | Trace 至少含有一个标签 |
+| `notExists` | Trace 不含任何标签 |
 
-标签作为整个字符串进行精确比较并区分大小写。`value` must be one string with at least one non-whitespace character. Combine several `includes` predicates with `and` or `or` to require or allow multiple tags. A trace with no recorded tags and a trace with an empty tag list behave the same: both satisfy `notExists`, neither satisfies `includes`, `notIncludes`, or `exists`. Use `{ op: 'not', arg: { op: 'includes', ... } }` when untagged traces should also match.
+标签按完整字符串精确比较，且区分大小写。`value` 必须是至少包含一个非空白字符的字符串。可用 `and` 或 `or` 组合多个 `includes` 谓词，分别要求同时具备或允许具备多个标签。未记录标签的 Trace 与标签列表为空的 Trace 行为相同：两者都满足 `notExists`，都不满足 `includes`、`notIncludes` 或 `exists`。如果未标记的 Trace 也应匹配，请使用 `{ op: 'not', arg: { op: 'includes', ... } }`。
 
-`tags`仅在跟踪谓词中可用。`in`, `notIn`, and the comparison operators are rejected for `tags`. Value discovery for `tags` returns each observed tag with the number of qualifying traces that carry it.
+`tags` 只能用于 Trace 谓词。对 `tags` 使用 `in`、`notIn` 或比较运算符会被拒绝。对 `tags` 进行值发现时，会返回每个观察到的标签，以及带有该标签的符合条件 Trace 数量。
 
 #### 按文本过滤 {/* #filter-by-text */}
 
-除了精确比较之外，跨度名称还支持单词匹配。`matches` succeeds when the literal's words appear in the field, in order, as whole words. `notMatches` succeeds when the field exists but doesn't contain those words. This query finds traces with a span whose name contains the words "document search":
+除精确比较外，Span 名称还支持按单词匹配。当字面值中的单词按原顺序、以完整单词形式出现在字段中时，`matches` 成立；字段存在但不包含这些单词时，`notMatches` 成立。以下查询查找名称包含“document search”两个单词的 Span 所属的 Trace：
 
 ```typescript
 const documentSearch = {
@@ -355,42 +355,42 @@ const documentSearch = {
 }
 ```
 
-文字和存储的值都是小写的并分成单词。单词是一系列字母、数字和组合标记，因此任何其他字符，例如标点符号、空格或`_`, separates words. `incorrect` matches `This answer is incorrect.` but not `This was incorrectly formatted.`, and `gpt 5` matches `llm: 'gpt-5'`. A literal with several words must appear as a contiguous phrase in that order. Letters keep their accents: `café` doesn't match `cafe`. Text is composed to Unicode NFC first, so `café` matches whether the accent is stored as part of the letter or as a separate mark, and marks stay inside their word, so `नमस` doesn't match `नमस्ते`. The Turkish `İ` folds to `i`, and a Greek final `ς` equals `σ`. PostgreSQL lowercases letters according to the database locale, so a database created with the `C` locale doesn't fold the case of letters outside ASCII. Use a UTF-8 locale such as `en_US.UTF-8` for consistent results.
+字面值和存储值都会先转为小写，再拆分为单词。单词由连续的字母、数字及组合标记组成；标点、空格或 `_` 等其他字符会分隔单词。因此，`incorrect` 匹配 `This answer is incorrect.`，但不匹配 `This was incorrectly formatted.`；`gpt 5` 匹配 `llm: 'gpt-5'`。多个单词的字面值必须按顺序连续出现。字母保留重音：`café` 不匹配 `cafe`。文本先归一化为 Unicode NFC，因此无论重音作为字母的一部分存储，还是单独存储为标记，`café` 都能匹配；组合标记仍属于对应单词，所以 `नमस` 不匹配 `नमस्ते`。土耳其语 `İ` 会折叠为 `i`，希腊语词尾 `ς` 与 `σ` 等同。PostgreSQL 按数据库区域设置将字母转为小写；使用 `C` 区域设置创建的数据库不会折叠 ASCII 以外字母的大小写。为获得一致结果，请使用 `en_US.UTF-8` 等 UTF-8 区域设置。
 
-|操作员|匹配时间 |
+| 运算符 | 匹配条件 |
 | - | - |
-|`matches` | The field contains the literal's words as a contiguous whole-word phrase |
-| `notMatches` | The field is present and doesn't contain that phrase |
+| `matches` | 字段包含字面值的单词，且这些单词构成连续、完整的词组 |
+| `notMatches` | 字段存在，但不包含该词组 |
 
-文字必须至少包含一个字母或数字；否则请求失败`422 TRACE_QUERY_INVALID`. A missing field satisfies neither operator. Use `{ op: 'not', arg: { op: 'matches', ... } }` when records without the field should also match. Text operators are available on span `name`. Other string fields, numbers, timestamps, tags, and metadata reject them. Substring, wildcard, regular-expression, and fuzzy matching aren't supported, and there is no search across several fields.
+字面值必须至少包含一个字母或数字，否则请求以 `422 TRACE_QUERY_INVALID` 失败。字段缺失时，两个运算符都不匹配。如果缺少该字段的记录也应匹配，请使用 `{ op: 'not', arg: { op: 'matches', ... } }`。文本运算符仅适用于 Span 的 `name`；其他字符串字段、数字、时间戳、标签及元数据都不支持。不支持子字符串、通配符、正则表达式或模糊匹配，也不能跨多个字段搜索。
 
 ### 查询限制 {/* #query-limits */}
 
-当查询超出以下任何限制时，规划器会在存储执行之前拒绝查询：
+若查询超出以下任一限制，规划器会在执行存储操作前拒绝：
 
-|输入 |最大|
+| 输入 | 上限 |
 | - | - |
-|谓词嵌套深度 | 12 个级别 |
-|谓词节点 | 100 | 100
-|有关的`spans` clauses | 8 total |
-| Values in one `in` or `notIn` set | 100 |
-| Comparison literals and membership values | 1,000 total |
-| String literal | 4,096 UTF-8 bytes |
-| Raw predicate path | 128 UTF-8 bytes |
+| 谓词嵌套深度 | 12 层 |
+| 谓词节点数 | 100 |
+| 关联的 `spans` 子句数 | 共 8 个 |
+| 单个 `in` 或 `notIn` 集合中的值 | 100 个 |
+| 比较字面值与成员值 | 共 1,000 个 |
+| 字符串字面值 | 4,096 UTF-8 字节 |
+| 原始谓词路径 | 128 UTF-8 字节 |
 | `page.limit` | 1,000 |
-| HTTP request body | 256 KiB |
+| HTTP 请求体 | 256 KiB |
 
-每个比较文字都算作一个文字。每个成员`in` or `notIn` set also counts as one literal, even when the set is within its per-set limit.
+每个比较字面值计为一个字面值。`in` 或 `notIn` 集合中的每个成员也各计一个，即使该集合未超过自身的数量上限。
 
-Hono 和 Fastify 在 JSON 解析之前强制执行请求正文限制。 Express 和 Elysia 在路由处理程序或存储运行之前拒绝过大的主体，但主机框架可能已经在没有可靠的情况下解析了请求`Content-Length` header. Configure the host application's JSON parser or body limit when you need a hard pre-parse memory ceiling.
+Hono 和 Fastify 在解析 JSON 前强制执行请求体大小限制。Express 和 Elysia 会在路由处理程序或存储执行前拒绝过大的请求体，但如果没有可靠的 `Content-Length` 标头，宿主框架可能已经解析了请求。若需要严格的解析前内存上限，请配置宿主应用的 JSON 解析器或请求体大小限制。
 
-## 查询痕迹 {/* #query-traces */}
+## 查询 Trace {/* #query-traces */}
 
-使用`queryTraces()`, `mastra api trace query`, or `POST /api/observability/traces/query` to list the selected traces. All three accept the same request, which adds ordering and pagination to the [trace selection](#select-traces).
+使用 `queryTraces()`、`mastra api trace query` 或 `POST /api/observability/traces/query` 列出所选 Trace。三种方式接受相同的请求；该请求在 [Trace 选择条件](#select-traces) 上增加排序和分页。
 
-### 使用客户端 SDK 查询轨迹 {/* #query-traces-with-the-client-sdk */}
+### 使用客户端 SDK 查询 Trace {/* #query-traces-with-the-client-sdk */}
 
-此查询查找包含有错误的Tool调用的跟踪：
+以下查询查找包含出错 Tool 调用的 Trace：
 
 ```typescript
 import { MastraClient } from '@mastra/client-js'
@@ -418,9 +418,9 @@ const result = await mastraClient.queryTraces({
 })
 ```
 
-### 使用 CLI 查询跟踪 {/* #query-traces-with-the-cli */}
+### 使用 CLI 查询 Trace {/* #query-traces-with-the-cli */}
 
-将查询作为一个 JSON 参数传递给`mastra api trace query`. Filters and pagination options belong in the JSON input. This command runs the same failed-tool query as the SDK example:
+将查询作为单个 JSON 参数传给 `mastra api trace query`。过滤条件和分页选项都放在 JSON 输入中。以下命令与 SDK 示例执行相同的失败 Tool 查询：
 
 ```bash
 mastra api --url http://localhost:4111 trace query '{
@@ -444,25 +444,25 @@ mastra api --url http://localhost:4111 trace query '{
 }'
 ```
 
-明确的`--url` targets a local Mastra server. Without it, observability commands default to `https://observability.mastra.ai`, even when a local server is running. See [CLI target resolution](/reference/cli/mastra#target-resolution) for authentication and regional endpoints. The target server and configured store must support the requested query capabilities.
+显式指定的 `--url` 指向本地 Mastra 服务器。如果省略，即使本地服务器正在运行，可观测性命令仍默认连接 `https://observability.mastra.ai`。身份验证和区域端点详见 [CLI 目标解析](/reference/cli/mastra#target-resolution)。目标服务器及配置的存储必须支持所请求的查询能力。
 
-使用以下命令检查命令：
+使用以下命令检查该命令：
 
 ```bash
 mastra api trace query --help
 ```
 
-对于本地 Mastra 服务器，请使用以下命令检查其请求和响应架构：
+对于本地 Mastra 服务器，使用以下命令查看请求和响应 schema：
 
 ```bash
 mastra api --url http://localhost:4111 trace query --schema
 ```
 
-Mastra 平台当前不公开所使用的架构端点`--schema`. Use [Request fields](#request-fields) and [Fields and operators](#fields-and-operators) to construct queries for either target. To find fields and values recorded in your project, use [field and value discovery](#discover-fields-and-values).
+Mastra Platform 目前不提供 `--schema` 使用的 schema 端点。针对任一目标构造查询时，请参阅[请求字段](#request-fields)及[字段和运算符](#fields-and-operators)。要查找项目中已记录的字段和值，请使用[字段和值发现](#discover-fields-and-values)。
 
 ### 发送 HTTP 请求 {/* #send-an-http-request */}
 
-发送相同的查询作为 JSON 请求正文：
+将同一查询作为 JSON 请求体发送：
 
 ```bash
 curl --request POST \
@@ -492,22 +492,22 @@ curl --request POST \
 
 ### 请求字段 {/* #request-fields */}
 
-|领域 |必填|描述 |
+| 字段 | 必填 | 说明 |
 | - | - | - |
-|`timeRange` | Yes | Trace start-time boundary. `from` is inclusive and `to` is exclusive. Both values must be ISO timestamps, and `from` must be earlier than `to`. |
-| `where` | No | Recursive trace predicate. Supports scalar conditions and `spans.some` or `spans.none` clauses. |
-| `orderBy` | No | One item ordering results by `startedAt`, `endedAt`, `timeToFirstChunkMs`, or `timeToFirstTokenMs`, in `asc` or `desc` order. Defaults to `startedAt desc`. Not accepted in delta mode. |
-| `page` | No | `{ limit, after }`. `limit` defaults to 100 and has a maximum of 1000. Pass the opaque `page.next` value as `after`. |
-| `pagination` | No | Numbered pages: `{ page, perPage }`. Defaults to page 0 and 10 results. `perPage` has a maximum of 100. |
-| `mode` | No | Set to `'delta'` to poll using a delta cursor instead of `page` or `pagination`. |
-| `after` | No | Delta mode only. Opaque `deltaCursor` from a numbered page or previous poll. Omit to establish the current watermark. |
-| `limit` | No | Delta mode only. Maximum results per batch. Defaults to 10 and has a maximum of 100. |
+| `timeRange` | 是 | Trace 开始时间范围。`from` 为闭区间端点，`to` 为开区间端点。两者必须是 ISO 时间戳，且 `from` 必须早于 `to`。 |
+| `where` | 否 | 递归的 Trace 谓词，支持标量条件及 `spans.some` 或 `spans.none` 子句。 |
+| `orderBy` | 否 | 单元素数组，按 `startedAt`、`endedAt`、`timeToFirstChunkMs` 或 `timeToFirstTokenMs` 以 `asc` 或 `desc` 排序。默认为 `startedAt desc`。增量模式不接受此字段。 |
+| `page` | 否 | `{ limit, after }`。`limit` 默认为 100，最大为 1000。将不透明的 `page.next` 值作为 `after` 传入。 |
+| `pagination` | 否 | 页码分页：`{ page, perPage }`。默认第 0 页、每页 10 条结果。`perPage` 最大为 100。 |
+| `mode` | 否 | 设为 `'delta'`，使用增量游标轮询，代替 `page` 或 `pagination`。 |
+| `after` | 否 | 仅用于增量模式。传入页码分页结果或上次轮询返回的不透明 `deltaCursor`；省略时建立当前水位。 |
+| `limit` | 否 | 仅用于增量模式。每批结果的上限，默认 10，最大 100。 |
 
-未知字段将被拒绝。请求无法选择投影、声明连接、请求计数或度量或控制授权。使用[`aggregateTraces()`](#aggregate-traces) for counts and measures. Request bodies are limited to 256 KiB.
+未知字段会被拒绝。请求不能选择投影、声明连接、请求计数或指标，也不能控制授权。计数和指标请使用 [`aggregateTraces()`](#aggregate-traces)。请求体上限为 256 KiB。
 
-### 回应 {/* #responses */}
+### 响应 {/* #responses */}
 
-使用键集分页的查询返回轻量级完成的跟踪和下一页的光标：
+使用键集分页的查询会返回已完成 Trace 的简要信息，以及下一页游标：
 
 ```json
 {
@@ -542,15 +542,15 @@ curl --request POST \
 }
 ```
 
-响应包括`name`, `createdAt`, identity fields, `metadata`, and input/output/error previews. Supported nullable fields remain present with `null` when no value was recorded. Fields that require an optional store feature are omitted when the store lacks that feature. Previews summarize payloads; retrieve the full trace for complete input, output, and error details.
+响应包含 `name`、`createdAt`、身份字段、`metadata`，以及输入、输出和错误的预览。受支持的可空字段即使没有记录值，也会以 `null` 出现。若存储缺少可选功能，依赖该功能的字段会被省略。预览仅概括数据内容；完整输入、输出和错误详情需获取完整 Trace。
 
-`timeToFirstChunkMs`和`timeToFirstTokenMs` are present only when the configured store supports them. See [Filter and sort by time to first chunk or token](#filter-and-sort-by-time-to-first-chunk-or-token). `outcome`, `stopReason`, and `stopReasonContext` read the root span and are present only when the store supports the `traceQueryOutcomeFields` capability. They're `null` when the root span didn't record them. See [Filter by outcome](#filter-by-outcome).
+只有配置的存储支持时，结果才包含 `timeToFirstChunkMs` 和 `timeToFirstTokenMs`。参阅[按首个数据块或 token 的耗时过滤和排序](#filter-and-sort-by-time-to-first-chunk-or-token)。`outcome`、`stopReason` 和 `stopReasonContext` 读取根 Span；仅当存储支持 `traceQueryOutcomeFields` 能力时才会出现。若根 Span 未记录这些值，则返回 `null`。参阅[按结束结果过滤](#filter-by-outcome)。
 
-响应不包括与谓词匹配的相关范围。使用[`getTrace()`](/reference/client-js/observability#getting-a-specific-trace) to load the full trace after selecting a result.
+响应不包含匹配谓词的关联 Span。选中结果后，使用 [`getTrace()`](/reference/client-js/observability#getting-a-specific-trace) 加载完整 Trace。
 
 #### CLI 响应 {/* #cli-responses */}
 
-CLI 将 API 响应包装在`data`:
+CLI 将 API 响应包在 `data` 中：
 
 ```json
 {
@@ -561,29 +561,29 @@ CLI 将 API 响应包装在`data`:
 }
 ```
 
-读取结果来自`data.traces`. Pagination metadata is available at `data.page.next` for keyset queries, `data.pagination` for numbered pages, and `data.deltaCursor` and `data.delta.hasMore` for delta polling.
+从 `data.traces` 读取结果。键集查询的分页元数据位于 `data.page.next`，页码分页位于 `data.pagination`；增量轮询则使用 `data.deltaCursor` 和 `data.delta.hasMore`。
 
-每个 CLI 调用都会进行一次查询。要获取另一个键集页面，请传递`data.page.next` as `page.after` in the next request. For delta polling, repeat the command with `data.deltaCursor` as the top-level `after` value. Keep the same time range and predicate. See [Pagination and errors](#pagination-and-errors) for mode-specific behavior and polling limitations.
+每次 CLI 调用只执行一次查询。要获取下一键集页，在下次请求中将 `data.page.next` 作为 `page.after` 传入。增量轮询时，重复执行命令，并将 `data.deltaCursor` 作为顶层 `after` 值。保持相同的时间范围和谓词。各模式的行为及轮询限制详见[分页与错误](#pagination-and-errors)。
 
-要检查选定的迹线，请使用`mastra api --url http://localhost:4111 trace get <traceId> --verbose`. Use the same target and authentication as the query.
+要查看所选 Trace，使用 `mastra api --url http://localhost:4111 trace get <traceId> --verbose`。目标和身份验证方式应与查询相同。
 
-### 分页和错误 {/* #pagination-and-errors */}
+### 分页与错误 {/* #pagination-and-errors */}
 
 #### 选择分页模式 {/* #choose-a-pagination-mode */}
 
-跟踪查询支持三种互斥模式：
+Trace 查询支持三种互斥模式：
 
-|模式|请求字段 |响应元数据 |
+| 模式 | 请求字段 | 响应元数据 |
 | - | - | - |
-|键集，默认 |`page: { limit, after }` | `page: { next }` |
-| Numbered pages | `pagination: { page, perPage }` | `pagination: { total, page, perPage, hasMore }` and, when delta polling is supported, `deltaCursor` |
-| Delta polling | `mode: 'delta'`, optional top-level `after` and `limit` | `delta: { limit, hasMore }` and `deltaCursor` |
+| 键集分页（默认） | `page: { limit, after }` | `page: { next }` |
+| 页码分页 | `pagination: { page, perPage }` | `pagination: { total, page, perPage, hasMore }`；支持增量轮询时还包含 `deltaCursor` |
+| 增量轮询 | `mode: 'delta'`，可选顶层 `after` 和 `limit` | `delta: { limit, hasMore }` 和 `deltaCursor` |
 
-编号页是从零开始的。在每个请求中，它们的总数和行数的读取都是一致的。不要合并`page`, `pagination`, or delta mode. Top-level `after` and `limit` are accepted only in delta mode.
+页码从 0 开始计数。每个请求内读取的总数与各行保持一致。不要混用 `page`、`pagination` 或增量模式。顶层 `after` 和 `limit` 只在增量模式中接受。
 
-#### 加载编号页面后进行轮询 {/* #poll-after-loading-a-numbered-page */}
+#### 加载页码分页结果后轮询 {/* #poll-after-loading-a-numbered-page */}
 
-使用编号的响应`deltaCursor` to replace the numbered-page-to-delta-polling workflow of `listTracesLight()`. Results use `traces` instead of `spans` and contain completed traces only. The configured store must support delta polling.
+使用页码分页响应中的 `deltaCursor`，取代 `listTracesLight()` 从页码分页切换到增量轮询的流程。结果使用 `traces` 而不是 `spans`，且仅包含已完成的 Trace。配置的存储必须支持增量轮询。
 
 ```typescript
 const timeRange = {
@@ -617,45 +617,45 @@ async function poll() {
 await poll()
 ```
 
-保持`after` and call `poll()` again at your application's polling interval. A trace can appear in the initial page and a later batch, or in multiple batches, so merge results by `traceId`. To load historical traces omitted from the initial page, request the remaining numbered pages.
+保留 `after`，按应用的轮询间隔再次调用 `poll()`。同一个 Trace 可能同时出现在初始页和后续批次，或出现在多个批次，因此应按 `traceId` 合并结果。若需加载初始页未包含的历史 Trace，请继续请求剩余页码。
 
-没有 Delta 请求`after` returns an empty array and establishes the current cursor. It doesn't return historical matches. Always retain the returned cursor, including for empty batches. `hasMore` means another matching trace exists beyond the batch limit. Continue immediately while it's `true`.
+不带 `after` 的增量请求会返回空数组，并建立当前游标；它不会返回历史匹配结果。始终保留返回的游标，即使该批次为空。`hasMore` 表示超过本批上限后仍有匹配的 Trace；为 `true` 时应立即继续请求。
 
-增量排序使用存储摄取水印和特定于适配器的仲裁器，因此匹配时间戳不会使光标变得模糊。不要通过`orderBy` in delta mode. Keyset and delta cursors aren't interchangeable, and delta cursors can't move between storage adapters.
+增量排序使用存储摄取水位及适配器特定的并列排序规则，因此相同时间戳不会使游标产生歧义。增量模式中不要传入 `orderBy`。键集游标与增量游标不可互换，增量游标也不能跨存储适配器使用。
 
-保持相同的标准化`where` predicate and exact `timeRange` bounds for every poll. The range continues to select root `startedAt`, even when a trace completes later. Changing `timeRange.to` to the current time invalidates the cursor. Reload a numbered page and use its cursor whenever the selection or authorization scope changes. You can change the batch limit without restarting.
+每次轮询都应保持相同的规范化 `where` 谓词和完全一致的 `timeRange` 边界。即使 Trace 后来才完成，时间范围仍按根 Span 的 `startedAt` 选择记录。将 `timeRange.to` 改为当前时间会使游标失效。选择条件或授权范围变化时，应重新加载页码分页结果并使用新游标。批次上限可以调整，无需重新开始。
 
-可以返回新完成的根和光标后完成的根。选择根时会评估相关跨度，但稍后相关记录写入并不能保证再次发出跟踪。已删除的跟踪和停止匹配的跟踪不会作为删除或逻辑删除返回。当您需要协调这些更改时，请刷新编号页面。
+游标建立后新增的已完成根 Span，以及之后才完成的根 Span，都可能返回。关联 Span 在选择根 Span 时参与评估，但后续写入关联记录并不保证该 Trace 再次返回。已删除或不再匹配的 Trace 不会以删除事件或墓碑记录形式返回。如需对账这些变化，请刷新页码分页结果。
 
-ClickHouse 轮询是尽力而为。它的增量索引和跟踪记录使用单独的物化视图表。并发查询可以观察到一个表在另一个表之前的插入，如中所述[ClickHouse's materialized-view visibility rules](https://github.com/ClickHouse/clickhouse-docs/blob/main/knowledgebase/are_materialized_views_inserted_asynchronously.mdx). A poll can advance past an index entry before the matching trace becomes visible and miss that trace in later polls. Reload numbered pages periodically to reconcile these gaps.
+ClickHouse 轮询尽力而为。增量索引与 Trace 记录使用不同的物化视图表。并发查询可能先看到一张表中的插入，再看到另一张表中的插入，详见 [ClickHouse 的物化视图可见性规则](https://github.com/ClickHouse/clickhouse-docs/blob/main/knowledgebase/are_materialized_views_inserted_asynchronously.mdx)。轮询可能在匹配 Trace 可见前越过索引条目，导致后续轮询漏掉该 Trace。应定期重新加载页码分页结果，以弥补这些缺口。
 
-ClickHouse 的增量索引保留两天的事件，并且不会回填历史行。在轮询中断时间超过此保留窗口后重新加载已编号的页面。增量轮询不是持久的更改源，并且不能保证传送每个匹配的跟踪。
+ClickHouse 增量索引保留两天事件，且不会回填历史行。轮询中断超过该保留窗口后，应重新加载页码分页结果。增量轮询并非持久变更流，无法保证交付每个匹配的 Trace。
 
-#### 键集顺序和错误 {/* #keyset-ordering-and-errors */}
+#### 键集排序与错误 {/* #keyset-ordering-and-errors */}
 
-排序是确定性的。跟踪排序追加`traceId` ascending as a tie-breaker.
+排序是确定性的。Trace 排序会追加按 `traceId` 升序排列作为并列时的次级排序条件。
 
-键集游标绑定到操作、接受的规范化查询和排序。更改跟踪选择、谓词或排序返回后重新使用键集光标`409`.
+键集游标绑定操作、已接受的规范化查询和排序规则。更改 Trace 选择条件、谓词或排序后复用游标，会返回 `409`。
 
-编号页切换游标和增量游标也绑定授权状态。对调用者角色或权限的更改使这些游标无效并返回`409`. If a delta poll returns `409`, reload the numbered pages and resume polling with the new `deltaCursor`. A malformed cursor returns `400`.
+页码分页交接游标与增量游标也绑定授权状态。调用者的角色或权限变化会使这些游标失效并返回 `409`。若增量轮询返回 `409`，请重新加载页码分页结果，并使用新的 `deltaCursor` 恢复轮询。格式错误的游标返回 `400`。
 
-游标分页是确定性的，但它不是数据库快照。在页面请求之间写入的跟踪或替换信号可以更改后面的页面。
+游标分页的顺序是确定的，但它并非数据库快照。两次分页请求之间写入的 Trace 或替换信号，可能改变后续页面。
 
-PostgreSQL 和 ClickHouse 默认在 15 秒后停止跟踪查询并返回`504` when the database timeout is exceeded. Set `observability.traceQueryTimeoutMs` on `PostgresStoreVNext`, or `observability.traceQuery.timeoutMs` on `ClickhouseStoreVNext`, to an integer from 1 through 300,000 milliseconds to change the timeout. DuckDB doesn't currently provide query-scoped timeout or cancellation through its driver wrapper, so this `504` guarantee doesn't apply to DuckDB.
+PostgreSQL 和 ClickHouse 默认在 15 秒后终止 Trace 查询，超过数据库超时时间则返回 `504`。可在 `PostgresStoreVNext` 上设置 `observability.traceQueryTimeoutMs`，或在 `ClickhouseStoreVNext` 上设置 `observability.traceQuery.timeoutMs`，以 1 至 300,000 毫秒的整数调整超时时间。DuckDB 的驱动封装目前不支持查询级超时或取消，因此上述 `504` 保证不适用于 DuckDB。
 
-|状态 |意义|
+| 状态码 | 含义 |
 | - | - |
-|`400` | Malformed JSON or malformed cursor. |
-| `409` | The cursor doesn't match the query. |
-| `413` | The request body exceeds 256 KiB. |
-| `422` | The JSON is well formed, but the request is structurally or semantically invalid. The response includes stable issue codes and paths. Discovery validation uses `TRACE_QUERY_INVALID`. |
-| `501` | The installed Core or configured observability store doesn't support the requested operation. Discovery returns `TRACE_QUERY_DISCOVERY_UNSUPPORTED` unless Core provides the discovery contract and the store implements both field and value discovery. |
-| `503` | Discovery exceeded a backend memory or resource budget and returned `TRACE_QUERY_RESOURCE_LIMIT`. |
-| `504` | A PostgreSQL or ClickHouse query exceeded its configured database execution timeout. Discovery returns `TRACE_QUERY_EXECUTION_TIMEOUT`. |
+| `400` | JSON 或游标格式错误。 |
+| `409` | 游标与查询不匹配。 |
+| `413` | 请求体超过 256 KiB。 |
+| `422` | JSON 格式正确，但请求在结构或语义上无效。响应包含稳定的问题代码及路径。发现接口的校验使用 `TRACE_QUERY_INVALID`。 |
+| `501` | 已安装的 Core 或配置的可观测性存储不支持请求的操作。除非 Core 提供发现契约且存储同时实现字段和值发现，否则发现接口返回 `TRACE_QUERY_DISCOVERY_UNSUPPORTED`。 |
+| `503` | 发现接口超出后端内存或资源预算，返回 `TRACE_QUERY_RESOURCE_LIMIT`。 |
+| `504` | PostgreSQL 或 ClickHouse 查询超出配置的数据库执行超时时间。发现接口返回 `TRACE_QUERY_EXECUTION_TIMEOUT`。 |
 
-## 查询跨度 {/* #query-spans */}
+## 查询 Span {/* #query-spans */}
 
-使用`querySpans()`, `mastra api span query`, or `POST /api/observability/spans/query` to return completed span summaries across traces. It requires a positive ISO timestamp range over span start time and supports cursor pagination. This example finds tool calls that took at least one second:
+使用 `querySpans()`、`mastra api span query` 或 `POST /api/observability/spans/query`，可跨 Trace 返回已完成 Span 的摘要。请求必须提供针对 Span 开始时间的有效 ISO 时间戳范围，并支持游标分页。以下示例查找耗时至少一秒的 Tool 调用：
 
 ```typescript
 const result = await mastraClient.querySpans({
@@ -678,27 +678,27 @@ const result = await mastraClient.querySpans({
 console.log(result.spans)
 ```
 
-页面默认为 100 行，最多允许 1,000 行。响应是`{ spans, page: { next } }`, without a total count. Ordering accepts exactly one of `startedAt`, `endedAt`, `durationMs`, `timeToFirstChunkMs`, `timeToFirstTokenMs`, `model`, or `provider`, ascending or descending, and defaults to descending start time. Missing sort values appear last in both directions. Model and provider sorting is case-sensitive.
+每页默认 100 行，最多 1,000 行。响应格式为 `{ spans, page: { next } }`，不包含总数。排序必须且只能指定 `startedAt`、`endedAt`、`durationMs`、`timeToFirstChunkMs`、`timeToFirstTokenMs`、`model` 或 `provider` 中的一项，并可选择升序或降序；默认按开始时间降序。缺失的排序值在两个方向上都排在最后。按模型和提供商排序时区分大小写。
 
-|领域 |运营商|
+| 字段 | 运算符 |
 | - | - |
 |`traceId`, `spanId`, `parentSpanId`, `threadId` | `eq`, `ne`, `in`, `notIn`, `exists`, `notExists` |
-| `organizationId`, `resourceId`, `runId`, `sessionId`, `userId`, `requestId`, `serviceName`, `experimentId`, `environment`, `executionSource` | Same string operators |
-| Entity, parent entity and root entity `Type`, `Id`, `Name`, `VersionId` fields, such as `parentEntityId` | Same string operators |
-| `name`, `spanType`, `status` | Same string operators; `name` also accepts `matches` / `notMatches` for normalized whole words and phrases |
-| `model`, `provider`, `outcome`, `stopReason` | Same string operators |
-| `startedAt`, `endedAt`, `durationMs`, `timeToFirstChunkMs`, `timeToFirstTokenMs` | Comparisons, membership and presence |
+| `organizationId`, `resourceId`, `runId`, `sessionId`, `userId`, `requestId`, `serviceName`, `experimentId`, `environment`, `executionSource` | 同上所列字符串运算符 |
+| 实体、父实体和根实体的 `Type`、`Id`、`Name`、`VersionId` 字段，例如 `parentEntityId` | 同上所列字符串运算符 |
+| `name`, `spanType`, `status` | 同上所列字符串运算符；`name` 还支持 `matches` / `notMatches`，用于匹配归一化的完整单词和词组 |
+| `model`, `provider`, `outcome`, `stopReason` | 同上所列字符串运算符 |
+| `startedAt`, `endedAt`, `durationMs`, `timeToFirstChunkMs`, `timeToFirstTokenMs` | 比较、成员关系及是否存在 |
 | `error` | `exists`, `notExists` |
 
-将谓词与`and`, `or` and `not`. Membership uses `{ op: 'in', value: { path: 'spanType' }, set: ['agent_run', 'tool_call'] }`. A span's status is `error` when it has an error and `success` otherwise.
+使用 `and`、`or` 和 `not` 组合谓词。成员关系使用 `{ op: 'in', value: { path: 'spanType' }, set: ['agent_run', 'tool_call'] }`。Span 有错误时，其状态为 `error`；否则为 `success`。
 
-每个摘要包括身份、上下文、实体沿袭、状态、时间戳、`durationMs`, model/provider and input/output/error previews.
+每条摘要包含身份、上下文、实体谱系、状态、时间戳、`durationMs`、模型和提供商，以及输入、输出和错误的预览。
 
-查看`capabilities.spanQueryContextFields` from `getObservabilityCapabilities()` before filtering on `traceId`, `spanId`, `parentSpanId`, `threadId`, `resourceId`, `requestId`, `serviceName`, `experimentId`, `environment`, `executionSource`, or the parent/root entity `Type`, `Id`, and `Name` fields. If this capability is missing or false, requests using these filters return a structured `422` error. It doesn't gate `runId`, `sessionId`, `userId`, `organizationId`, or entity `VersionId` filters.
+过滤 `traceId`、`spanId`、`parentSpanId`、`threadId`、`resourceId`、`requestId`、`serviceName`、`experimentId`、`environment`、`executionSource` 或父级／根实体的 `Type`、`Id`、`Name` 字段前，请检查 `getObservabilityCapabilities()` 返回的 `capabilities.spanQueryContextFields`。如果该能力缺失或为 false，使用这些过滤条件会返回结构化的 `422` 错误。此能力不限制 `runId`、`sessionId`、`userId`、`organizationId` 或实体的 `VersionId` 过滤条件。
 
-查看`capabilities.spanQueryModelFields` before filtering on `model` or `provider`. These filters read only the span's `model` and `provider` columns. `@mastra/observability` fills the columns only when a span has both a `model` and a `provider`, and versions before it filled them left them empty. Filters treat empty columns as missing, so `eq`, `in` and `exists` don't match those spans while `ne`, `notIn` and `notExists` do. Results still return `model` and `provider` for them from the span's attributes. Trace query `spans.some` filters fall back to the attributes and do match those spans. With an older adapter, requests using these filters return `501`.
+按 `model` 或 `provider` 过滤前，请检查 `capabilities.spanQueryModelFields`。这些过滤条件只读取 Span 的 `model` 和 `provider` 列。只有 Span 同时具有 `model` 和 `provider` 时，`@mastra/observability` 才会填充这些列；更早版本写入的 Span 对应列为空。过滤时，空列视为缺失，因此 `eq`、`in` 和 `exists` 不匹配此类 Span，而 `ne`、`notIn` 和 `notExists` 会匹配。结果仍可从 Span 属性中返回其 `model` 和 `provider`。Trace 查询中的 `spans.some` 过滤条件会回退读取属性，因此可以匹配此类 Span。旧版适配器收到使用这些过滤条件的请求时返回 `501`。
 
-查看`capabilities.spanQueryOutcomeFields` before filtering or grouping spans by `outcome` and `stopReason`. Rows then also include `outcome`, `stopReason` and `stopReasonContext`. These record how the span ended, separately from `status`, and are `null` when the span didn't record them. A missing outcome means "not recorded", not success. `stopReasonContext` can't be used in filters and is omitted when the store lacks `span-query-outcome-fields`. For traces, `capabilities.traceQueryOutcomeFields` enables the same fields on `queryTraces()` and `aggregateTraces()`, where they read the root span. With an older adapter, requests using these fields return `501`:
+按 `outcome` 和 `stopReason` 过滤 Span 或对其分组前，请检查 `capabilities.spanQueryOutcomeFields`。随后结果行也会包含 `outcome`、`stopReason` 和 `stopReasonContext`。这些字段记录 Span 的结束方式及原因，与 `status` 不同；未记录时为 `null`。缺少 结束結果表示“未记录”，不表示成功。`stopReasonContext` 不能用于过滤，且存储缺少 `span-query-outcome-fields` 时会被省略。对于 Trace，`capabilities.traceQueryOutcomeFields` 在 `queryTraces()` 和 `aggregateTraces()` 中启用相同字段，读取根 Span 的值。旧版适配器收到使用这些字段的请求时返回 `501`：
 
 ```typescript
 const { capabilities } = await mastraClient.getObservabilityCapabilities()
@@ -712,21 +712,21 @@ if (capabilities.spanQueryOutcomeFields) {
 }
 ```
 
-看[Filter by outcome](/reference/observability/tracing/advanced-queries#filter-by-outcome) for trace-scope and `spans.some` semantics.
+Trace 范围和 `spans.some` 的语义详见[按结束结果过滤](/reference/observability/tracing/advanced-queries#filter-by-outcome)。
 
-DuckDB 返回`null` for parent/root entity type, ID and name on spans written before `@mastra/duckdb` stored them. Equality filters on these fields don't match those spans.
+对于 `@mastra/duckdb` 开始存储父级／根实体类型、ID 和名称之前写入的 Span，DuckDB 会对这些字段返回 `null`。这些字段的相等过滤条件不会匹配此类 Span。
 
-CLI 在以下情况下返回相同的响应`data`: read `data.spans` and pass `data.page.next` as `page.after`. Span queries support only keyset pagination, so reuse the same time range, predicate, and ordering when following the cursor. A malformed cursor returns `400`, while a cursor that doesn't match the query or scope returns `409`.
+CLI 在 `data` 中返回相同响应：从 `data.spans` 读取结果，并将 `data.page.next` 作为 `page.after` 传入。Span 查询只支持键集分页，因此沿游标翻页时须复用相同的时间范围、谓词和排序。格式错误的游标返回 `400`；与查询或范围不匹配的游标返回 `409`。
 
-使用`mastra api trace span <traceId> <spanId>` or `getSpan(traceId, spanId)` to retrieve a selected span's full details.
+使用 `mastra api trace span <traceId> <spanId>` 或 `getSpan(traceId, spanId)` 获取所选 Span 的完整详情。
 
-## 聚合痕迹 {/* #aggregate-traces */}
+## 聚合 Trace {/* #aggregate-traces */}
 
-使用`aggregateTraces()` or `POST /api/observability/traces/aggregate` to count the selected traces and compute measures over them. Add `groupBy` to split the result by up to two dimensions, and `interval` to split each group into time buckets. The response contains one row per group, or one row per group and bucket.
+使用 `aggregateTraces()` 或 `POST /api/observability/traces/aggregate` 统计所选 Trace 并计算指标。通过 `groupBy` 最多按两个维度分组，通过 `interval` 将每组划分为时间桶。响应中每组一行；使用时间桶时，每组每桶一行。
 
-### 使用客户端 SDK 聚合跟踪 {/* #aggregate-traces-with-the-client-sdk */}
+### 使用客户端 SDK 聚合 Trace {/* #aggregate-traces-with-the-client-sdk */}
 
-此请求根据一周内的数量、错误率和延迟对Agent进行比较：
+以下请求比较一周内各 Agent 的调用量、错误率和延迟：
 
 ```typescript
 import { MastraClient } from '@mastra/client-js'
@@ -750,11 +750,11 @@ if (capabilities.traceAggregate) {
 }
 ```
 
-客户端重试服务器错误，例如`queryTraces()`, but doesn't retry `422` validation errors.
+客户端会像 `queryTraces()` 一样重试服务器错误，但不会重试 `422` 校验错误。
 
 ### 发送聚合 HTTP 请求 {/* #send-an-aggregate-http-request */}
 
-以 JSON 正文形式发送相同的请求：
+将同一请求作为 JSON 请求体发送：
 
 ```bash
 curl --request POST \
@@ -776,81 +776,81 @@ curl --request POST \
 
 ### 聚合请求字段 {/* #aggregate-request-fields */}
 
-|领域 |必填|描述 |
+| 字段 | 必填 | 说明 |
 | - | - | - |
-|`timeRange` | Yes | Trace start-time boundary, as in [Select traces](#select-traces). The range can span up to 365 days. |
-| `where` | No | Trace predicate, as in [Select traces](#select-traces). |
-| `measures` | Yes | One or more distinct [measure names](#measures). |
-| `groupBy` | No | Up to two distinct [dimensions](#dimensions). Defaults to `[]`, which treats all selected traces as one group. With `interval`, that group has one row per non-empty bucket. No matching traces returns no rows. |
-| `interval` | No | Bucket width: `'1m'`, `'5m'`, `'15m'`, `'1h'`, or `'1d'`. See [Time buckets](#time-buckets). |
-| `having` | No | Scalar predicate over measures that removes groups after grouping. See [Filter and order groups](#filter-and-order-groups). |
-| `orderBy` | No | `{ field, direction }`. `field` is a requested measure, `count`, or a `groupBy` dimension, and `direction` is `asc` or `desc`. Defaults to `count desc`. |
-| `limit` | No | Maximum number of groups. Defaults to 100 and has a maximum of 1,000. |
+| `timeRange` | 是 | Trace 开始时间范围，与[选择 Trace](#select-traces)相同。最长 365 天。 |
+| `where` | 否 | Trace 谓词，与[选择 Trace](#select-traces)相同。 |
+| `measures` | 是 | 一个或多个互不重复的[指标名称](#measures)。 |
+| `groupBy` | 否 | 最多两个互不重复的[维度](#dimensions)。默认为 `[]`，即把所有选中 Trace 视为一组。设置 `interval` 后，该组的每个非空时间桶各有一行；没有匹配 Trace 时不返回任何行。 |
+| `interval` | 否 | 时间桶宽度：`'1m'`、`'5m'`、`'15m'`、`'1h'` 或 `'1d'`。参阅[时间桶](#time-buckets)。 |
+| `having` | 否 | 根据指标过滤分组的标量谓词，在分组后执行。参阅[过滤和排序分组](#filter-and-order-groups)。 |
+| `orderBy` | 否 | `{ field, direction }`。`field` 可以是请求的指标、`count` 或 `groupBy` 维度；`direction` 为 `asc` 或 `desc`。默认为 `count desc`。 |
+| `limit` | 否 | 最多返回的分组数。默认 100，最大 1,000。 |
 
-未知字段将被拒绝。聚合不分页。缩小选择范围，或者通过不同的衡量标准进行排名，当`truncated` is `true`.
+未知字段会被拒绝。聚合结果不支持分页。若 `truncated` 为 `true`，请缩小选择范围或改用其他指标排序。
 
-### 方面 {/* #dimensions */}
+### 维度 {/* #dimensions */}
 
-维度读取每个选定迹线的当前根跨度：
+维度读取每个所选 Trace 的当前根 Span：
 
-|尺寸|笔记|
+| 维度 | 说明 |
 | - | - |
-|`entityType`, `entityName`, `environment`, `status`, `serviceName`, `executionSource` | Root span attributes. |
-| `threadId`, `resourceId`, `userId`, `sessionId`, `organizationId`, `experimentId` | Context identifiers recorded on the root span. |
-| `name`, `spanType` | Root span name and type. Requires the `traceQueryRootSpanFields` capability. |
-| `entityId` | Root span entity ID. Groups traces that have no `entityName`, such as scorer runs. Requires the `traceQueryRootEntityId` capability. |
-| `outcome`, `stopReason` | How the root span ended and why. Traces whose root span didn't record a value group as `null`. Requires the `traceQueryOutcomeFields` capability. |
-| `metadata.<key>` | One non-empty top-level metadata key. Values are trimmed. Missing, empty, and non-string values group as `null`. |
+| `entityType`, `entityName`, `environment`, `status`, `serviceName`, `executionSource` | 根 Span 属性。 |
+| `threadId`, `resourceId`, `userId`, `sessionId`, `organizationId`, `experimentId` | 记录在根 Span 上的上下文标识符。 |
+| `name`, `spanType` | 根 Span 的名称和类型。需要 `traceQueryRootSpanFields` 能力。 |
+| `entityId` | 根 Span 的实体 ID。可对缺少 `entityName` 的 Trace（如评分器运行）分组。需要 `traceQueryRootEntityId` 能力。 |
+| `outcome`, `stopReason` | 根 Span 的结束方式和原因。根 Span 未记录值的 Trace 会归入值为 `null` 的分组。需要 `traceQueryOutcomeFields` 能力。 |
+| `metadata.<key>` | 单个非空的顶层元数据键。值会去除首尾空白；缺失、空值或非字符串值归为 `null`。 |
 
-每个维度除了`executionSource` is also a trace-scope `where` field, so you can drill into a group by adding its values to the predicate. `traceId`, `spanId`, `runId`, and `requestId` aren't groupable. Traces with no value for a dimension form their own group with a `null` value. To select that group in a query, use `notExists` for the dimension instead of `eq` with `literal: null`.
+除 `executionSource` 外，每个维度也是 Trace 范围的 `where` 字段，因此可将其值加入谓词，深入查看某个分组。`traceId`、`spanId`、`runId` 和 `requestId` 不能用于分组。维度无值的 Trace 会形成一个值为 `null` 的独立分组。若要在查询中选择该分组，请对该维度使用 `notExists`，不要对 `literal: null` 使用 `eq`。
 
-### 措施 {/* #measures */}
+### 指标 {/* #measures */}
 
-|测量 |价值|
+| 指标 | 值 |
 | - | - |
-|`count` | Number of selected traces. |
-| `countDistinct.<field>` | Number of distinct non-null values of a dimension or `traceId`, such as `countDistinct.userId`. |
-| `duration.avg`, `duration.min`, `duration.max` | Root span duration in milliseconds. |
-| `duration.p50`, `duration.p90`, `duration.p95`, `duration.p99` | Root span duration percentile in milliseconds. Percentiles can be approximate, depending on the store. |
-| `timeToFirstChunk.avg`, `timeToFirstChunk.min`, `timeToFirstChunk.max` | Root span time to first chunk in milliseconds. Requires the `aggregateTimeToFirstMeasures` capability. |
-| `timeToFirstChunk.p50`, `timeToFirstChunk.p90`, `timeToFirstChunk.p95`, `timeToFirstChunk.p99` | Root span time to first chunk percentile in milliseconds. Requires the `aggregateTimeToFirstMeasures` capability. |
-| `timeToFirstChunk.count` | Number of traces whose root span recorded a time to first chunk. Requires the `aggregateTimeToFirstMeasures` capability. |
-| `timeToFirstToken.avg`, `timeToFirstToken.min`, `timeToFirstToken.max` | Root span time to first token in milliseconds. Requires the `aggregateTimeToFirstMeasures` capability. |
-| `timeToFirstToken.p50`, `timeToFirstToken.p90`, `timeToFirstToken.p95`, `timeToFirstToken.p99` | Root span time to first token percentile in milliseconds. Requires the `aggregateTimeToFirstMeasures` capability. |
-| `timeToFirstToken.count` | Number of traces whose root span recorded a time to first token. Requires the `aggregateTimeToFirstMeasures` capability. |
-| `errorCount` | Number of traces whose root span recorded an error. |
-| `errorRate` | `errorCount` divided by `count`, from 0 to 1. |
-| `tokens.input.sum`, `tokens.input.avg` | Input tokens. |
-| `tokens.output.sum`, `tokens.output.avg` | Output tokens. |
-| `tokens.total.sum`, `tokens.total.avg` | Input plus output tokens. |
-| `tokens.reasoning.sum`, `tokens.reasoning.avg` | Reasoning output tokens. |
-| `tokens.cached.sum`, `tokens.cached.avg` | Input tokens read from the provider's cache. |
-| `cost.sum`, `cost.avg` | Estimated model cost. |
+| `count` | 所选 Trace 的数量。 |
+| `countDistinct.<field>` | 某个维度或 `traceId` 中不同非 null 值的数量，例如 `countDistinct.userId`。 |
+| `duration.avg`, `duration.min`, `duration.max` | 根 Span 耗时，单位为毫秒。 |
+| `duration.p50`, `duration.p90`, `duration.p95`, `duration.p99` | 根 Span 耗时的百分位数，单位为毫秒；具体存储可能返回近似值。 |
+| `timeToFirstChunk.avg`, `timeToFirstChunk.min`, `timeToFirstChunk.max` | 根 Span 的首个数据块耗时，单位为毫秒。需要 `aggregateTimeToFirstMeasures` 能力。 |
+| `timeToFirstChunk.p50`, `timeToFirstChunk.p90`, `timeToFirstChunk.p95`, `timeToFirstChunk.p99` | 根 Span 首个数据块耗时的百分位数，单位为毫秒。需要 `aggregateTimeToFirstMeasures` 能力。 |
+| `timeToFirstChunk.count` | 记录了首个数据块耗时的根 Span 所属 Trace 数量。需要 `aggregateTimeToFirstMeasures` 能力。 |
+| `timeToFirstToken.avg`, `timeToFirstToken.min`, `timeToFirstToken.max` | 根 Span 的首个 token 耗时，单位为毫秒。需要 `aggregateTimeToFirstMeasures` 能力。 |
+| `timeToFirstToken.p50`, `timeToFirstToken.p90`, `timeToFirstToken.p95`, `timeToFirstToken.p99` | 根 Span 首个 token 耗时的百分位数，单位为毫秒。需要 `aggregateTimeToFirstMeasures` 能力。 |
+| `timeToFirstToken.count` | 记录了首个 token 耗时的根 Span 所属 Trace 数量。需要 `aggregateTimeToFirstMeasures` 能力。 |
+| `errorCount` | 根 Span 记录了错误的 Trace 数量。 |
+| `errorRate` | `errorCount` 除以 `count`，范围为 0 到 1。 |
+| `tokens.input.sum`, `tokens.input.avg` | 输入 token 数。 |
+| `tokens.output.sum`, `tokens.output.avg` | 输出 token 数。 |
+| `tokens.total.sum`, `tokens.total.avg` | 输入与输出 token 总数。 |
+| `tokens.reasoning.sum`, `tokens.reasoning.avg` | 推理输出 token 数。 |
+| `tokens.cached.sum`, `tokens.cached.avg` | 从提供商缓存读取的输入 token 数。 |
+| `cost.sum`, `cost.avg` | 模型预估成本。 |
 
-不支持对元数据进行数值测量。
+不支持对元数据计算数值指标。
 
-#### 代币和成本衡量标准 {/* #token-and-cost-measures */}
+#### Token 与成本指标 {/* #token-and-cost-measures */}
 
-令牌和成本度量读取为每个跟踪记录的模型使用指标，因此仅当存储保留所选时间范围的指标时它们才可用。当指标共享跟踪的数据时，该指标就属于该跟踪`traceId` and was recorded at or after `timeRange.from`. Every such metric counts, including usage recorded after `timeRange.to` and usage recorded before a suspend and resume. Retried metric exports are counted once.
+Token 与成本指标读取每个 Trace 记录的模型用量指标，因此仅当存储保留所选时间范围内的用量指标时才可使用。指标与 Trace 的 `traceId` 相同，且记录时间不早于 `timeRange.from`，就归属于该 Trace。所有这类指标都会计入，包括在 `timeRange.to` 之后记录的用量，以及暂停和恢复之前记录的用量。重试导出的指标只计一次。
 
-记录至少一个使用指标的跟踪是承载使用情况的。`tokens.<kind>.sum` adds the tokens of a group's usage-bearing traces, and `tokens.<kind>.avg` divides that sum by the number of usage-bearing traces, not by `count`. Both are `null` when the group has no usage-bearing traces.
+至少记录一项用量指标的 Trace 称为有用量的 Trace。`tokens.<kind>.sum` 汇总某组中有用量的 Trace 的 token 数；`tokens.<kind>.avg` 用该总数除以有用量的 Trace 数量，而不是 `count`。若该组没有有用量的 Trace，两者均为 `null`。
 
-成本来自于总输入和总输出代币指标记录的估计成本。`cost.sum` adds the cost of traces with at least one priced metric, and `cost.avg` divides by the number of those traces. A partly priced call, where Mastra could price some token types but not others, adds the cost of the priced token types. A metric with any other pricing failure adds no cost.
+成本取自输入和输出 token 总量指标中记录的预估费用。`cost.sum` 汇总至少有一项已计价指标的 Trace 成本；`cost.avg` 用总成本除以这类 Trace 的数量。如果一次调用只有部分 token 类型成功计价，仍会计入已计价部分的成本；任何其他计价失败的指标都不计入成本。
 
-当您请求任何`cost.*` measure, every row also includes a `cost` object:
+请求任意 `cost.*` 指标时，每行还会包含一个 `cost` 对象：
 
-|领域 |描述 |
+| 字段 | 说明 |
 | - | - |
-|`coverage` | Fraction of usage-bearing traces whose usage was fully priced, from 0 to 1. A trace with a partly priced call isn't fully priced, so it lowers coverage even though its known cost is in `cost.sum`. `null` when the group has no usage-bearing traces. |
-| `unit` | Cost unit of the priced metrics, such as `USD`. `'mixed'` when they use more than one unit, and `null` when none are priced. |
+| `coverage` | 用量已全部计价的 Trace 占所有有用量 Trace 的比例，范围为 0 到 1。部分计价的调用不算全部计价，因此即使已知成本计入 `cost.sum`，仍会降低覆盖率。若该组没有有用量的 Trace，则为 `null`。 |
+| `unit` | 已计价指标的成本单位，如 `USD`。若使用多个单位，则为 `'mixed'`；没有已计价指标时为 `null`。 |
 
-`cost.sum`和`cost.avg` are `null` when the group has no priced traces or `unit` is `'mixed'`. A coverage below 1 means the cost understates the group's spend. The `cost` object isn't a measure, so `having` and `orderBy` can't reference it.
+若该组没有已计价 Trace，或 `unit` 为 `'mixed'`，`cost.sum` 和 `cost.avg` 均为 `null`。覆盖率低于 1 表示该成本低估了分组的实际支出。`cost` 对象不是指标，不能在 `having` 或 `orderBy` 中引用。
 
-### 第一个块的时间 (TTFC) {/* #time-to-first-chunk-ttfc */}
+### 首个数据块耗时（TTFC） {/* #time-to-first-chunk-ttfc */}
 
-第一个块的时间 (TTFC) 是调用者等待第一个流式传输块的时间。`timeToFirstChunkMs` is the time from a span's start to the first chunk of its model response. Agent run and model spans record it when the model streams a response. On an agent run, it's measured from the run's start and includes work done before the first model call, such as input processors and memory recall.
+首个数据块耗时（TTFC）指调用方等待流式响应首个数据块的时间。`timeToFirstChunkMs` 从 Span 开始时计至模型响应首个数据块到达时。模型以流式方式响应时，Agent 运行和模型 Span 会记录该值。对于 Agent 运行，计时从运行开始，包含首次模型调用前的工作，例如输入处理器和记忆检索。
 
-这`timeToFirstChunk.*` measures aggregate the root span's `timeToFirstChunkMs`, the same value [`queryTraces()`](#query-traces) returns. To filter or sort by it, see [Filter and sort by time to first chunk or token](#filter-and-sort-by-time-to-first-chunk-or-token).
+`timeToFirstChunk.*` 指标聚合根 Span 的 `timeToFirstChunkMs`，与 [`queryTraces()`](#query-traces) 返回的值相同。过滤和排序方式详见[按首个数据块或 token 的耗时过滤和排序](#filter-and-sort-by-time-to-first-chunk-or-token)。
 
 ```typescript
 const { capabilities } = await mastraClient.getObservabilityCapabilities()
@@ -869,46 +869,46 @@ if (capabilities.traceAggregate && capabilities.aggregateTimeToFirstMeasures) {
 }
 ```
 
-### 第一个令牌的时间 (TTFT) {/* #time-to-first-token-ttft */}
+### 首个 token 耗时（TTFT） {/* #time-to-first-token-ttft */}
 
-第一个令牌的时间 (TTFT) 是从模型调用开始、提供者请求本身到调用流的第一个块的时间（以毫秒为单位）。与 TTFC 不同，它省略了 Mastra 在调用模型之前所做的工作，例如输入处理器。
+首个 token 耗时（TTFT）是从模型调用开始（即提供商请求发起时）到该调用流式输出首个数据块的毫秒数。与 TTFC 不同，它不包含 Mastra 在调用模型前所做的工作，例如输入处理器。
 
-这`timeToFirstToken.*` measures aggregate the root span's `timeToFirstTokenMs`. To filter or sort by it, see [Filter and sort by time to first chunk or token](#filter-and-sort-by-time-to-first-chunk-or-token). Compare TTFC with TTFT to see how much of an agent's wait comes from work before the model call.
+`timeToFirstToken.*` 指标聚合根 Span 的 `timeToFirstTokenMs`。过滤和排序方式详见[按首个数据块或 token 的耗时过滤和排序](#filter-and-sort-by-time-to-first-chunk-or-token)。对比 TTFC 与 TTFT，可以判断 Agent 的等待时间有多少来自模型调用前的工作。
 
-### 第一个块和令牌跨度类型 {/* #first-chunk-and-token-span-types */}
+### 记录首个数据块和 token 耗时的 Span 类型 {/* #first-chunk-and-token-span-types */}
 
-这些跨度类型记录 TTFC 和 TTFT：
+以下 Span 类型记录 TTFC 和 TTFT：
 
-* `model_inference`：每个Provider调用。
-* `model_step`：一代的每个步骤，以及流式传输该步骤的第一个块的推理值。
-* `model_generation`：整个一代，仅具有其第一个流式推理的值。多步生成（例如Tool循环）仅报告其第一次调用。
-* `agent_run`：Agent运行，并使用其自己的循环的第一个模型生成的值。其 TTFC 是从运行开始时测量的。
+- `model_inference`：每次提供商调用。
+- `model_step`：生成过程中的每一步，取该步骤首次流式输出数据块的推断值。
+- `model_generation`：整个生成过程，只取首次流式输出的推断值。多步骤生成（如 Tool 循环）只报告首次调用。
+- `agent_run`：Agent 运行，取其自身循环中首次模型生成的值。TTFC 从运行开始时计时。
 
-其他跨度（例如Tool调用和Workflow运行）不会记录这两个值。植根于Workflow的跟踪在跟踪范围内没有 TTFC 或 TTFT。
+Tool 调用和 Workflow 运行等其他 Span 不记录这两个值。若 Trace 的根 Span 是 Workflow，则 Trace 范围内没有 TTFC 或 TTFT。
 
-TTFT 测量一次，就`model_inference` span that streamed the chunk. A step with a fallback model or a retry takes the value of its first inference that streamed a chunk. A failed fallback attempt has a value only if it streamed a chunk before failing. An in-process agent retries a failed model call inside a single inference span. Its TTFT then includes the failed attempt and the retry wait. Durable agents open one inference span per attempt.
+TTFT 只在流式输出该数据块的 `model_inference` Span 上测量一次。使用回退模型或重试的步骤，取其首次流式输出数据块的推断值。失败的回退尝试只有在失败前输出过数据块时才有值。进程内 Agent 在同一个推断 Span 内重试失败的模型调用，因此其 TTFT 包含失败尝试及重试等待时间。持久化 Agent 则为每次尝试创建一个推断 Span。
 
-Mastra 存储将 TTFT 保留在自己的列中，而不是存储在存储中`attributes`. Read it from the span's `timeToFirstTokenMs` field.
+Mastra 存储把 TTFT 放在专用列中，而非存储的 `attributes` 中。应从 Span 的 `timeToFirstTokenMs` 字段读取。
 
-### 缺少第一个块和令牌值 {/* #missing-first-chunk-and-token-values */}
+### 缺失的首个数据块与 token 耗时值 {/* #missing-first-chunk-and-token-values */}
 
-其值为`null` when the span didn't stream a chunk. A value of `0` isn't missing. It means the first chunk arrived in the same millisecond the span started.
+Span 未流式输出数据块时，该值为 `null`。`0` 并非缺失值，而是表示首个数据块与 Span 开始发生在同一毫秒。
 
-* 在谓词中，`null` counts as missing. It matches `notExists` and never matches ordered predicates.
-* 在`orderBy`, missing values sort last in both directions, and `0` sorts as a value.
-* 在聚合中，没有值的跨度和跟踪将被跳过，永远不会计为 0。
+- 在谓词中，`null` 视为缺失：它匹配 `notExists`，但不匹配有序比较谓词。
+- 在 `orderBy` 中，无论升序还是降序，缺失值都排在最后；`0` 按实际值排序。
+- 在聚合中，缺失值的 Span 和 Trace 会被跳过，不会按 0 计算。
 
-过滤、排序和聚合都需要存储功能。看[Check capabilities](#check-capabilities) for the `traceQueryTimeToFirstChunk`, `traceQueryTimeToFirstChunkSort`, `traceQueryTimeToFirstToken`, `traceQueryTimeToFirstTokenSort`, and `aggregateTimeToFirstMeasures` flags. Against an older store, results omit the unsupported fields, a request that uses them returns `501` before storage runs, and [field discovery](#discover-fields-and-values) omits them.
+过滤、排序和聚合分别需要对应的存储功能。各项操作所需的 `traceQueryTimeToFirstChunk`、`traceQueryTimeToFirstChunkSort`、`traceQueryTimeToFirstToken`、`traceQueryTimeToFirstTokenSort` 和 `aggregateTimeToFirstMeasures` 标志见[检查能力](#check-capabilities)。使用旧版存储时，结果会省略不支持的字段；引用这些字段的请求会在执行存储操作前返回 `501`；[字段发现](#discover-fields-and-values)也会省略它们。
 
-为了`timeToFirstChunk.*` and `timeToFirstToken.*`, `avg`, `min`, `max`, and the percentiles are `null` for a group where no trace has a value, and `.count` is the number of traces that do have one. Percentiles can be approximate, depending on the store. The measures require the `aggregateTimeToFirstMeasures` capability.
+对于 `timeToFirstChunk.*` 和 `timeToFirstToken.*`，若组内没有任何 Trace 记录值，`avg`、`min`、`max` 和百分位数均为 `null`；`.count` 则为有值的 Trace 数量。百分位数是否为近似值取决于存储。使用这些指标需要 `aggregateTimeToFirstMeasures` 能力。
 
-### 筛选和排序组 {/* #filter-and-order-groups */}
+### 过滤和排序分组 {/* #filter-and-order-groups */}
 
-组是一组不同的组合`groupBy` values. `having`, `orderBy`, and `limit` operate on groups and use each group's measures over the whole time range, even when `interval` is set. The server applies `having` first, then orders the remaining groups and keeps the first `limit`. `truncated` is `true` when more groups remained than `limit`.
+每组对应一种不同的 `groupBy` 值组合。`having`、`orderBy` 和 `limit` 作用于分组；即使设置了 `interval`，也使用整段时间范围内的分组指标。服务器先执行 `having`，再排序剩余分组并保留前 `limit` 个。如果剩余分组数超过 `limit`，`truncated` 为 `true`。
 
-`having`使用带有度量名称作为路径的标量谓词形状，例如`{ op: 'gt', left: { path: 'duration.p95' }, right: { literal: 5000 } }`. It can reference requested measures and `count`, even when `count` isn't requested. It supports comparison operators, `in`, and `notIn` with number literals, combined with `and`, `or`, and `not`. Presence, tag, and text operators aren't supported. A `null` measure never satisfies a `having` comparison, so the group is removed.
+`having` 采用标量谓词格式，以指标名称作为路径，例如 `{ op: 'gt', left: { path: 'duration.p95' }, right: { literal: 5000 } }`。它可以引用请求的指标和 `count`，即使未请求 `count` 也可以。支持数字字面值的比较运算符、`in` 和 `notIn`，并可通过 `and`、`or` 和 `not` 组合；不支持存在性、标签和文本运算符。值为 `null` 的指标不会满足任何 `having` 比较，因此相应分组会被移除。
 
-此请求使Workflow程的 95% 持续时间超过 5 秒：
+以下请求保留第 95 百分位耗时超过五秒的 Workflow：
 
 ```typescript
 const slowWorkflows = await mastraClient.aggregateTraces({
@@ -924,15 +924,15 @@ const slowWorkflows = await mastraClient.aggregateTraces({
 })
 ```
 
-排序是确定性的。关系按维度值按升序排列。`null` measure and dimension values sort last in both directions.
+排序是确定性的。若排序值相同，按维度值升序决定先后。无论排序方向，值为 `null` 的指标和维度都排在最后。
 
 ### 时间桶 {/* #time-buckets */}
 
-和`interval`, each group that survives `having` and `limit` expands into one row per non-empty bucket. Buckets are aligned to UTC, so `1d` buckets start at midnight UTC, and each row's `bucket` is the ISO start time of its bucket. A trace belongs to the bucket containing its root `startedAt`. Rows are ordered by group, then by `bucket` ascending.
+设置 `interval` 后，通过 `having` 和 `limit` 的每组会展开为每个非空时间桶一行。时间桶按 UTC 对齐，因此 `1d` 时间桶从 UTC 零点开始；每行的 `bucket` 是该桶开始时间的 ISO 格式。Trace 归入其根 Span 的 `startedAt` 所在时间桶。结果先按分组、再按 `bucket` 升序排列。
 
-没有痕迹的存储桶将被忽略，而不是作为零行返回。绘制图表时填补客户端上的空白。由于组在整个时间范围内排名第一，因此每个返回的组都包含其全系列的非空桶。
+不含 Trace 的时间桶会被省略，而非返回值为零的行。绘制图表时，应在客户端补齐空档。由于分组先按整个时间范围排序，每个返回分组都包含其所有非空时间桶的完整序列。
 
-此请求返回每个Agent的每日令牌使用情况和成本：
+以下请求返回每个 Agent 每天的 token 用量和成本：
 
 ```typescript
 const dailyCost = await mastraClient.aggregateTraces({
@@ -949,7 +949,7 @@ const dailyCost = await mastraClient.aggregateTraces({
 })
 ```
 
-### 综合反应 {/* #aggregate-responses */}
+### 聚合响应 {/* #aggregate-responses */}
 
 ```json
 {
@@ -970,39 +970,39 @@ const dailyCost = await mastraClient.aggregateTraces({
 }
 ```
 
-`dimensions`是由`groupBy` field and is present when `groupBy` isn't empty. `bucket` is present when `interval` is set. `measures` is keyed by the requested measure names. When no traces match, or `having` removes every group, `rows` is empty.
+`dimensions` 以 `groupBy` 字段为键，仅在 `groupBy` 非空时出现。设置 `interval` 时会出现 `bucket`。`measures` 以请求的指标名称为键。若没有匹配的 Trace，或 `having` 移除了全部分组，`rows` 为空。
 
-### 总计限制和错误 {/* #aggregate-limits-and-errors */}
+### 聚合限制与错误 {/* #aggregate-limits-and-errors */}
 
-|限制|最大|
+| 限制 | 上限 |
 | - | - |
-|时间范围 | 365 天 |
-|`groupBy` dimensions | 2 |
-| `limit` | 1,000 groups |
-| Buckets in the time range | 1,000 |
-| `limit` × buckets | 10,000 rows |
+| 时间范围 | 365 天 |
+| `groupBy` 维度数 | 2 |
+| `limit` | 1,000 个分组 |
+| 时间范围内的桶数 | 1,000 |
+| `limit` × 桶数 | 10,000 行 |
 
-谓词限制来自[Query limits](#query-limits) apply to both `where` and `having`, and the request body is limited to 256 KiB. A time range that doesn't start on a bucket boundary touches one more bucket than its length divided by the interval. If the range has too many buckets, choose a wider `interval`. If `limit` × buckets exceeds 10,000, reduce `limit` or widen the interval.
+[查询限制](#query-limits)中的谓词限制同时适用于 `where` 和 `having`；请求体上限为 256 KiB。如果时间范围未从时间桶边界开始，则触及的桶数会比“时长除以间隔”多一个。桶数过多时，请加大 `interval`；若 `limit` × 桶数超过 10,000，请降低 `limit` 或加大间隔。
 
-PostgreSQL 和 ClickHouse 使用相同的[execution timeout](#keyset-ordering-and-errors) for aggregations as for trace queries, defaulting to 15 seconds. The timeout doesn't apply to DuckDB.
+PostgreSQL 和 ClickHouse 聚合使用与 Trace 查询相同的[执行超时](#keyset-ordering-and-errors)，默认 15 秒。此超时不适用于 DuckDB。
 
-|状态 |意义|
+| 状态码 | 含义 |
 | - | - |
-|`400` | Malformed JSON. |
-| `413` | The request body exceeds 256 KiB. |
-| `422` | The request is invalid and returns `TRACE_QUERY_INVALID` with issues. A time range exceeding 365 days produces an `invalid_request` issue. Other issue codes include `too_many_buckets`, `too_many_rows`, `field_not_allowed`, `invalid_metadata_key`, and `operator_not_allowed`. |
-| `501` | The installed Core or configured observability store doesn't support aggregation or a requested field. Returns `TRACE_AGGREGATE_UNSUPPORTED`. |
-| `504` | A PostgreSQL or ClickHouse aggregation exceeded its execution timeout. Returns `TRACE_QUERY_EXECUTION_TIMEOUT` without partial results. |
+| `400` | JSON 格式错误。 |
+| `413` | 请求体超过 256 KiB。 |
+| `422` | 请求无效，返回 `TRACE_QUERY_INVALID` 及问题详情。时间范围超过 365 天会产生 `invalid_request` 问题。其他问题代码包括 `too_many_buckets`、`too_many_rows`、`field_not_allowed`、`invalid_metadata_key` 和 `operator_not_allowed`。 |
+| `501` | 已安装的 Core 或配置的可观测性存储不支持聚合或所请求字段。返回 `TRACE_AGGREGATE_UNSUPPORTED`。 |
+| `504` | PostgreSQL 或 ClickHouse 聚合超出执行超时时间。返回 `TRACE_QUERY_EXECUTION_TIMEOUT`，不包含部分结果。 |
 
-## 聚合跨度 {/* #aggregate-spans */}
+## 聚合 Span {/* #aggregate-spans */}
 
-使用`aggregateSpans()` or `POST /api/observability/spans/aggregate` to compute measures over individual spans instead of traces. Trace aggregation only sees each trace's root span, so an agent run nested inside a workflow isn't counted. Span aggregation counts every span that matches, at any depth.
+使用 `aggregateSpans()` 或 `POST /api/observability/spans/aggregate`，可以针对各个 Span 而非 Trace 计算指标。Trace 聚合只查看每个 Trace 的根 Span，因此不会统计 Workflow 中嵌套的 Agent 运行。Span 聚合则统计任意层级中所有匹配的 Span。
 
-请求的形状与[`aggregateTraces()`](#aggregate-request-fields), with the same fixed measures, `having`, `orderBy`, `interval`, and shared limits. Its `where`, dimensions, and `countDistinct` fields follow the span contract below. Unsupported span aggregation returns `501 SPAN_AGGREGATE_UNSUPPORTED`.
+请求格式与 [`aggregateTraces()`](#aggregate-request-fields) 相同，固定指标、`having`、`orderBy`、`interval` 和共同限制也相同。`where`、维度及 `countDistinct` 字段遵循下述 Span 约定。不支持 Span 聚合时返回 `501 SPAN_AGGREGATE_UNSUPPORTED`。
 
-### 使用客户端 SDK 聚合跨度 {/* #aggregate-spans-with-the-client-sdk */}
+### 使用客户端 SDK 聚合 Span {/* #aggregate-spans-with-the-client-sdk */}
 
-此请求按每天的状态对Agent运行进行计数，包括嵌套运行：
+以下请求按天、按状态统计 Agent 运行，包括嵌套运行：
 
 ```typescript
 const { capabilities } = await mastraClient.getObservabilityCapabilities()
@@ -1021,48 +1021,48 @@ if (capabilities.spanAggregate) {
 }
 ```
 
-将相同的正文发送至`POST /api/observability/spans/aggregate` to use HTTP directly.
+要直接使用 HTTP，请将相同请求体发送到 `POST /api/observability/spans/aggregate`。
 
-### 量程选择 {/* #span-selection */}
+### Span 选择条件 {/* #span-selection */}
 
-聚合使用与以下相同的跨度谓词[`querySpans()`](#query-spans), with the ClickHouse selection differences described below:
+聚合使用与 [`querySpans()`](#query-spans) 相同的 Span 谓词，但 ClickHouse 的选择行为有以下差异：
 
-* `timeRange`限制每个跨度的`startedAt`, and can span up to 365 days.
-* `where`接受`querySpans()` fields and operators, such as `spanType`, `name`, `status`, `durationMs`, `model`, `provider`, entity and parent/root entity fields, and context identifiers. Like `querySpans()`, `model` and `provider` filters read only the span's columns, not its attributes.
-* 只有完成的跨度才算数。当一个跨度被导出多次时，只有它的最新副本才有效。
+- `timeRange` 限制每个 Span 的 `startedAt`，时间跨度最长 365 天。
+- `where` 接受 `querySpans()` 的字段和运算符，例如 `spanType`、`name`、`status`、`durationMs`、`model`、`provider`、实体及父级／根实体字段，还有上下文标识符。与 `querySpans()` 一样，`model` 和 `provider` 过滤条件只读取 Span 的列，不读取属性。
+- 只统计已完成的 Span。若同一 Span 导出多次，只统计最新副本。
 
-`count`计算每个组或时间段中选定的跨度。桶使用每个跨度`startedAt`. `duration.*` measures read the span's own duration, and `errorCount` and `errorRate` read whether the span itself recorded an error.
+`count` 统计每组或每个时间桶中选中的 Span。分桶依据各 Span 的 `startedAt`。`duration.*` 指标读取 Span 自身耗时，`errorCount` 和 `errorRate` 则取决于该 Span 自身是否记录了错误。
 
-`timeToFirstToken.*`和`timeToFirstChunk.*` read the span's own `timeToFirstTokenMs` and `timeToFirstChunkMs`. See [First chunk and token span types](#first-chunk-and-token-span-types) for which spans record them. Filter to `model_inference` for per-call TTFT, or to `agent_run` for latency as the caller of each agent sees it. Without a `spanType` filter, one agent call contributes its agent run, its model generation, and every model step and model inference.
+`timeToFirstToken.*` 和 `timeToFirstChunk.*` 读取 Span 自身的 `timeToFirstTokenMs` 与 `timeToFirstChunkMs`。哪些 Span 会记录这些值，详见[记录首个数据块和 token 耗时的 Span 类型](#first-chunk-and-token-span-types)。如需每次调用的 TTFT，按 `model_inference` 过滤；如需 Agent 调用方感受到的延迟，按 `agent_run` 过滤。不指定 `spanType` 时，一次 Agent 调用会计入 Agent 运行、模型生成，以及所有模型步骤和模型推断。
 
-在 ClickHouse 上，直接`spanType` `eq` or `in` predicate, or one immediately inside an `and`, can select the smaller branch table. All selected types must be branch types: `agent_run`, `workflow_run`, `processor_run`, `scorer_run`, `rag_ingestion`, `tool_call`, or `mcp_tool_call`. Every requested field must be available in that table. An equivalent `or` predicate doesn't select this optimization. The branch path can differ from `querySpans()`:
+在 ClickHouse 中，直接使用 `spanType` 的 `eq` 或 `in` 谓词，或将该谓词直接放在 `and` 中，可选用更小的分支表。所有选定类型都必须是分支类型：`agent_run`、`workflow_run`、`processor_run`、`scorer_run`、`rag_ingestion`、`tool_call` 或 `mcp_tool_call`。请求的每个字段也必须在该表中可用。等价的 `or` 谓词不能触发此优化。分支路径的结果可能与 `querySpans()` 不同：
 
-* 升级前写入的跨度`@mastra/clickhouse` 1.4, 1.5, or 1.6 aren't in the branch table, so older windows can count fewer spans.
-* ClickHouse合并多次导出的span副本后，分支表保留最后写入的副本，而不是最后结束的副本。保留版本的状态和持续时间可能有所不同。即使跨度标识未更改，这也可能会更改过滤计数和组成员身份。
+- 升级前由 `@mastra/clickhouse` 1.4、1.5 或 1.6 写入的 Span 不在分支表中，因此旧时间窗口统计的 Span 数量可能较少。
+- ClickHouse 合并同一 Span 的多个导出副本后，分支表保留最后写入的副本，而非最后结束的副本。保留版本的状态和耗时可能不同；即使 Span 标识未变，也可能改变过滤后的计数和分组归属。
 
-### 跨度尺寸 {/* #span-dimensions */}
+### Span 维度 {/* #span-dimensions */}
 
-|尺寸|笔记|
+| 维度 | 说明 |
 | - | - |
-|`name`, `spanType`, `status` | The span's own name, type, and status. `status` is `error` when the span recorded an error and `success` otherwise. |
-| `outcome`, `stopReason` | How the span ended and why. Spans without a recorded value group as `null`. Requires the `spanQueryOutcomeFields` capability. |
-| `entityType`, `entityId`, `entityName` | The entity that produced the span. |
-| `parentEntityType`, `parentEntityName`, `rootEntityType`, `rootEntityName` | The calling entity and the trace's root entity, such as the agent that made a model call. |
-| `environment`, `serviceName`, `executionSource` | Deployment attributes recorded on the span. |
-| `threadId`, `resourceId`, `userId`, `sessionId`, `organizationId`, `experimentId` | Context identifiers recorded on the span. |
-| `model`, `provider` | The model and provider recorded on the span's `model` and `provider` columns, such as `__AI_SDK_ANTHROPIC_MODEL_SONNET__` and `anthropic`. Requires the `spanAggregateModelDimensions` capability. |
+| `name`, `spanType`, `status` | Span 自身的名称、类型和状态。记录错误时 `status` 为 `error`，否则为 `success`。 |
+| `outcome`, `stopReason` | Span 的结束方式和原因。未记录值的 Span 归入 `null` 分组。需要 `spanQueryOutcomeFields` 能力。 |
+| `entityType`, `entityId`, `entityName` | 产生该 Span 的实体。 |
+| `parentEntityType`, `parentEntityName`, `rootEntityType`, `rootEntityName` | 调用方实体和 Trace 的根实体，例如发起模型调用的 Agent。 |
+| `environment`, `serviceName`, `executionSource` | 记录在 Span 上的部署属性。 |
+| `threadId`, `resourceId`, `userId`, `sessionId`, `organizationId`, `experimentId` | 记录在 Span 上的上下文标识符。 |
+| `model`, `provider` | Span 的 `model` 与 `provider` 列所记录的模型和提供商，例如 `__AI_SDK_ANTHROPIC_MODEL_SONNET__` 和 `anthropic`。需要 `spanAggregateModelDimensions` 能力。 |
 
-`countDistinct.<field>` 接受这些尺寸并且`traceId`, so `countDistinct.traceId` counts the traces the selected spans belong to. Span aggregation can't group by `metadata.<key>` or identity fields such as `traceId`, `spanId`, or `runId`.
+`countDistinct.<field>` 接受这些维度及 `traceId`，因此 `countDistinct.traceId` 统计所选 Span 所属的不同 Trace 数量。Span 聚合不能按 `metadata.<key>`，也不能按 `traceId`、`spanId` 或 `runId` 等身份字段分组。
 
-就像`model` and `provider` filters, the `model` and `provider` dimensions read only the span's columns, not its attributes. Existing spans aren't backfilled, so spans exported before `@mastra/observability` filled the columns group under `null`, and `countDistinct.model` doesn't count them.
+与 `model` 和 `provider` 过滤条件一样，`model` 和 `provider` 维度只读取 Span 对应的列，不读取属性。现有 Span 不会回填，因此在 `@mastra/observability` 开始填充这些列之前导出的 Span 会归入 `null` 分组，也不会被 `countDistinct.model` 统计。
 
-商店通过以下方式宣传支持`span-aggregate-model-dimensions` feature, and the server reports it as the `spanAggregateModelDimensions` capability. Against an older store, a request that groups by `model` or `provider` or counts their distinct values returns `501` before storage runs.
+存储通过 `span-aggregate-model-dimensions` 功能声明支持，服务器将其报告为 `spanAggregateModelDimensions` 能力。旧版存储在收到按 `model` 或 `provider` 分组、或统计其不同值的请求时，会在执行存储操作前返回 `501`。
 
-### Span代币和成本 {/* #span-tokens-and-cost */}
+### Span 的 token 与成本 {/* #span-tokens-and-cost */}
 
-令牌和成本度量使用每个跨度记录的使用指标，并匹配`traceId` and `spanId`. The [trace token rules](#token-and-cost-measures) apply per span: metrics from `timeRange.from` on count, retried exports count once, and averages divide by usage-bearing spans.
+Token 与成本指标使用每个 Span 记录的用量指标，通过 `traceId` 和 `spanId` 匹配。[Trace token 规则](#token-and-cost-measures)分别适用于各 Span：从 `timeRange.from` 起记录的指标会计入，重试导出只计一次，平均值以有用量的 Span 数量为除数。
 
-使用量不会添加到父跨度中。模型调用记录使用情况`model_generation` spans, so an `agent_run` span has no tokens of its own unless a model call under it wasn't exported. When a `model_generation` span isn't exported, its usage is recorded on the nearest exported ancestor instead. For token totals per agent, select `model_generation` spans and group by the calling agent:
+用量不会汇总到父 Span。模型调用在 `model_generation` Span 上记录用量，因此 `agent_run` Span 自身没有 token，除非其下的模型调用未被导出。若某个 `model_generation` Span 未导出，其用量会改记在最近的已导出祖先 Span 上。要统计每个 Agent 的 token 总量，请选择 `model_generation` Span 并按调用方 Agent 分组：
 
 ```typescript
 const tokensByAgent = await mastraClient.aggregateSpans({
@@ -1077,7 +1077,7 @@ const tokensByAgent = await mastraClient.aggregateSpans({
 })
 ```
 
-要比较模型，请将相同的跨度分组为`model`:
+如果要比较模型，则将相同 Span 按 `model` 分组：
 
 ```typescript
 const { capabilities } = await mastraClient.getObservabilityCapabilities()
@@ -1096,15 +1096,15 @@ if (capabilities.spanAggregateModelDimensions) {
 }
 ```
 
-### 列出组后面的跨度 {/* #list-the-spans-behind-a-group */}
+### 列出某组对应的 Span {/* #list-the-spans-behind-a-group */}
 
-聚合永远不会返回跨度记录。要检查一个组，请发送相同的`timeRange` and `where` to `querySpans()`, and add non-null dimension values as `eq` conditions. For a null dimension, use `notExists`, such as `{ op: 'notExists', path: 'entityName' }`. `eq` with `literal: null` is rejected. For example, add `{ op: 'eq', left: { path: 'status' }, right: { literal: 'error' } }` to list the failed agent runs from the first example.
+聚合不会返回 Span 记录。要查看某组，将相同的 `timeRange` 和 `where` 传给 `querySpans()`，并把非 null 的维度值添加为 `eq` 条件。若维度为 null，则使用 `notExists`，例如 `{ op: 'notExists', path: 'entityName' }`；使用 `literal: null` 的 `eq` 会被拒绝。例如，添加 `{ op: 'eq', left: { path: 'status' }, right: { literal: 'error' } }`，即可列出首个示例中的失败 Agent 运行。
 
 ## 可信租户范围 {/* #trusted-tenant-scope */}
 
-为多个租户提供服务的主机在查询文档之外提供可信范围。服务器读取保留的`organizationId` request-context key, which only server-side authentication can set, and passes `{ organizationId }` to the planner. The scope is carried on the trusted plan and ANDed into every scan: current roots, related spans, the usage metrics read by token and cost measures, span aggregation, and both discovery routes. A related record from another tenant that shares a `traceId` never qualifies a trace.
+服务多个租户的宿主在查询文档之外提供可信范围。服务器读取保留的 `organizationId` 请求上下文键；只有服务端身份验证可以设置该键，并将 `{ organizationId }` 传给规划器。可信规划会携带此范围，并将其作为 AND 条件应用到每次扫描：当前根 Span、关联 Span、token 与成本指标读取的用量指标、Span 聚合及两个发现路由。其他租户的关联记录即使共享相同的 `traceId`，也不能使 Trace 匹配。
 
-直接调用存储的主机可以将更完整的范围传递给`planTraceQuery()`, `planTraceAggregate()`, `planSpanAggregate()`, `planTraceQueryObservedFields()`, and `planTraceQueryValues()`:
+直接调用存储的宿主，可以向 `planTraceQuery()`、`planTraceAggregate()`、`planSpanAggregate()`、`planTraceQueryObservedFields()` 和 `planTraceQueryValues()` 传入更完整的范围：
 
 ```typescript
 const plan = planTraceQuery(parseTraceQueryRequest(request), {
@@ -1112,15 +1112,15 @@ const plan = planTraceQuery(parseTraceQueryRequest(request), {
 })
 ```
 
-`resourceId`是可选的并在组织内缩小范围。键集和增量游标绑定到范围。在一个作用域下创建并在另一个作用域下重用的游标返回`409` before storage runs. A scoped request against an observability store or `@mastra/core` that predates tenant scope returns `501` instead of running unscoped. Stores advertise support through the `trace-query-tenant-scope` feature. Callers can't name `projectId` in predicates. An `organizationId` predicate compares recorded data and is ANDed with the scope, so it can only narrow the tenant's own traces and never widens it. Without a scope the routes behave as before, so self-hosted installations keep their own tenant model.
+`resourceId` 可选，用于在组织内进一步缩小范围。键集和增量游标都绑定该范围。在一个范围下创建的游标若用于另一个范围，会在执行存储操作前返回 `409`。若带范围的请求发给尚不支持租户范围的可观测性存储或 `@mastra/core`，会返回 `501`，而不是在无范围限制下运行。存储通过 `trace-query-tenant-scope` 功能声明支持。调用方不能在谓词中指定 `projectId`。`organizationId` 谓词比较记录的数据，并与可信范围取 AND，因此只能缩小租户自身的 Trace 范围，不能扩大范围。没有可信范围时，路由维持原有行为，自托管部署可继续使用自己的租户模型。
 
-## 发现领域和价值 {/* #discover-fields-and-values */}
+## 发现字段和值 {/* #discover-fields-and-values */}
 
-使用跟踪查询发现来构建字段和值自动完成功能，而无需扫描跟踪负载或将查询语法复制到客户端中。配置的可观察性存储必须支持`trace-query-discovery`.
+使用 Trace 查询的发现功能构建字段和值的自动补全，无需扫描 Trace 数据内容，也无需把查询语法复制到客户端。配置的可观测性存储必须支持 `trace-query-discovery`。
 
-CLI 不公开专用的发现命令，因此请使用下面的 SDK 方法或 HTTP 端点`POST /api/observability/traces/query/fields` and `POST /api/observability/traces/query/values`.
+CLI 没有专门的发现命令；请使用下文的 SDK 方法，或 HTTP 端点 `POST /api/observability/traces/query/fields` 和 `POST /api/observability/traces/query/values`。
 
-称呼`getTraceQueryFields()` for one predicate scope:
+针对一个谓词范围调用 `getTraceQueryFields()`：
 
 ```typescript
 const timeRange = {
@@ -1136,7 +1136,7 @@ const fields = await mastraClient.getTraceQueryFields({
 })
 ```
 
-该响应将规范字段与观察到的元数据字段分开：
+响应将标准字段与观察到的元数据字段分开：
 
 ```json
 {
@@ -1154,18 +1154,18 @@ const fields = await mastraClient.getTraceQueryFields({
 }
 ```
 
-规范字段来自用于验证跟踪查询的同一注册表。他们不消费`limit`. The canonical order follows that registry. `observedFields` contains top-level string `metadata.<key>` paths found on qualifying current root spans. These fields are ordered by `occurrences` descending, then by path. Nested metadata, keys containing `.`, empty keys, non-string values, and oversized paths are omitted.
+标准字段来自用于校验 Trace 查询的同一个注册表，不占用 `limit`。其顺序与注册表一致。`observedFields` 包含从符合条件的当前根 Span 上找到的顶层字符串 `metadata.<key>` 路径。这些字段先按 `occurrences` 降序、再按路径排序。嵌套元数据、包含 `.` 的键、空键、非字符串值和过长路径均被省略。
 
-`predicateScope`选择局部谓词语法。这不是授权范围：
+`predicateScope` 选择局部谓词语法，它不是授权范围：
 
-| `predicateScope` | Example returned path | Query usage |
+| `predicateScope` | 返回路径示例 | 查询用法 |
 | - | - | - |
-| `trace` | `environment` or `metadata.region` | Root `where` predicate |
-| `spans` | `model` | Inside `spans.some` or `spans.none` |
+| `trace` | `environment` 或 `metadata.region` | 根级 `where` 谓词 |
+| `spans` | `model` | 用于 `spans.some` 或 `spans.none` 内 |
 
-字段选择器可以请求`trace` and `spans` scopes in parallel and label each field with its scope. Every returned path is directly accepted by `queryTraces()` in its matching scope. `metadata` by itself isn't a field. A user interface can offer manual metadata-key entry separately.
+字段选择器可以并行请求 `trace` 和 `spans` 范围，并标注每个字段所属的范围。返回的每个路径都可在相应范围内直接用于 `queryTraces()`。`metadata` 本身不是字段。界面可以另行提供手动输入元数据键的选项。
 
-对于`trace` scope, when the server and store support aggregation, the fields response also includes an `aggregate` object that describes what `aggregateTraces()` accepts:
+对于 `trace` 范围，如果服务器和存储支持聚合，字段响应还会包含 `aggregate` 对象，用于描述 `aggregateTraces()` 接受的内容：
 
 ```json
 {
@@ -1184,9 +1184,9 @@ const fields = await mastraClient.getTraceQueryFields({
 }
 ```
 
-`dimensions`列出商店支持的规范维度。每观察到`metadata.<key>` field is also a dimension, and `countDistinct.<field>` accepts any dimension or `traceId`. `measures` lists each fixed measure with its `kind`, `unit`, and whether it's `approximate`.
+`dimensions` 列出存储支持的标准维度。每个观察到的 `metadata.<key>` 字段也都是维度；`countDistinct.<field>` 接受任意维度或 `traceId`。`measures` 列出每个固定指标，以及其 `kind`、`unit` 和是否为 `approximate`。
 
-用户选择一个字段后`valueSuggestions: true`, call `getTraceQueryValues()`:
+用户选中 `valueSuggestions: true` 的字段后，调用 `getTraceQueryValues()`：
 
 ```typescript
 const abortController = new AbortController()
@@ -1212,33 +1212,33 @@ const suggestions = await mastraClient.getTraceQueryValues(
 }
 ```
 
-Discovery 仅返回字符串值。缺失值、空字符串和大于 4,096 UTF-8 字节的字符串将被忽略。值的排序方式为`count` descending, then by value. Suggestions are advisory: `queryTraces()` continues to accept valid manual literals that discovery doesn't return.
+发现接口只返回字符串值。缺失值、空字符串，以及超过 4,096 UTF-8 字节的字符串都会被省略。取值先按 `count` 降序、再按值排序。建议值仅供参考：即使发现接口未返回某个有效字面值，`queryTraces()` 仍接受手动输入。
 
-值建议可用于这些规范字段：
+以下标准字段支持值建议：
 
-|范围 |领域 |
+| 范围 | 字段 |
 | - | - |
-|追踪|`entityName`, `entityType`, `name`, `spanType`, `environment`, `status`, `outcome`, `stopReason`, `tags` |
-| Spans | `name`, `spanType`, `model`, `provider`, `status`, `outcome`, `stopReason`, `entityType`, `entityName` |
+| Trace | `entityName`, `entityType`, `name`, `spanType`, `environment`, `status`, `outcome`, `stopReason`, `tags` |
+| Span | `name`, `spanType`, `model`, `provider`, `status`, `outcome`, `stopReason`, `entityType`, `entityName` |
 
-`outcome`和`stopReason` suggestions require the `traceQueryOutcomeFields` capability. Each executable top-level string `metadata.<key>` field also supports value suggestions in the `trace` scope. Identifiers, timestamps, durations, time to first chunk, time to first token, errors, and version IDs don't. The fields response still includes canonical fields with `valueSuggestions: false`. The values endpoint rejects those paths with `422 TRACE_QUERY_INVALID`.
+`outcome` 和 `stopReason` 的建议值需要 `traceQueryOutcomeFields` 能力。在 `trace` 范围内，每个可执行的顶层字符串 `metadata.<key>` 字段也支持值建议。标识符、时间戳、耗时、首个数据块耗时、首个 token 耗时、错误和版本 ID 则不支持。字段响应仍包含 `valueSuggestions: false` 的标准字段。值端点会以 `422 TRACE_QUERY_INVALID` 拒绝这些路径。
 
-两个发现请求都需要半开放时间范围。它们使用相同的当前记录语义`queryTraces()`: qualifying completed roots satisfy `from <= startedAt < to`, and related values come only from current records joined to those roots by `traceId`. Discovery doesn't accept or apply a draft `where` predicate.
+两个发现请求都要求半开时间范围。它们采用与 `queryTraces()` 相同的当前记录语义：符合条件的已完成根 Span 满足 `from <= startedAt < to`；关联值只来自通过 `traceId` 连接到这些根 Span 的当前记录。发现接口不接受，也不应用尚在草拟的 `where` 谓词。
 
-`search`默认为空字符串，被修剪，并匹配不区分大小写的文字子字符串。字符如`%` and `_` have no wildcard meaning. An empty search returns the most frequent results. `limit` defaults to 25 and has a maximum of 100. Both endpoints fetch one extra result to set their truncation flag, but don't provide a cursor. When a flag is `true`, refine `search`. It doesn't imply that a next page is available. No matches return an empty array and `false` truncation.
+`search` 默认为空字符串，会去除首尾空白，并按不区分大小写的字面子字符串匹配。`%` 和 `_` 等字符不具有通配符含义。空搜索返回出现频率最高的结果。`limit` 默认为 25，最大为 100。两个端点都会多取一条结果以设置截断标志，但不提供游标。当标志为 `true` 时，请缩小 `search` 范围；它不表示存在下一页。无匹配时返回空数组，截断标志为 `false`。
 
-如果发现超过其执行超时，则路由返回`504 TRACE_QUERY_EXECUTION_TIMEOUT`. If the backend exceeds a memory or resource budget, it returns `503 TRACE_QUERY_RESOURCE_LIMIT`. Neither failure returns partial suggestions or sets a truncation flag. Truncation only means a complete ranking was cut to the requested response limit.
+若发现请求超出执行超时，路由返回 `504 TRACE_QUERY_EXECUTION_TIMEOUT`；若后端超出内存或资源预算，则返回 `503 TRACE_QUERY_RESOURCE_LIMIT`。两种失败都不返回部分建议，也不设置截断标志。截断只表示完整排序结果被截取至请求的响应上限。
 
-ClickHouse 发现请求默认为 5 秒超时和每个查询 256 MiB 内存限制。配置这些`observability.traceQuery.discovery.timeoutMs` and `observability.traceQuery.discovery.memoryLimitBytes` on `ClickhouseStoreVNext`. Discovery falls back to `observability.traceQuery.timeoutMs` when its timeout isn't configured, without changing ordinary `queryTraces()` execution limits.
+ClickHouse 发现请求默认超时为 5 秒，每次查询的内存上限为 256 MiB。可在 `ClickhouseStoreVNext` 上通过 `observability.traceQuery.discovery.timeoutMs` 和 `observability.traceQuery.discovery.memoryLimitBytes` 配置。若未配置发现超时，则回退使用 `observability.traceQuery.timeoutMs`，但不改变普通 `queryTraces()` 的执行限制。
 
-两条路线都需要`observability:read` and use the configured observability storage boundary. Don't send organization or project authorization fields in the request. Treat discovered paths, values, and counts as observability data.
+两个路由都要求 `observability:read` 权限，并使用配置的可观测性存储边界。不要在请求中发送组织或项目授权字段。发现的路径、取值和计数均应视为可观测性数据。
 
-## 局限性 {/* #limitations */}
+## 限制 {/* #limitations */}
 
-查询和聚合 API 仅考虑已完成的跟踪和跨度，而不考虑正在运行的跟踪和跨度。跟踪查询无法返回自定义投影、嵌入证据或摘要，并且编号的跟踪页面包含总计数。跟踪聚合无法按除根跨度之外的跨度字段进行分组`name`, `spanType`, and `entityId`, or by `traceId` or `attributes.*`. Aggregation can't compute numeric measures over metadata, paginate groups, or zero-fill empty buckets. Span aggregation can't group by `model` or `provider`, and it attributes tokens only to the span that recorded them. The CLI's `mastra api trace aggregate` covers trace aggregation, and `mastra api span query` and `mastra api span aggregate` cover span queries and span aggregation.
+查询和聚合 API 只处理已完成的 Trace 与 Span，不处理运行中的记录。Trace 查询不能返回自定义投影、嵌入的证据或摘要；页码分页结果包含总数。Trace 聚合不能按根 Span 的 `name`、`spanType`、`entityId` 以外的 Span 字段分组，也不能按 `traceId` 或 `attributes.*` 分组。聚合不能计算元数据的数值指标、对分组分页或把空时间桶补为零。Span 聚合不能按 `model` 或 `provider` 分组，而且只会把 token 归到记录该用量的 Span。CLI 中，`mastra api trace aggregate` 支持 Trace 聚合，`mastra api span query` 和 `mastra api span aggregate` 分别支持 Span 查询与聚合。
 
-## 有关的 {/* #related */}
+## 相关内容 {/* #related */}
 
-* [客户端 SDK Observability参考](/reference/client-js/observability)
-* [追踪概述](/docs/observability/tracing/overview)
-* [跨度接口](/reference/observability/tracing/spans)
+- [客户端 SDK 可观测性参考](/reference/client-js/observability)
+- [Trace 概述](/docs/observability/tracing/overview)
+- [Span 接口](/reference/observability/tracing/spans)

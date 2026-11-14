@@ -1,37 +1,37 @@
 ---
-title: 'Reference: mastra.schedules | Schedules'
-description: 'mastra.schedules is the CRUD service for persisted cron schedules. Use it to create, list, update, pause, resume, manually run, and delete schedules for agents or workflows.'
+title: '参考：mastra.schedules | 调度'
+description: 'mastra.schedules 是持久化 cron 排程的 CRUD 服务，可创建、列出、更新、暂停、恢复、手动运行和删除 Agent 或 Workflow 排程。'
 packages:
   - '@mastra/core'
 ---
 
 # `mastra.schedules`
 
-**添加于：** `@mastra/core@1.50.0`
+**新增于：** `@mastra/core@1.50.0`
 
-`mastra.schedules`是持久化 cron 计划的 CRUD 服务。使用它来创建、列出、更新、暂停、恢复、手动运行和删除Agent或Workflow程的计划。
+`mastra.schedules` 是持久化 cron 排程的 CRUD 服务，可创建、列出、更新、暂停、恢复、手动运行和删除 Agent 或 Workflow 排程。
 
-有关使用模式和概念，请参阅[Schedules](/docs/harness/schedules).
+用法和相关概念请参阅[排程](/docs/harness/schedules)。
 
-## 交货保证 {/* #delivery-guarantees */}
+## 投递保证 {/* #delivery-guarantees */}
 
-预定的发布是尽最大努力，而不是至少一次交付。调度程序自动声明发生并推进`nextFireAt` before publishing the agent or workflow start event. An exhausted cron schedule is marked `completed` in that claim. Completion means there are no remaining occurrences, not that the target started or succeeded.
+定时发布采用尽力而为的方式，不保证至少投递一次。调度器会以原子操作认领一次触发，并在发布 Agent 或 Workflow 启动事件之前推进 `nextFireAt`。如果 cron 排程已无后续触发时机，它会在认领时标记为 `completed`。此状态仅表示没有剩余触发时机，不代表目标已启动或成功执行。
 
-调度程序对同一声明的事件最多进行 3 次发布尝试，在尝试之间等待 100 毫秒，然后等待 200 毫秒。传输可以在返回错误之前接受事件，因此重试可以发布具有相同运行 ID 的重复项。
+调度器对同一次已认领的触发最多尝试发布三次，前两次失败后分别等待 100 毫秒和 200 毫秒。传输层可能先接受事件再返回错误，因此重试可能以同一个 run ID 发布重复事件。
 
-三个尝试均失败后，调度程序会记录调度 ID、运行 ID、调度的触发时间、`publicationOutcome: 'unknown'`, and `automaticReplay: false`. It invokes the configured `scheduler.onError` hook and attempts to record a trigger with outcome `failed`。此失败描述了发布尝试。这并不能证明目标从未开始。
+三次尝试均失败后，调度器会记录排程 ID、run ID、计划触发时间、`publicationOutcome: 'unknown'` 和 `automaticReplay: false`，调用配置的 `scheduler.onError` 钩子，并尝试记录结果为 `failed` 的触发事件。该失败只说明发布尝试的结果，不能证明目标从未启动。
 
-一旦这些尝试用尽，调度程序就不会重播该事件。定期计划保持活动状态，并可以在下一个计划时间触发。终端计划保持完整状态，并在触发历史记录中记录任何故障详细信息。
+尝试次数耗尽后，调度器不会重放这次触发。周期性排程仍保持活动状态，并可在下一个计划时间触发。终止的排程仍保持完成状态，触发历史中保留已记录的失败详情。
 
-成功领取后，会出现信息级别`Claimed schedule occurrence` log identifies the schedule ID, run ID, and scheduled fire time. A matching `Published schedule occurrence` log reports transport acceptance. If neither that success log nor the final failure log follows a claim, publication is unconfirmed. These logs aren't durable state: a crash between the claim commit and logging, or before logs are flushed, can leave no log record.
+认领成功后，信息级 `Claimed schedule occurrence` 日志会标识排程 ID、run ID 和计划触发时间。对应的 `Published schedule occurrence` 日志表示传输层已接受事件。如果认领后既没有成功日志，也没有最终失败日志，就无法确认发布结果。这些日志不是持久状态：在认领事务提交后、写日志前发生崩溃，或日志刷新前发生崩溃，都可能没有日志记录。
 
-如果发布者进程在声明提交后终止，或者确认丢失，则可以跳过该事件，而不会触发失败。替换调度程序无法使用声明元数据或丢失的触发历史记录来区分未发布的事件与崩溃之前接受的事件。它不会重播事件或阻止以后重复发生的火灾。发布确认也不能保证目标执行，并且传输重新传递可能会产生重复。
+如果发布进程在认领提交后终止，或确认信息丢失，该次触发可能被跳过，而不会留下失败的触发记录。替代调度器无法仅凭认领元数据或缺失的触发历史，区分事件未发布与事件在崩溃前已被接受。它不会重放该次触发，也不会阻止后续周期性触发。发布确认也不保证目标已执行，传输层重新投递仍可能产生重复事件。
 
-在手动重新运行错过的工作之前，请独立检查目标执行和传输记录。仅缺少触发历史记录或失败的发布尝试并不能证明重新运行是安全的。
+手动重跑遗漏的任务前，请分别检查目标执行记录和传输记录。仅凭缺失的触发历史或一次发布失败，不能断定重跑是安全的。
 
-## 使用示例 {/* #usage-example */}
+## 用法示例 {/* #usage-example */}
 
-创建Agent计划：
+创建 Agent 排程：
 
 ```typescript title="src/mastra/schedules.ts"
 const schedule = await mastra.schedules.create({
@@ -41,7 +41,7 @@ const schedule = await mastra.schedules.create({
 })
 ```
 
-创建Workflow程计划：
+创建 Workflow 排程：
 
 ```typescript title="src/mastra/schedules.ts"
 const schedule = await mastra.schedules.create({
@@ -51,9 +51,9 @@ const schedule = await mastra.schedules.create({
 })
 ```
 
-计划需要一个实现计划域的存储适配器。支持的适配器包括`@mastra/libsql`, `@mastra/pg`, `@mastra/mysql`, `@mastra/mongodb`, `@mastra/convex`, and `@mastra/spanner`.
+排程需要实现 schedules 域的存储适配器。支持的适配器包括 `@mastra/libsql`、`@mastra/pg`、`@mastra/mysql`、`@mastra/mongodb`、`@mastra/convex` 和 `@mastra/spanner`。
 
-要在固定时间运行一次，请传递`runAt` instead of `cron`:
+要在固定时间运行一次，请传入 `runAt` 而不是 `cron`：
 
 ```typescript
 await mastra.schedules.create({
@@ -64,11 +64,11 @@ await mastra.schedules.create({
 
 ## 方法 {/* #methods */}
 
-### 创建时间表 {/* #create-schedules */}
+### 创建排程 {/* #create-schedules */}
 
 #### `create(input)` {/* #createinput */}
 
-创建Agent或Workflow程计划。经过`agentId` to create an agent schedule, or `workflowId` to create a workflow schedule.
+创建 Agent 或 Workflow 排程。传入 `agentId` 创建 Agent 排程，或传入 `workflowId` 创建 Workflow 排程。
 
 ```typescript
 const schedule = await mastra.schedules.create({
@@ -78,7 +78,7 @@ const schedule = await mastra.schedules.create({
 })
 ```
 
-##### 座席日程输入 {/* #agent-schedule-input */}
+##### Agent 排程输入 {/* #agent-schedule-input */}
 
 <PropertiesTable
   content={[
@@ -86,118 +86,118 @@ const schedule = await mastra.schedules.create({
   name: 'id',
   type: 'string',
   description:
-    'Optional stable schedule ID. The value is normalized to `agent_<slug>`. When omitted, Mastra generates an `agent_<uuid>` ID.',
+      '可选的稳定排程 ID。该值会规范化为 `agent_<slug>`。省略时，Mastra 会生成 `agent_<uuid>` ID。',
   isOptional: true,
 },
 {
   name: 'agentId',
   type: 'string',
-  description: 'ID of the agent to run on each schedule fire.',
+    description: '每次排程触发时要运行的 Agent ID。',
 },
 {
   name: 'cron',
   type: 'string',
   isOptional: true,
   description:
-    'Cron expression for a recurring schedule. Accepts 5-, 6-, or 7-part cron expressions and Croner nicknames. Provide exactly one of `cron` or `runAt`.',
+      '周期性排程的 cron 表达式。支持 5、6 或 7 段表达式及 Croner 昵称。`cron` 和 `runAt` 必须且只能提供一个。',
 },
 {
   name: 'runAt',
   type: 'number | Date',
   isOptional: true,
   description:
-    'Fire the schedule once at this time (epoch milliseconds or `Date`). After it fires, the schedule moves to `completed`. Must be in the future.',
+      '在此时间触发一次排程（Unix 毫秒时间戳或 `Date`）。触发后排程转为 `completed`。时间必须在未来。',
 },
 {
   name: 'endAt',
   type: 'number | Date',
   isOptional: true,
   description:
-    'Only with `cron`. Stop firing after this time; the schedule moves to `completed` once its next occurrence would fall after `endAt`. Must be in the future.',
+      '仅适用于 `cron`。在此时间后停止触发；当下一次触发时机已晚于设定时间，排程会转为 `completed`。`endAt` 必须在未来。',
 },
 {
   name: 'prompt',
   type: 'string',
-  description: 'Prompt sent to the agent on each schedule fire.',
+    description: '每次排程触发时发送给 Agent 的提示词。',
 },
 {
   name: 'name',
   type: 'string',
-  description: 'Free-form label for distinguishing multiple schedules on the same agent or thread.',
+    description: '自由填写的标签，用于区分同一 Agent 或线程上的多个排程。',
   isOptional: true,
 },
 {
   name: 'timezone',
   type: 'string',
-  description: 'IANA timezone used to resolve cron fire times, for example `America/New_York`.',
+    description: '用于计算 cron 触发时间的 IANA 时区，例如 `America/New_York`。',
   isOptional: true,
 },
 {
   name: 'threadId',
   type: 'string',
   description:
-    'Thread that receives the scheduled signal. When omitted, each fire runs threadless with `agent.generate()`.',
+      '接收定时信号的线程。省略时，每次触发都通过 `agent.generate()` 在线程外运行。',
   isOptional: true,
 },
 {
   name: 'resourceId',
   type: 'string',
-  description: 'Resource ID for threaded schedules. Required when `threadId` is set.',
+    description: '带线程的排程所用的资源 ID。设置 `threadId` 时必填。',
   isOptional: true,
 },
 {
   name: 'signalType',
   type: 'AgentSignalType',
-  description: 'Signal type for threaded schedule fires. Defaults to `notification`.',
+    description: '带线程的排程触发时使用的信号类型。默认为 `notification`。',
   isOptional: true,
 },
 {
   name: 'tagName',
   type: 'string',
-  description: 'XML tag name used to render the scheduled signal. Defaults to `schedule`.',
+    description: '用于呈现定时信号的 XML 标签名。默认为 `schedule`。',
   isOptional: true,
 },
 {
   name: 'attributes',
   type: 'AgentSignalAttributes',
-  description: 'Attributes rendered on the scheduled signal XML tag.',
+    description: '呈现在定时信号 XML 标签上的属性。',
   isOptional: true,
 },
 {
   name: 'providerOptions',
   type: 'Record<string, unknown>',
-  description: 'JSON-safe provider options merged into the schedule signal payload on every fire.',
+    description: '每次触发时合并到排程信号载荷中的 JSON 安全 Provider 选项。',
   isOptional: true,
 },
 {
   name: 'ifActive',
   type: 'ScheduleIfActive',
-  description: 'Behavior when the target thread is actively streaming. Requires `threadId`.',
+    description: '目标线程正在串流输出时的处理方式。需要设置 `threadId`。',
   isOptional: true,
 },
 {
   name: 'ifIdle',
   type: 'ScheduleIfIdle',
-  description: 'Behavior when the target thread is idle. Requires `threadId`.',
+    description: '目标线程空闲时的处理方式。需要设置 `threadId`。',
   isOptional: true,
 },
 {
   name: 'metadata',
   type: 'Record<string, unknown>',
-  description: 'Arbitrary metadata stored with the schedule row.',
+    description: '与排程记录一起存储的任意元数据。',
   isOptional: true,
 },
 {
   name: 'status',
   type: "'active' | 'paused'",
-  description: 'Initial lifecycle status. Defaults to `active`.',
+    description: '初始生命周期状态。默认为 `active`。',
   isOptional: true,
   defaultValue: "'active'",
 },
 ]}
 />
 
-##### Workflow程计划输入 {/* #workflow-schedule-input */}
+##### Workflow 排程输入 {/* #workflow-schedule-input */}
 
 <PropertiesTable
   content={[
@@ -205,80 +205,80 @@ const schedule = await mastra.schedules.create({
   name: 'id',
   type: 'string',
   description:
-    'Optional stable schedule ID. The value is normalized to `schedule_<slug>`. When omitted, Mastra generates a `schedule_<uuid>` ID.',
+      '可选的稳定排程 ID。该值会规范化为 `schedule_<slug>`。省略时，Mastra 会生成 `schedule_<uuid>` ID。',
   isOptional: true,
 },
 {
   name: 'workflowId',
   type: 'string',
-  description: 'ID of the workflow to start on each schedule fire.',
+    description: '每次排程触发时要启动的 Workflow ID。',
 },
 {
   name: 'cron',
   type: 'string',
   isOptional: true,
   description:
-    'Cron expression for a recurring schedule. Accepts 5-, 6-, or 7-part cron expressions and Croner nicknames. Provide exactly one of `cron` or `runAt`.',
+      '周期性排程的 cron 表达式。支持 5、6 或 7 段表达式及 Croner 昵称。`cron` 和 `runAt` 必须且只能提供一个。',
 },
 {
   name: 'runAt',
   type: 'number | Date',
   isOptional: true,
   description:
-    'Fire the schedule once at this time (epoch milliseconds or `Date`). After it fires, the schedule moves to `completed`. Must be in the future.',
+      '在此时间触发一次排程（Unix 毫秒时间戳或 `Date`）。触发后排程转为 `completed`。时间必须在未来。',
 },
 {
   name: 'endAt',
   type: 'number | Date',
   isOptional: true,
   description:
-    'Only with `cron`. Stop firing after this time; the schedule moves to `completed` once its next occurrence would fall after `endAt`. Must be in the future.',
+      '仅适用于 `cron`。在此时间后停止触发；当下一次触发时机已晚于设定时间，排程会转为 `completed`。`endAt` 必须在未来。',
 },
 {
   name: 'timezone',
   type: 'string',
-  description: 'IANA timezone used to resolve cron fire times.',
+    description: '用于计算 cron 触发时间的 IANA 时区。',
   isOptional: true,
 },
 {
   name: 'inputData',
   type: 'unknown',
-  description: 'Input data passed to the workflow run.',
+    description: '传给 Workflow 运行的输入数据。',
   isOptional: true,
 },
 {
   name: 'initialState',
   type: 'unknown',
-  description: 'Initial workflow state for the scheduled run.',
+    description: '定时运行 Workflow 时使用的初始状态。',
   isOptional: true,
 },
 {
   name: 'requestContext',
   type: 'Record<string, unknown>',
-  description: 'Request context passed to the workflow run.',
+    description: '传给 Workflow 运行的请求上下文。',
   isOptional: true,
 },
 {
   name: 'metadata',
   type: 'Record<string, unknown>',
-  description: 'Arbitrary metadata stored with the schedule row.',
+    description: '与排程记录一起存储的任意元数据。',
   isOptional: true,
 },
 {
   name: 'status',
   type: "'active' | 'paused'",
-  description: 'Initial lifecycle status. Defaults to `active`.',
+    description: '初始生命周期状态。默认为 `active`。',
   isOptional: true,
   defaultValue: "'active'",
 },
 ]}
 />
 
-### 阅读时间表 {/* #read-schedules */}
+### 读取排程 {/* #read-schedules */}
 
 #### `get(id)` {/* #getid */}
 
-通过 ID 获取时间表。裸Agent调度 ID 也被解析为标准化的`agent_<slug>` form.
+按 ID 获取排程。也会将不带前缀的 Agent 排程 ID 解析为规范化的 `agent_<slug>` 形式。
 
 ```typescript
 const schedule = await mastra.schedules.get('pinger')
@@ -286,7 +286,7 @@ const schedule = await mastra.schedules.get('pinger')
 
 #### `list(filter?)` {/* #listfilter */}
 
-列出时间表。如果没有过滤器，它会返回Agent和Workflow程计划。
+列出排程。不提供筛选条件时，会返回 Agent 和 Workflow 排程。
 
 ```typescript
 const schedules = await mastra.schedules.list({
@@ -300,7 +300,7 @@ const schedules = await mastra.schedules.list({
 {
   name: 'filter',
   type: 'ListSchedulesFilter',
-  description: 'Optional filters for the list operation.',
+    description: '列表操作的可选筛选条件。',
   isOptional: true,
   properties: [
     {
@@ -309,37 +309,37 @@ const schedules = await mastra.schedules.list({
         {
           name: 'agentId',
           type: 'string',
-          description: 'Return only agent schedules for this agent.',
+             description: '仅返回此 Agent 的排程。',
           isOptional: true,
         },
         {
           name: 'workflowId',
           type: 'string',
-          description: 'Return only workflow schedules for this workflow.',
+             description: '仅返回此 Workflow 的排程。',
           isOptional: true,
         },
         {
           name: 'threadId',
           type: 'string',
-          description: 'Return only agent schedules for this thread.',
+             description: '仅返回此线程的 Agent 排程。',
           isOptional: true,
         },
         {
           name: 'resourceId',
           type: 'string',
-          description: 'Return only agent and workflow schedules for this resource.',
+             description: '仅返回此资源的 Agent 和 Workflow 排程。',
           isOptional: true,
         },
         {
           name: 'name',
           type: 'string',
-          description: 'Return only agent schedules with this label.',
+             description: '仅返回带有此标签的 Agent 排程。',
           isOptional: true,
         },
         {
           name: 'status',
           type: "'active' | 'paused' | 'completed'",
-          description: 'Return only schedules with this status. The default listing omits completed schedules.',
+             description: '仅返回此状态的排程。默认列表不包含已完成的排程。',
           isOptional: true,
         },
       ],
@@ -349,11 +349,11 @@ const schedules = await mastra.schedules.list({
 ]}
 />
 
-### 更新时间表 {/* #update-schedules */}
+### 更新排程 {/* #update-schedules */}
 
 #### `update(id, patch)` {/* #updateid-patch */}
 
-更新时间表。改变`cron` or `timezone` recomputes the next fire time. Updating `status` from `paused` to `active` also recomputes the next fire time. A schedule becomes `completed` once its cron has no future occurrence. A cadence edit that leaves no future occurrence completes the row even when it was `paused`. Editing the cadence of a completed schedule reactivates it when the new cadence can still fire, and leaves it completed when it can't.
+更新排程。修改 `cron` 或 `timezone` 会重新计算下次触发时间。将 `status` 从 `paused` 改为 `active` 也会重新计算。cron 不再有未来触发时机时，排程转为 `completed`。即使排程处于 `paused`，如果节奏变更后没有未来触发时机，该记录也会完成。修改已完成排程的节奏后，若新节奏仍能触发则重新激活，否则保持完成状态。
 
 ```typescript
 const updated = await mastra.schedules.update('pinger', {
@@ -362,15 +362,15 @@ const updated = await mastra.schedules.update('pinger', {
 })
 ```
 
-Agent日程补丁可以更新`cron`, `timezone`, `prompt`, `name`, `signalType`, `tagName`, `attributes`, `providerOptions`, `ifActive`, `ifIdle`, `metadata`, and `status`. `threadId` and `resourceId` aren't patchable. Create a new schedule when the thread target needs to change.
+Agent 排程可更新 `cron`、`timezone`、`prompt`、`name`、`signalType`、`tagName`、`attributes`、`providerOptions`、`ifActive`、`ifIdle`、`metadata` 和 `status`。`threadId` 和 `resourceId` 不支持补丁更新；若要更换目标线程，请创建新排程。
 
-Workflow程计划补丁可以更新`cron`, `timezone`, `inputData`, `initialState`, `requestContext`, `resourceId`, `metadata`, and `status`. Agent-only patch fields such as `prompt`, `signalType`, and `ifIdle` throw on workflow schedules.
+Workflow 排程可更新 `cron`、`timezone`、`inputData`、`initialState`、`requestContext`、`resourceId`、`metadata` 和 `status`。对 Workflow 排程传入 `prompt`、`signalType` 或 `ifIdle` 等 Agent 专属补丁字段会抛出错误。
 
 ### 生命周期 {/* #lifecycle */}
 
 #### `pause(id)` {/* #pauseid */}
 
-暂停计划。暂停是持久且幂等的。暂停一个`completed` schedule throws a `409` error.
+暂停排程。暂停操作会持久化，且重复执行不会改变结果。暂停 `completed` 排程会抛出 `409` 错误。
 
 ```typescript
 const paused = await mastra.schedules.pause('pinger')
@@ -378,7 +378,7 @@ const paused = await mastra.schedules.pause('pinger')
 
 #### `resume(id)` {/* #resumeid */}
 
-恢复暂停的计划并从当前时间重新计算下一次触发时间。一次性时间表保留其`runAt`; if it passed while the schedule was paused, the schedule fires on the next scheduler tick. A paused schedule whose cron has no future occurrence is completed instead of resumed. Resuming a `completed` schedule throws a `409` error; update its timing instead to reactivate it.
+恢复已暂停的排程，并从当前时间重新计算下次触发时间。单次排程保留原有 `runAt`；如果暂停期间已过了该时间，排程会在调度器下一次轮询时触发。暂停中的 cron 排程若无未来触发时机，会转为完成状态，而不会恢复。恢复 `completed` 排程会抛出 `409` 错误；要重新激活它，应更新触发时间。
 
 ```typescript
 const active = await mastra.schedules.resume('pinger')
@@ -386,29 +386,29 @@ const active = await mastra.schedules.resume('pinger')
 
 #### `run(id)` {/* #runid */}
 
-立即触发一次计划，而不改变其 cron 节奏。
+立即手动触发排程一次，不改变其 cron 频率。
 
 ```typescript
 const run = await mastra.schedules.run('pinger')
 ```
 
-对于Agent时间表，`claimId` uses `manual_<scheduleId>_<timestamp>`. For workflow schedules, `claimId` uses `sched_<scheduleId>_<timestamp>` and is reused as the workflow run ID.
+对于 Agent 排程，`claimId` 使用 `manual_<scheduleId>_<timestamp>`；对于 Workflow 排程，`claimId` 使用 `sched_<scheduleId>_<timestamp>`，并复用为 Workflow run ID。
 
 #### `delete(id)` {/* #deleteid */}
 
-删除计划。删除缺失的时间表是无操作的。
+删除排程。删除不存在的排程不会产生任何效果。
 
 ```typescript
 await mastra.schedules.delete('pinger')
 ```
 
-## 安排行为 {/* #schedule-behavior */}
+## 排程行为 {/* #schedule-behavior */}
 
-* Agent计划 ID 使用`agent_` prefix. Workflow schedule IDs created through `mastra.schedules.create()` use the `schedule_` prefix.
-* 线程Agent调度需要`resourceId` when `threadId` is set.
-* 在Agent日程表上，`signalType`, `ifActive`, `ifIdle`, and `resourceId` require `threadId`. Workflow schedules accept `resourceId` without a thread.
-* Workflow计划不接受仅限Agent的补丁字段，例如`prompt`, `signalType`, or `ifIdle`.
-* `run()`立即发布手动触发并且不会更改存储的 cron 节奏。
-* 时间表有三种状态：`active`, `paused`, and `completed`. A schedule becomes `completed` when it has no remaining automatic fires: after a one-off fires, when a bounded or exhausted cron has no future occurrence, or when declarative registration finds its timing has already passed. `update()` and `resume()` also mark exhausted cron schedules as completed. `run()` doesn't complete a one-off schedule.
-* 更新中`runAt` on a one-off, or `endAt` on a cron schedule (`null` removes the bound), reactivates a `completed` schedule only if the resulting timing can still fire. A cron schedule with no occurrence before its new `endAt` remains completed.
-* `list()`隐藏`completed` schedules unless you pass `status: 'completed'`.
+- Agent 排程 ID 使用 `agent_` 前缀。通过 `mastra.schedules.create()` 创建的 Workflow 排程 ID 使用 `schedule_` 前缀。
+- 带线程的 Agent 排程需要 `resourceId`，前提是设置了 `threadId`。
+- 对 Agent 排程，`signalType`、`ifActive`、`ifIdle` 和 `resourceId` 都需要 `threadId`。Workflow 排程不使用线程也可接受 `resourceId`。
+- Workflow 排程不接受 `prompt`、`signalType` 或 `ifIdle` 等 Agent 专属补丁字段。
+- `run()` 会立即发布一次手动触发，不改变已存储的 cron 频率。
+- 排程有 `active`、`paused` 和 `completed` 三种状态。没有剩余的自动触发时机时，排程会转为 `completed`：单次排程触发后、设有结束时间或已耗尽的 cron 排程没有未来触发时机时，或声明式注册发现计划时间已过时。`update()` 和 `resume()` 也会将已耗尽的 cron 排程标记为完成。`run()` 不会使单次排程完成。
+- 更新单次排程的 `runAt`，或更新 cron 排程的 `endAt`（设为 `null` 可移除结束限制）时，只有新时间仍可触发，才会重新激活 `completed` 排程。如果新的 `endAt` 之前没有 cron 触发时机，排程仍保持完成状态。
+- `list()` 默认隐藏 `completed` 排程；传入 `status: 'completed'` 才会显示。

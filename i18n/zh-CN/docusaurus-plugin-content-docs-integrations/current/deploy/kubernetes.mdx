@@ -1,53 +1,53 @@
 ---
-title: "Kubernetes | Deploy"
-description: "Deploy and scale Mastra across multiple Kubernetes pods with shared storage, durable agents, external coordination, health checks, and ingress."
+title: "Kubernetes | 部署"
+description: "在多个 Kubernetes Pod 上部署和扩缩 Mastra，使用共享存储、持久化 Agent、外部协调机制、健康检查和 Ingress。"
 ---
 
 import Steps from "@site/src/components/Steps";
 import StepItem from "@site/src/components/StepItem";
 
-# 库伯内斯
+# Kubernetes
 
-跨多个 Pod 运行 Mastra 应用程序[Kubernetes](https://kubernetes.io/)，因此它在负载均衡器后面水平扩展。由于每个 pod 都是一个单独的进程，因此 pod 必须共享 pub/sub 后端和数据库，否则在一个 pod 上启动的工作对其他 pod 是不可见的。
+在 [Kubernetes](https://kubernetes.io/) 的多个 Pod 中运行 Mastra 应用，就能在负载均衡器后面水平扩展。每个 Pod 都是一个独立进程，因此必须共享发布/订阅后端和数据库。否则，其他 Pod 无法得知某个 Pod 上启动的任务。
 
-:::注意
-本指南涵盖了部署[Mastra server](/docs/server/overview) with hand-written manifests. To deploy Mastra Server and Studio with a managed chart instead, see [Kubernetes (Helm)](/integrations/deploy/kubernetes-helm)。如果您使用的是[服务器适配器](/docs/server/server-adapters)或者[网络框架](/docs/deployment/web-framework)，按照您通常为该框架部署的方式进行部署。
+:::note
+本指南介绍如何用手写清单部署 [Mastra 服务器](/docs/server/overview)。如果要用托管的 Chart 部署 Mastra Server 和 Studio，请参阅 [Kubernetes (Helm)](/integrations/deploy/kubernetes-helm)。如果使用[服务器适配器](/docs/server/server-adapters)或 [Web 框架](/docs/deployment/web-framework)，请按该框架的常规方式部署。
 :::
 
-:::测试版
-多 Pod 支持依赖于[durable agents](/docs/harness/durable-agents). Breaking changes may occur without a major version bump until the API is stable. Read [Known limitations](#known-limitations) before you rely on this in production.
+:::beta
+多 Pod 支持依赖[持久化 Agent](/docs/harness/durable-agents)。在 API 稳定前，即使主版本号没有变化，也可能引入不兼容变更。在生产环境中使用前，请阅读[已知限制](#known-limitations)。
 :::
 
 ## 开始之前 {/* #before-you-begin */}
 
-你需要：
+请准备以下资源：
 
-* 一个[Mastra application](/docs)
-* 一个[Kubernetes](https://kubernetes.io/docs/setup/) cluster and [`kubectl`](https://kubernetes.io/docs/tasks/tools/)
-* 您的集群可以从中提取的容器注册表
-* 一个共享的[Redis](https://redis.io/) instance, reachable from every pod
-* 一个共享的[PostgreSQL](https://www.postgresql.org/) database, reachable from every pod
+* 一个 [Mastra 应用](/docs)
+* 一个 [Kubernetes](https://kubernetes.io/docs/setup/) 集群和 [`kubectl`](https://kubernetes.io/docs/tasks/tools/)
+* 一个集群可从中拉取镜像的容器镜像仓库
+* 一个所有 Pod 均可访问的共享 [Redis](https://redis.io/) 实例
+* 一个所有 Pod 均可访问的共享 [PostgreSQL](https://www.postgresql.org/) 数据库
 
 ## 为什么多个 Pod 需要共享基础设施 {/* #why-multiple-pods-need-shared-infrastructure */}
 
-单个 Pod 将运行状态保存在自己的内存中。使用一个 pod 就可以了，因为每个请求都会到达相同的进程。跨 pod 会出现问题：浏览器可能会从 pod A 进行流式传输，而用户的下一个请求会路由到 pod B，而 pod B 没有 pod A 上的运行记录。
+只有一个 Pod 时，所有请求都由同一进程处理，把运行状态保存在该 Pod 的内存中就够了。有多个 Pod 时，浏览器可能正在接收 Pod A 的流式输出，而用户的下一个请求被路由到 Pod B。Pod B 没有 Pod A 上的运行记录。
 
-Redis 和 Postgres 缩小了这一差距：
+Redis 和 Postgres 分别负责事件传递和状态存储：
 
-* **发布/订阅**在 pod 之间传递事件。当一个事件在一个 Pod 上发布时，其他 Pod 就会收到它。马斯特拉用途[`RedisStreamsPubSub`](/reference/pubsub/redis-streams), which also provides the per-thread leasing that keeps a single pod as the owner of a conversation at a time. See [PubSub](/docs/server/pubsub).
-* **贮存**保持运行状态。[Durable agents](/docs/harness/durable-agents) save each run as a workflow snapshot, so any pod can resume a run from the database after a restart or when a request is routed elsewhere.
+* **发布/订阅**在 Pod 之间传递事件。一个 Pod 发布事件后，其他 Pod 都会收到。Mastra 使用 [`RedisStreamsPubSub`](/reference/pubsub/redis-streams)，它还为每个线程提供租约，确保同一时间只有一个 Pod 持有该对话。参阅[发布/订阅](/docs/server/pubsub)。
+* **存储**将运行状态持久化。[持久化 Agent](/docs/harness/durable-agents) 将每次运行保存为 Workflow 快照。即使 Pod 重启或请求被路由到其他 Pod，任意 Pod 都能从数据库恢复该次运行。
 
 ## 配置共享基础设施 {/* #configure-shared-infrastructure */}
 
-点`Mastra` instance at Redis and Postgres. Read the connection details from environment variables so the same image runs in every pod.
+让 `Mastra` 实例连接到 Redis 和 Postgres。从环境变量读取连接信息，这样所有 Pod 都可以使用同一镜像。
 
-安装后端：
+安装后端依赖：
 
 ```bash npm2yarn
 npm install @mastra/redis-streams @mastra/pg @mastra/redis ioredis
 ```
 
-在上配置发布/订阅、存储和共享缓存`Mastra` instance:
+在 `Mastra` 实例中配置发布/订阅、存储和共享缓存：
 
 ```typescript title="src/mastra/index.ts"
 import { Mastra } from '@mastra/core'
@@ -73,13 +73,13 @@ export const mastra = new Mastra({
 })
 ```
 
-这`cache` is what makes resumable streams work across pods. A reconnecting client replays missed events from this cache, so it must be shared. The default in-memory cache only serves replays within one process.
+`cache` 让客户端能够跨 Pod 续接数据流。客户端重连时会从缓存中重放错过的事件，因此所有 Pod 必须共享缓存。默认的内存缓存只能在同一进程内重放事件。
 
-## 使用持久剂 {/* #use-durable-agents */}
+## 使用持久化 Agent {/* #use-durable-agents */}
 
-一个平原[`Agent`](/docs/agents/overview) keeps its stream and approval state in one pod's memory, so those don't survive a request landing on another pod. A [durable agent](/docs/harness/durable-agents) runs the agentic loop inside a workflow and persists its state, so any pod can observe or resume the same run.
+普通 [`Agent`](/docs/agents/overview) 将流式输出和审批状态保存在单个 Pod 的内存中。请求落到另一个 Pod 时，那个 Pod 无法访问这些数据。[持久化 Agent](/docs/harness/durable-agents) 在 Workflow 中执行 Agent 循环并持久化状态，因此任意 Pod 都能观察或恢复同一次运行。
 
-将Agent包裹起来`createDurableAgent()`:
+用 `createDurableAgent()` 包装 Agent：
 
 ```typescript title="src/mastra/agents/assistant.ts"
 import { Agent } from '@mastra/core/agent'
@@ -95,17 +95,17 @@ const agent = new Agent({
 export const durableAssistant = createDurableAgent({ agent })
 ```
 
-注册持久Agent`Mastra` instance above. Its run state now lives in Postgres and its events flow through Redis, so the run is reachable from every pod.
+将持久化 Agent 注册到上面配置的 `Mastra` 实例中。运行状态存入 Postgres，事件通过 Redis 传递，所有 Pod 都可访问这次运行。
 
 ## 部署 {/* #deploy */}
 
 <Steps>
   <StepItem>
-    构建并容器化 Mastra 服务器，然后将映像推送到您的注册表。遵循[Mastra server](/docs/server/overview) guide for the build, and ensure the server reads `process.env.PORT` and listens on `0.0.0.0`.
+    按照 [Mastra 服务器](/docs/server/overview)指南构建服务器，将其打包成容器镜像并推送到镜像仓库。确保服务器从 `process.env.PORT` 读取端口，并在 `0.0.0.0` 上监听。
   </StepItem>
 
   <StepItem>
-    将共享连接字符串存储为 Secret：
+    将各 Pod 共用的连接字符串存入 Secret：
 
     ```bash
     kubectl create secret generic mastra-secrets \
@@ -115,7 +115,7 @@ export const durableAssistant = createDurableAgent({ agent })
   </StepItem>
 
   <StepItem>
-    应用运行映像的部署，读取共享的 Secret。从一个副本开始，以便第一个 Pod 自行创建数据库架构，然后在下一步中进行扩展：
+    应用 Deployment，让容器运行该镜像并读取共享的 Secret。先启动一个副本，让第一个 Pod 独立创建数据库模式，下一步再增加副本：
 
     ```yaml title="deployment.yaml"
     apiVersion: apps/v1
@@ -155,26 +155,26 @@ export const durableAssistant = createDurableAgent({ agent })
                   memory: 512Mi
     ```
 
-    这`resources.requests.cpu` value is required for the HorizontalPodAutoscaler below. Kubernetes calculates CPU utilization as usage divided by the requested amount, so without a CPU request the autoscaler can't compute a target and won't scale.
+    后面的 HorizontalPodAutoscaler 需要 `resources.requests.cpu`。Kubernetes 用实际 CPU 用量除以请求量来计算利用率。未设置 CPU 请求量时，自动扩缩容控制器无法计算目标副本数，也就不会扩缩容。
 
     ```bash
     kubectl apply -f deployment.yaml
     ```
 
-    第一个 Pod 准备就绪后，扩大规模：
+    等第一个 Pod 就绪后，增加副本：
 
     ```bash
     kubectl wait --for=condition=available deployment/mastra
     kubectl scale deployment/mastra --replicas=3
     ```
 
-    :::注意
-    每个副本都运行相同的映像并连接到相同的 Redis 和 Postgres。共享的基础设施，而不是 Pod 数量，才是让跨 Pod 运行的原因。
+    :::note
+    每个副本都使用同一镜像，并连接到同一套 Redis 和 Postgres。仅增加 Pod 数量无法让运行跨 Pod 继续，还需要共享基础设施。
     :::
   </StepItem>
 
   <StepItem>
-    使用服务公开部署：
+    通过 Service 暴露 Deployment：
 
     ```yaml title="service.yaml"
     apiVersion: v1
@@ -195,7 +195,7 @@ export const durableAssistant = createDurableAgent({ agent })
   </StepItem>
 
   <StepItem>
-    使用 Horizo​​ntalPodAutoscaler 自动缩放副本：
+    用 HorizontalPodAutoscaler 自动调整副本数：
 
     ```yaml title="hpa.yaml"
     apiVersion: autoscaling/v2
@@ -222,41 +222,41 @@ export const durableAssistant = createDurableAgent({ agent })
     kubectl apply -f hpa.yaml
     ```
 
-    :::注意
-    基于 CPU 的自动缩放需要[metrics-server](https://github.com/kubernetes-sigs/metrics-server) running in the cluster. Managed clusters like GKE, EKS, and AKS include it. Local clusters like kind and minikube don't, so enable it there first (for example, `minikube addons enable metrics-server`).
+    :::note
+    按 CPU 利用率自动扩缩容要求集群中运行 [metrics-server](https://github.com/kubernetes-sigs/metrics-server)。GKE、EKS 和 AKS 等托管集群包含它。kind 和 minikube 等本地集群不自带该组件，需要先启用，例如运行 `minikube addons enable metrics-server`。
     :::
   </StepItem>
 
   <StepItem>
-    验证 Pod 正在运行：
+    确认 Pod 已运行：
 
     ```bash
     kubectl get pods -l app=mastra
     ```
 
-    在一台终端转发服务。该命令保留在前台：
+    在一个终端中将 Service 的端口转发到本地。该命令会持续在前台运行：
 
     ```bash
     kubectl port-forward service/mastra 8080:80
     ```
 
-    在第二个终端中，调用 API：
+    打开另一个终端，调用 API：
 
     ```bash
     curl http://localhost:8080/api/agents
     ```
 
-    Agent的 JSON 列表意味着部署正在运行。
+    如果返回的 JSON 中列出了 Agent，就说明部署已能处理请求。
 
-    :::警告
-    设置[authentication](/docs/auth/overview) before exposing your endpoints publicly.
+    :::warning
+    向公众开放端点前，请先配置[身份验证](/docs/auth/overview)。
     :::
   </StepItem>
 </Steps>
 
-## 流媒体和重新连接 {/* #streaming-and-reconnection */}
+## 流式传输与重连 {/* #streaming-and-reconnection */}
 
-持久Agent通过共享的发布/订阅将流块发布到每次运行的主题。断开连接的客户端通过调用重新连接`observe()` with the run's ID, and replays the chunks it missed from the shared cache:
+持久化 Agent 通过共享的发布/订阅后端，将流式数据块发布到该次运行专用的主题。客户端断线后，传入运行 ID 调用 `observe()` 即可重连，并从共享缓存中重放错过的数据块：
 
 ```typescript title="src/server/reconnect.ts"
 const { output, detach } = await durableAssistant.observe(runId)
@@ -270,15 +270,15 @@ for await (const chunk of output.fullStream) {
 }
 ```
 
-由于运行状态位于 Postgres 中且事件位于 Redis 中，因此重新连接请求可以由任何 pod 提供服务，而不仅仅是启动运行的 pod。看[Resumable streams](/docs/harness/durable-agents#resumable-streams).
+运行状态保存在 Postgres，事件保存在 Redis，因此任意 Pod 都能处理重连请求，即使该次运行是在其他 Pod 上启动的。参阅[可恢复的流式传输](/docs/harness/durable-agents#resumable-streams)。
 
-多个客户端可以同时观察同一运行。每个`observe()` call receives the full stream, so a user watching from two devices, or two people following the same run, stay in sync. When one client leaves the loop or calls `detach()`, only that client stops watching. Don't call `cleanup()` from an observer, because it clears the cached events the other clients need to reconnect.
+多个客户端可以同时观察同一次运行。每次调用 `observe()` 都会收到完整的数据流，因此同一用户在两台设备上查看，或两位用户同时查看时，看到的内容会保持同步。某个客户端退出循环或调用 `detach()` 时，只有该客户端会停止接收。观察端不要调用 `cleanup()`，否则会清除其他客户端重连所需的缓存事件。
 
-## 跨 Pod 的Tool批准 {/* #tool-approval-across-pods */}
+## 跨 Pod 审批 Tool 调用 {/* #tool-approval-across-pods */}
 
-持久Agent会暂停Tool调用，直到人类批准为止。由于暂停的运行会保存到 Postgres，因此批准可以到达任何 pod，而不仅仅是启动运行的 pod。
+持久化 Agent 会在调用 Tool 前暂停，等待人工批准。暂停的运行保存在 Postgres，因此任意 Pod 都能处理批准请求。
 
-开始需要批准的运行：
+启动一次需要审批的运行：
 
 ```typescript title="src/server/approval.ts"
 const { runId } = await durableAssistant.stream('Delete the archived records', {
@@ -287,25 +287,25 @@ const { runId } = await durableAssistant.stream('Delete the archived records', {
 })
 ```
 
-运行在Tool运行之前暂停。稍后从任何 pod 中批准它：
+运行会在执行 Tool 前暂停。稍后可以通过任意 Pod 批准此次调用：
 
 ```typescript
 await durableAssistant.resume(runId, { approved: true })
 ```
 
-处理审批的 Pod 从 Postgres 加载暂停的运行。然后，它运行批准的Tool并通过共享的发布/订阅发布结果，以便观察运行的客户端收到延续。看[Tool approval](/docs/harness/durable-agents#tool-approval).
+处理审批的 Pod 从 Postgres 加载暂停的运行，执行获批的 Tool 调用，再通过共享的发布/订阅后端发布结果。正在观察该次运行的客户端会继续收到后续输出。参阅 [Tool 审批](/docs/harness/durable-agents#tool-approval)。
 
-## 已知的限制 {/* #known-limitations */}
+## 已知限制 {/* #known-limitations */}
 
-* 默认的进程内设置将运行状态保留在一个 pod 的内存中，并且不会在 pod 之间共享。使用[durable agents](/docs/harness/durable-agents) with shared Redis and Postgres so streaming, approvals, and reconnection work across pods.
-* 跨 Pod 流式传输、批准和重新连接需要持久Agent路径。普通Agent将运行状态保留在内存中，并且不会在另一个 Pod 上恢复。
-* 当多个 Pod 针对未初始化的数据库同时启动时，它们可能会竞相创建架构，并且 Pod 可能无法启动。从一个副本开始，以便架构创建一次，然后进行扩展。
-* 对于更严格的设置，请在应用程序外部初始化架构（例如，一次性 Kubernetes 作业）并设置`disableInit: true` on the `PostgresStore` in every pod.
+* 默认配置将运行状态保存在单个 Pod 的进程内存中，其他 Pod 无法访问。配合共享的 Redis 和 Postgres 使用[持久化 Agent](/docs/harness/durable-agents)，即可跨 Pod 进行流式传输、审批和重连。
+* 跨 Pod 的流式传输、审批和重连必须使用持久化 Agent。普通 Agent 将运行状态保存在内存中，无法在另一个 Pod 上恢复运行。
+* 多个 Pod 同时启动并连接到尚未初始化的数据库时，可能争相创建数据库模式，导致某个 Pod 启动失败。先启动一个副本，等数据库模式创建完成后再增加副本。
+* 如果需要更严格地控制初始化，请在应用之外初始化数据库模式，例如运行一次性的 Kubernetes Job，并在每个 Pod 的 `PostgresStore` 中设置 `disableInit: true`。
 
-## 有关的 {/* #related */}
+## 相关文档 {/* #related */}
 
-* [发布订阅](/docs/server/pubsub)
-* [持久剂](/docs/harness/durable-agents)
-* [工人](/docs/deployment/workers)：将后台处理拆分到 Kubernetes 上的单独容器中
-* [马斯特拉服务器](/docs/server/overview)
+* [发布/订阅](/docs/server/pubsub)
+* [持久化 Agent](/docs/harness/durable-agents)
+* [Worker](/docs/deployment/workers)：在 Kubernetes 的独立容器中执行后台任务
+* [Mastra 服务器](/docs/server/overview)
 * [部署概览](/docs/deployment/overview)

@@ -1,15 +1,15 @@
 ---
-title: "Reference: IsolatedVmCodeModeTransport | Tools and MCP"
-description: "The IsolatedVmCodeModeTransport class runs Code mode programs in an in-process V8 isolate, backed by isolated-vm."
+title: "參考：IsolatedVmCodeModeTransport | Tools and MCP"
+description: "IsolatedVmCodeModeTransport 類別以 isolated-vm 為基礎，在處理程序內的 V8 isolate 執行 Code mode 程式。"
 packages:
   - "@mastra/isolated-vm"
 ---
 
 # 隔離Vm程式碼模式傳輸
 
-這`IsolatedVmCodeModeTransport`班級跑步[編碼方式](/docs/agents/code-mode)進程內 V8 隔離中的程序，由[隔離虛擬機](https://github.com/laverdet/isolated-vm)。隔離是執行邊界，因此不需要Workspace沙箱：程式沒有檔案系統、網路、進程或模組存取權限。它唯一的能力是`external_*`函數，它回調主機上的真實Tool。
+`IsolatedVmCodeModeTransport` 類別在處理程序內的 V8 isolate 執行 [Code mode](/docs/agents/code-mode) 程式，底層使用 [isolated-vm](https://github.com/laverdet/isolated-vm)。isolate 本身就是執行邊界，因此不需要工作區 Sandbox：程式無法存取檔案系統、網路、處理程序或模組。它唯一可用的能力是 `external_*` 函式，這些函式會呼叫宿主端的實際工具。
 
-與預設值相比`StdioCodeModeTransport`, this transport spawns no processes and writes no temp files, which makes it a good fit for serverless and multi-tenant hosts where OS-level sandboxing isn't available.
+相較於預設的 `StdioCodeModeTransport`，此傳輸方式不會啟動處理程序或寫入暫存檔，適合無法使用作業系統層級隔離的 Serverless 與多租戶主機。
 
 ## 安裝 {/* #installation */}
 
@@ -17,9 +17,9 @@ packages:
 npm install @mastra/isolated-vm
 ```
 
-`isolated-vm`是一個原生插件。它為常見平台提供預先建置的二進位文件，因此安裝通常不需要額外的設定。僅在沒有匹配預先建置的平台上才需要 C++ Tool鏈，在該平台上它會回退到從原始程式碼進行編譯。
+`isolated-vm` 是原生擴充套件。常見平台有預先編譯的二進位檔，通常不需要額外設定。只有在平台沒有相符的預先編譯版本、必須從原始碼編譯時，才需要 C++ 工具鏈。
 
-在 Node.js 20 及更高版本上，建立隔離會崩潰，除非主機進程以`--no-node-snapshot`. The constructor reports the missing flag as an error. Pass it when starting the server or through `NODE_OPTIONS`:
+在 Node.js 20 以上版本，若宿主處理程序啟動時未加上 `--no-node-snapshot`，建立 isolate 會導致當機。建構函式會將缺少此旗標回報為錯誤。請在啟動伺服器時傳入，或透過 `NODE_OPTIONS` 設定：
 
 ```bash
 NODE_OPTIONS=--no-node-snapshot npm run dev
@@ -27,7 +27,7 @@ NODE_OPTIONS=--no-node-snapshot npm run dev
 
 ## 用法 {/* #usage */}
 
-將傳輸作為第二個參數傳遞給`createCodeMode()`. No `sandbox` is needed:
+將此傳輸方式作為第二個參數傳給 `createCodeMode()`。不需要 `sandbox`：
 
 ```typescript
 import { createCodeMode } from '@mastra/core/tools'
@@ -39,41 +39,40 @@ const { tool, instructions } = createCodeMode(
 )
 ```
 
-## 建構函數參數 {/* #constructor-parameters */}
+## 建構函式參數 {/* #constructor-parameters */}
 
 <PropertiesTable
   content={[
-{
-  name: 'options',
-  type: 'IsolatedVmCodeModeTransportOptions',
-  description: 'Configuration for the isolate.',
-  isOptional: true,
-  properties: [
-    {
-      type: 'IsolatedVmCodeModeTransportOptions',
-      parameters: [
-        {
-          name: 'memoryLimitMb',
-          type: 'number',
-          description:
-            'V8 isolate heap limit in MiB. A program that exceeds the limit is terminated and the tool returns an error result.',
-          isOptional: true,
-          defaultValue: '128',
-        },
-      ],
-    },
-  ],
-},
+  {
+    name: 'options',
+    type: 'IsolatedVmCodeModeTransportOptions',
+    description: 'isolate 的設定。',
+    isOptional: true,
+    properties: [
+      {
+        type: 'IsolatedVmCodeModeTransportOptions',
+        parameters: [
+          {
+            name: 'memoryLimitMb',
+            type: 'number',
+            description: 'V8 isolate 的堆積記憶體上限（MiB）。程式超過上限時會終止，工具會傳回錯誤結果。',
+            isOptional: true,
+            defaultValue: '128',
+          },
+        ],
+      },
+    ],
+  },
 ]}
 />
 
-## 它是如何運作的 {/* #how-it-works */}
+## 運作原理 {/* #how-it-works */}
 
-每次運行都會創建一個具有自己的堆的新分離株。使用 esbuild 在主機上剝離 TypeScript，然後在隔離內評估程式。每一個`external_*` call crosses the isolate boundary as JSON strings in both directions, so no host object references leak into model-authored code. The allow-list, tool validation, request context, and tracing all run on the host, the same as with other transports.
+每次執行都會建立擁有獨立堆積記憶體的新 isolate。宿主先用 esbuild 移除 TypeScript 型別，再於 isolate 中執行程式。每次 `external_*` 呼叫都會以 JSON 字串雙向跨越隔離邊界，因此宿主物件的參照不會洩漏至模型撰寫的程式碼。允許清單、工具驗證、請求情境與 Trace 都在宿主端執行，與其他傳輸方式相同。
 
-這`timeout` configured on `createCodeMode()` applies to both asynchronous hangs and synchronous infinite loops, and the isolate is disposed after every run.
+設定項目 `timeout`（由 `createCodeMode()` 設定）同時適用於非同步停滯與同步無限迴圈；每次執行後都會釋放 isolate。
 
-## 有關的 {/* #related */}
+## 相關內容 {/* #related */}
 
-* [編碼方式](/docs/agents/code-mode)
-* [createCodeMode() 參考](/reference/tools/create-code-mode)
+- [Code mode](/docs/agents/code-mode)
+- [createCodeMode() 參考](/reference/tools/create-code-mode)

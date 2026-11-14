@@ -1,60 +1,60 @@
 ---
-title: "Storage | v1 Migration Guide"
-description: "Storage APIs have been standardized with consistent pagination and naming patterns across all methods."
+title: "儲存 | v1 遷移指南"
+description: "儲存 API 已統一規範，所有方法均採用一致的分頁方式和命名規則。"
 ---
 
-# 貯存
+# 儲存
 
-儲存 API 已經標準化，所有方法都具有一致的分頁和命名模式。
+儲存 API 已統一規範，所有方法均採用一致的分頁方式和命名規則。
 
 ## 資料庫遷移 {/* #database-migration */}
 
-透過正常遷移流程（例如 Prisma Migrate、Drizzle Kit 或 DBA 審核流程）來執行這些 SQL 遷移。
+請按慣常的遷移流程執行這些 SQL 遷移，例如使用 Prisma Migrate、Drizzle Kit，或交由 DBA 審核。
 
-### 記分錶列重命名 {/* #scorers-table-column-rename */}
+### 評分資料表欄位重新命名 {/* #scorers-table-column-rename */}
 
-這`runtimeContext` column in `mastra_scorers` was renamed to `requestContext`.
+`mastra_scorers` 資料表中的 `runtimeContext` 欄位已重新命名為 `requestContext`。
 
-:::注意\[誰需要此遷移]
-僅當您使用`@mastra/pg` or `@mastra/libsql` with evals/scoring and have existing data in the `runtimeContext` column.
+:::note[誰需要執行此遷移]
+只有在使用 `@mastra/pg` 或 `@mastra/libsql` 進行評估或評分，而且 `runtimeContext` 欄位已有資料時，才需要執行。
 :::
 
-:::重要\[沒有它會破壞什麼]
-現有分數記錄的請求上下文資料將無法存取。
+:::important[未執行此遷移的影響]
+現有評分紀錄中的請求上下文資料將無法存取。
 :::
 
-部署 v1 後（新增了新的`requestContext` column on init), copy the data and drop the old column:
+部署 v1 後，初始化程序會新增 `requestContext` 欄位。此時請複製資料，再刪除舊欄位：
 
 ```sql
 UPDATE mastra_scorers SET "requestContext" = "runtimeContext" WHERE "runtimeContext" IS NOT NULL;
 ALTER TABLE mastra_scorers DROP COLUMN "runtimeContext";
 ```
 
-### 重複跨度遷移 {/* #duplicate-spans-migration */}
+### 重複 span 遷移 {/* #duplicate-spans-migration */}
 
-如果您從舊版的 Mastra 升級，您可能會有重複的`(traceId, spanId)` entries in your `mastra_spans` table. V1 adds a unique constraint on these columns to ensure data integrity, but this constraint can't be added if duplicates exist.
+如果從舊版 Mastra 升級，`mastra_spans` 資料表中可能有重複的 `(traceId, spanId)` 紀錄。v1 會為這兩個欄位新增唯一約束，以確保資料完整性；若有重複紀錄，就無法新增該約束。
 
-:::注意\[誰需要此遷移]
-僅當您擁有 v1 之前的 Mastra 版本的現有跨度資料並且遇到有關重複鍵違規或約束創建失敗的錯誤時。
+:::note[誰需要執行此遷移]
+只有在已有 Mastra v1 之前的 span 資料，並遇到重複鍵衝突或約束建立失敗的錯誤時，才需要執行。
 :::
 
-:::重要\[沒有它會破壞什麼]
-嘗試新增唯一約束時，儲存初始化可能會失敗，或者您可能會看到「重複鍵值違反唯一約束」之類的錯誤。
+:::important[未執行此遷移的影響]
+儲存初始化可能在新增唯一約束時失敗，或出現「duplicate key value violates unique constraint」等錯誤。
 :::
 
-#### 選項 1：使用 CLI（建議） {/* #option-1-use-the-cli-recommended */}
+#### 方案 1：使用 CLI（建議） {/* #option-1-use-the-cli-recommended */}
 
-執行遷移命令，該命令會自動對跨度進行重複資料刪除並新增約束：
+執行以下遷移指令，自動移除重複 span 並新增約束：
 
 ```bash
 npx mastra migrate
 ```
 
-CLI 會捆綁您的專案並在運行遷移之前連接到您配置的儲存空間。它保留了最完整的記錄（基於`endTime` and attributes) when removing duplicates.
+CLI 會先封裝項目並連接已設定的儲存系統，再執行遷移。移除重複紀錄時，它會根據 `endTime` 和屬性保留資料最完整的一筆。
 
-#### 選項 2：手動 SQL (PostgreSQL) {/* #option-2-manual-sql-postgresql */}
+#### 方案 2：手動執行 SQL（PostgreSQL） {/* #option-2-manual-sql-postgresql */}
 
-如果您喜歡手動運行遷移：
+如果希望手動執行遷移：
 
 ```sql
 -- Remove duplicates, keeping the most complete record
@@ -67,9 +67,9 @@ WHERE a.ctid < b.ctid
 ALTER TABLE mastra_spans ADD CONSTRAINT mastra_spans_trace_span_unique UNIQUE ("traceId", "spanId");
 ```
 
-#### 選項 3：手動遷移（其他資料庫） {/* #option-3-manual-migration-other-databases */}
+#### 方案 3：手動遷移（其他資料庫） {/* #option-3-manual-migration-other-databases */}
 
-對於 ClickHouse、LibSQL、MongoDB 或 MSSQL，請使用程式設計 API：
+對於 ClickHouse、LibSQL、MongoDB 或 MSSQL，請使用程式化 API：
 
 ```typescript
 const storage = mastra.getStorage()
@@ -86,10 +86,10 @@ console.log(result)
 
 ### JSON 欄位（TEXT → JSONB） {/* #json-columns-text--jsonb */}
 
-**僅限 PostgreSQL。**&#x9019;`metadata` column in `mastra_threads` and `snapshot` column in `mastra_workflow_snapshot` changed from TEXT to JSONB.
+**僅適用於 PostgreSQL。**`mastra_threads` 資料表中的 `metadata` 欄位，以及 `mastra_workflow_snapshot` 資料表中的 `snapshot` 欄位，已由 TEXT 改為 JSONB。
 
-:::注意\[建議]
-移轉到 JSONB 可啟用本機 PostgreSQL JSON 運算子和 GIN 索引，以提高 JSON 欄位的查詢效能。
+:::note[建議]
+遷移至 JSONB 後，可使用 PostgreSQL 原生 JSON 運算子和 GIN 索引，提升 JSON 欄位的查詢效能。
 :::
 
 ```sql
@@ -102,11 +102,11 @@ ALTER COLUMN snapshot TYPE jsonb
 USING snapshot::jsonb;
 ```
 
-## 額外 {/* #added */}
+## 新增 {/* #added */}
 
-### 儲存組成`MastraCompositeStore` {/* #storage-composition-in-mastracompositestore */}
+### 使用 `MastraCompositeStore` 組合儲存系統 {/* #storage-composition-in-mastracompositestore */}
 
-`MastraCompositeStore`現在可以從不同的適配器組成儲存域。當不同的目的需要不同的資料庫時使用它，例如用於記憶體的 PostgreSQL 和具有專門資料庫的Workflow用於可觀察性。
+`MastraCompositeStore` 現在可組合來自不同轉接器的儲存領域。當不同用途需要不同資料庫時，可使用此功能，例如以 PostgreSQL 儲存記憶和 Workflow 資料，並以專用資料庫儲存可觀測性資料。
 
 ```typescript
 import { MastraCompositeStore } from '@mastra/core/storage'
@@ -127,17 +127,17 @@ const mastra = new Mastra({
 })
 ```
 
-請參閱[Storage Composition reference](/reference/storage/composite) for more details.
+詳情請參閱[儲存組合參考文件](/reference/storage/composite)。
 
-## 改變了 {/* #changed */}
+## 變更 {/* #changed */}
 
-### `MastraStorage`重新命名為`MastraCompositeStore` {/* #mastrastorage-renamed-to-mastracompositestore */}
+### `MastraStorage` 重新命名為 `MastraCompositeStore` {/* #mastrastorage-renamed-to-mastracompositestore */}
 
-這`MastraStorage` class has been renamed to `MastraCompositeStore` to better reflect its role as a composite storage implementation that routes different domains to different underlying stores. This avoids confusion with the general "Mastra Storage" concept (the `storage` property on the Mastra instance).
+`MastraStorage` 類別已重新命名為 `MastraCompositeStore`，更準確地表明它是將不同儲存領域導向不同底層儲存系統的組合實作。這亦可避免與廣義的「Mastra Storage」概念（即 Mastra 執行個體上的 `storage` 屬性）混淆。
 
-舊的`MastraStorage` name remains available as a deprecated alias for backward compatibility, but will be removed in a future version.
+舊名稱 `MastraStorage` 仍以已棄用的別名保留，以兼容現有程式碼，但將於未來版本移除。
 
-若要遷移，請更新您的匯入和實例化：
+遷移時，請更新匯入和建立執行個體的程式碼：
 
 ```diff
 - import { MastraStorage } from "@mastra/core/storage";
@@ -157,15 +157,15 @@ const mastra = new Mastra({
   });
 ```
 
-:::注意
-如果您使用單一商店實現（例如`PostgresStore` or `LibSQLStore`) directly, keep the existing configuration. This only affects code that explicitly uses `MastraStorage` for composite storage.
+:::note
+如果直接使用單一儲存實作（例如 `PostgresStore` 或 `LibSQLStore`），請保留現有設定。此變更只影響明確使用 `MastraStorage` 組合儲存系統的程式碼。
 :::
 
-### 必需的`id` property for storage instances {/* #required-id-property-for-storage-instances */}
+### 儲存執行個體必須提供 `id` 屬性 {/* #required-id-property-for-storage-instances */}
 
-儲存實例現在需要`id` property. This unique identifier is used for tracking and managing storage instances within Mastra. The `id` should be a descriptive, unique string for each storage instance in your application.
+儲存執行個體現在必須提供 `id` 屬性。Mastra 使用這個唯一識別碼追蹤和管理儲存執行個體。應為應用程式中的每個儲存執行個體指定具描述性而且唯一的 `id` 字串。
 
-若要遷移，請新增`id` field to your storage constructor.
+遷移時，請在儲存建構函式中加入 `id` 欄位。
 
 ```diff
   const storage = new PostgresStore({
@@ -181,11 +181,11 @@ const mastra = new Mastra({
   });
 ```
 
-### 分頁來自`offset/limit` to `page/perPage` {/* #pagination-from-offsetlimit-to-pageperpage */}
+### 分頁參數由 `offset/limit` 改為 `page/perPage` {/* #pagination-from-offsetlimit-to-pageperpage */}
 
-所有分頁 API 現在都使用`page` and `perPage` instead of `offset` and `limit`, matching page-based web pagination.
+所有分頁 API 現在均使用 `page` 和 `perPage`，取代 `offset` 和 `limit`，與按頁碼分頁的網頁方式一致。
 
-若要遷移，請更新所有分頁參數`offset/limit` to `page/perPage`. Note that `page` is 0-indexed.
+遷移時，請將所有分頁參數由 `offset/limit` 改為 `page/perPage`。請注意，`page` 從 0 開始計數。
 
 ```diff
   memoryStore.listMessages({
@@ -197,11 +197,11 @@ const mastra = new Mastra({
   });
 ```
 
-### `getMessagesPaginated`到`listMessages` {/* #getmessagespaginated-to-listmessages */}
+### `getMessagesPaginated` 改為 `listMessages` {/* #getmessagespaginated-to-listmessages */}
 
-這`getMessagesPaginated()` method has been replaced with `listMessages()`. The new method supports `perPage: false` to fetch all records without pagination. This change aligns with the `list*` naming convention and adds flexibility for fetching all records.
+`getMessagesPaginated()` 已由 `listMessages()` 取代。新方法支援使用 `perPage: false` 擷取所有紀錄，而不進行分頁。此變更符合 `list*` 命名慣例，亦讓擷取所有紀錄更具彈性。
 
-若要遷移，請重新命名該方法並更新分頁參數。您現在可以使用`perPage: false` to fetch all records.
+遷移時，請更改方法名稱並更新分頁參數。現在可使用 `perPage: false` 擷取所有紀錄。
 
 ```diff
 + const memoryStore = await storage.getStore('memory');
@@ -224,9 +224,9 @@ const mastra = new Mastra({
 + });
 ```
 
-:::提示\[程式碼修改]
+:::tip[Codemod]
 
-您可以使用 Mastra 的 codemod CLI 自動更新您的程式碼：
+可使用 Mastra 的 codemod CLI 自動更新程式碼：
 
 ```bash
 npx @mastra/codemod@latest v1/storage-get-messages-paginated .
@@ -234,19 +234,19 @@ npx @mastra/codemod@latest v1/storage-get-messages-paginated .
 
 :::
 
-### 域特定的儲存存取透過`getStore()` {/* #domain-specific-storage-access-via-getstore */}
+### 透過 `getStore()` 存取特定儲存領域 {/* #domain-specific-storage-access-via-getstore */}
 
-現在可以透過特定於網域的儲存來存取儲存操作，而不是直接在儲存實例上存取。
+現在須透過對應儲存領域的 store 執行儲存操作，而非直接在儲存執行個體上呼叫。
 
-域包括：
+儲存領域包括：
 
-* **`memory`**- 線程、訊息和資源
-* **`workflows`**- Workflow快照
-* **`scores`**- 評估分數
-* **`observability`**- 痕跡和跨度
-* **`agents`**- 儲存的Agent數據
+- **`memory`** - 對話執行緒、訊息和資源
+- **`workflows`** - Workflow 快照
+- **`scores`** - 評估分數
+- **`observability`** - trace 和 span
+- **`agents`** - 已儲存的 Agent 資料
 
-如需遷移，請致電`getStore()` with the domain name, then call methods on the returned store.
+遷移時，請將儲存領域名稱傳入 `getStore()`，再呼叫傳回的 store 上的方法。
 
 ```diff
   const storage = mastra.getStorage();
@@ -276,17 +276,17 @@ npx @mastra/codemod@latest v1/storage-get-messages-paginated .
 + const scores = await scoresStore?.listScoresByScorerId({ scorerId: 'helpfulness' });
 ```
 
-### `getThreadsByResourceId`到`listThreads` {/* #getthreadsbyresourceid-to-listthreads */}
+### `getThreadsByResourceId` 改為 `listThreads` {/* #getthreadsbyresourceid-to-listthreads */}
 
-這`getThreadsByResourceId()` method has been replaced with `listThreads()`. The new method adds pagination support and filtering by `resourceId`, `metadata`, or both.
+`getThreadsByResourceId()` 已由 `listThreads()` 取代。新方法支援分頁，亦可按 `resourceId`、`metadata` 或兩者組合篩選。
 
-：：：重要的
+:::important
 
-舊的`getThreadsByResourceId()` returned all matching threads without pagination. The new `listThreads()` requires pagination parameters. To preserve the old behavior of fetching all threads, use `perPage: false`.
+舊方法 `getThreadsByResourceId()` 會傳回所有符合條件的對話執行緒，不進行分頁。新方法 `listThreads()` 需要分頁參數。如要像以前一樣擷取所有對話執行緒，請使用 `perPage: false`。
 
 :::
 
-要遷移，請使用記憶體存儲和新的`listThreads()` method with pagination and an optional filter object.
+遷移時，請透過 memory store 呼叫新的 `listThreads()` 方法，並傳入分頁參數及可選的篩選物件。
 
 ```diff
 - const threads = await storage.getThreadsByResourceId({
@@ -312,9 +312,9 @@ npx @mastra/codemod@latest v1/storage-get-messages-paginated .
 
 新方法也支援：
 
-* 列出所有線程（省略過濾器）
-* 僅按元資料過濾
-* 組合的resourceId +元資料過濾器
+- 列出所有對話執行緒（省略篩選條件）
+- 只按中繼資料篩選
+- 組合使用 `resourceId` 和中繼資料篩選
 
 ```typescript
 // List all threads
@@ -338,9 +338,9 @@ await memoryStore?.listThreads({
 })
 ```
 
-:::提示\[程式碼修改]
+:::tip[Codemod]
 
-您可以使用 Mastra 的 codemod CLI 自動更新您的程式碼：
+可使用 Mastra 的 codemod CLI 自動更新程式碼：
 
 ```bash
 npx @mastra/codemod@latest v1/storage-list-threads-by-resource-to-list-threads .
@@ -348,11 +348,11 @@ npx @mastra/codemod@latest v1/storage-list-threads-by-resource-to-list-threads .
 
 :::
 
-### `getWorkflowRuns`到`listWorkflowRuns` {/* #getworkflowruns-to-listworkflowruns */}
+### `getWorkflowRuns` 改為 `listWorkflowRuns` {/* #getworkflowruns-to-listworkflowruns */}
 
-這`getWorkflowRuns()` method has been renamed to `listWorkflowRuns()`. This change aligns with the convention that `list*` methods return collections.
+`getWorkflowRuns()` 已重新命名為 `listWorkflowRuns()`，符合傳回集合的方法使用 `list*` 前綴的命名慣例。
 
-若要遷移，請使用Workflow儲存、重新命名方法呼叫並更新分頁參數。
+遷移時，請使用 workflows store，更改方法名稱並更新分頁參數。
 
 ```diff
 - const runs = await storage.getWorkflowRuns({
@@ -365,9 +365,9 @@ npx @mastra/codemod@latest v1/storage-list-threads-by-resource-to-list-threads .
   });
 ```
 
-:::提示\[程式碼修改]
+:::tip[Codemod]
 
-您可以使用 Mastra 的 codemod CLI 自動更新您的程式碼：
+可使用 Mastra 的 codemod CLI 自動更新程式碼：
 
 ```bash
 npx @mastra/codemod@latest v1/storage-list-workflow-runs .
@@ -375,11 +375,11 @@ npx @mastra/codemod@latest v1/storage-list-workflow-runs .
 
 :::
 
-### `getMessagesById`到`listMessagesById` {/* #getmessagesbyid-to-listmessagesbyid */}
+### `getMessagesById` 改為 `listMessagesById` {/* #getmessagesbyid-to-listmessagesbyid */}
 
-這`getMessagesById()` method has been renamed to `listMessagesById()`. This change aligns with the convention that `list*` methods return collections.
+`getMessagesById()` 已重新命名為 `listMessagesById()`，符合傳回集合的方法使用 `list*` 前綴的命名慣例。
 
-要遷移，請使用記憶體存儲並重命名方法呼叫。
+遷移時，請使用 memory store 並更改方法名稱。
 
 ```diff
 + const memoryStore = await storage.getStore('memory');
@@ -389,9 +389,9 @@ npx @mastra/codemod@latest v1/storage-list-workflow-runs .
   });
 ```
 
-:::提示\[程式碼修改]
+:::tip[Codemod]
 
-您可以使用 Mastra 的 codemod CLI 自動更新您的程式碼：
+可使用 Mastra 的 codemod CLI 自動更新程式碼：
 
 ```bash
 npx @mastra/codemod@latest v1/storage-list-messages-by-id .
@@ -399,11 +399,11 @@ npx @mastra/codemod@latest v1/storage-list-messages-by-id .
 
 :::
 
-### 貯存`getMessages` and `saveMessages` signatures {/* #storage-getmessages-and-savemessages-signatures */}
+### 儲存方法 `getMessages` 和 `saveMessages` 的簽章變更 {/* #storage-getmessages-and-savemessages-signatures */}
 
-這`getMessages()` and `saveMessages()` methods have changed signatures and return types. Format overloads have been removed, and the methods now always work with `MastraDBMessage`. This change simplifies the API by removing format variations.
+`getMessages()` 和 `saveMessages()` 的方法簽章及傳回類型已變更。格式多載已移除，這兩個方法現在一律使用 `MastraDBMessage`。移除不同格式的處理方式後，API 更加簡潔。
 
-若要遷移，請使用記憶體儲存、刪除格式參數並更新程式碼以使用一致的傳回類型。
+遷移時，請使用 memory store、移除格式參數，並調整程式碼以處理一致的傳回類型。
 
 ```diff
 + const memoryStore = await storage.getStore('memory');
@@ -421,11 +421,11 @@ npx @mastra/codemod@latest v1/storage-list-messages-by-id .
 + const saved = saveResult?.messages; // MastraDBMessage[]
 ```
 
-### 從位置參數到按名稱參數的向量儲存 API {/* #vector-store-api-from-positional-arguments-to-arguments-by-name */}
+### 向量儲存 API 由位置參數改為具名參數物件 {/* #vector-store-api-from-positional-arguments-to-arguments-by-name */}
 
-所有向量存儲方法現在都使用參數物件而不是位置參數。這使得每個值的用途在呼叫站點可見，並讓方法簽名在不依賴參數順序的情況下發展。
+所有向量儲存方法現在均使用參數物件，取代位置參數。這讓呼叫處清楚顯示每個值的用途，方法簽章亦可在不依賴參數順序的情況下演進。
 
-若要遷移，請更新所有向量儲存方法呼叫以使用參數物件。
+遷移時，請將所有向量儲存方法呼叫改為傳入參數物件。
 
 ```diff
 - await vectorDB.createIndex(indexName, 3, 'cosine');
@@ -452,9 +452,9 @@ npx @mastra/codemod@latest v1/storage-list-messages-by-id .
 
 ### 向量儲存方法重新命名 {/* #vector-store-method-renames */}
 
-這`updateIndexById` and `deleteIndexById` methods have been renamed to `updateVector` and `deleteVector` respectively. The new names identify that these methods operate on vectors.
+`updateIndexById` 和 `deleteIndexById` 已分別重新命名為 `updateVector` 和 `deleteVector`。新名稱清楚表明這些方法操作的是向量。
 
-若要遷移，請重新命名方法並傳遞參數物件。
+遷移時，請更改方法名稱並傳入參數物件。
 
 ```diff
 - await vectorDB.updateIndexById(indexName, id, update);
@@ -463,11 +463,11 @@ npx @mastra/codemod@latest v1/storage-list-messages-by-id .
 + await vectorDB.deleteVector({ indexName, id });
 ```
 
-### 從連接字串到物件的 PGVector 建構函數 {/* #pgvector-constructor-from-connection-string-to-object */}
+### PGVector 建構函式由連接字串改為參數物件 {/* #pgvector-constructor-from-connection-string-to-object */}
 
-PGVector 建構子現在需要物件參數而不是連接字串。物件參數使 API 跨儲存適配器保持一致。
+PGVector 建構函式現在要求傳入參數物件，不再直接接受連接字串。這使各儲存轉接器的 API 保持一致。
 
-若要遷移，請將連接字串作為物件屬性傳遞。
+遷移時，請將連接字串作為物件屬性傳入。
 
 ```diff
 - const pgVector = new PgVector(process.env.POSTGRES_CONNECTION_STRING!);
@@ -476,9 +476,9 @@ PGVector 建構子現在需要物件參數而不是連接字串。物件參數�
 + });
 ```
 
-:::提示\[程式碼修改]
+:::tip[Codemod]
 
-您可以使用 Mastra 的 codemod CLI 自動更新您的程式碼：
+可使用 Mastra 的 codemod CLI 自動更新程式碼：
 
 ```bash
 npx @mastra/codemod@latest v1/vector-pg-constructor .
@@ -486,11 +486,11 @@ npx @mastra/codemod@latest v1/vector-pg-constructor .
 
 :::
 
-### PG向量`defineIndex` to `buildIndex` {/* #pgvector-defineindex-to-buildindex */}
+### PGVector 的 `defineIndex` 改為 `buildIndex` {/* #pgvector-defineindex-to-buildindex */}
 
-這`defineIndex()` method has been removed in favor of `buildIndex()`, which identifies that the method builds an index.
+`defineIndex()` 已移除，改用 `buildIndex()`。新名稱清楚表明此方法會建立索引。
 
-若要遷移，請重新命名該方法並傳遞一個參數物件。
+遷移時，請更改方法名稱並傳入參數物件。
 
 ```diff
 - await vectorDB.defineIndex(indexName, 'cosine', { type: 'flat' });
@@ -501,11 +501,11 @@ npx @mastra/codemod@latest v1/vector-pg-constructor .
 + });
 ```
 
-### `PostgresStore`: `schema` to `schemaName` {/* #postgresstore-schema-to-schemaname */}
+### `PostgresStore`：`schema` 改為 `schemaName` {/* #postgresstore-schema-to-schemaname */}
 
-這`schema` parameter has been renamed to `schemaName` in the PostgresStore constructor. The new name identifies the value as the database schema's name.
+`PostgresStore` 建構函式中的 `schema` 參數已重新命名為 `schemaName`，清楚表明此值是資料庫 schema 的名稱。
 
-若要遷移，請重新命名參數。
+遷移時，請更改參數名稱。
 
 ```diff
   const pgStore = new PostgresStore({
@@ -515,9 +515,9 @@ npx @mastra/codemod@latest v1/vector-pg-constructor .
   });
 ```
 
-:::提示\[程式碼修改]
+:::tip[Codemod]
 
-您可以使用 Mastra 的 codemod CLI 自動更新您的程式碼：
+可使用 Mastra 的 codemod CLI 自動更新程式碼：
 
 ```bash
 npx @mastra/codemod@latest v1/storage-postgres-schema-name .
@@ -525,11 +525,11 @@ npx @mastra/codemod@latest v1/storage-postgres-schema-name .
 
 :::
 
-### 對儲存方法進行評分`listScoresBy*` pattern {/* #score-storage-methods-to-listscoresby-pattern */}
+### 評分儲存方法採用 `listScoresBy*` 命名模式 {/* #score-storage-methods-to-listscoresby-pattern */}
 
-分數儲存 API 已重新命名以遵循`listScoresBy*` pattern. The new names follow the broader API naming conventions.
+評分儲存 API 已重新命名，統一採用 `listScoresBy*` 模式。新名稱符合 API 的整體命名慣例。
 
-若要遷移，請更新方法名稱`getScores` to `listScoresByScorerId` and related variants.
+遷移時，請將 `getScores` 改為 `listScoresByScorerId`，並相應更新其他相關方法名稱。
 
 ```diff
 - const scores = await storage.getScores({ scorerName: 'helpfulness-scorer' });
@@ -539,13 +539,13 @@ npx @mastra/codemod@latest v1/storage-postgres-schema-name .
 + // Also available: listScoresByRunId, listScoresByEntityId, listScoresBySpan
 ```
 
-## 已刪除 {/* #removed */}
+## 移除 {/* #removed */}
 
-### 非分頁儲存函數 {/* #non-paginated-storage-functions */}
+### 不分頁的儲存函式 {/* #non-paginated-storage-functions */}
 
-非分頁儲存功能已被刪除，以支援分頁版本。所有清單操作現在都使用分頁，儘管您可以使用以下命令來取得所有記錄`perPage: false`. Pagination aligns list operations across the API and prevents accidental loading of large datasets.
+不分頁的儲存函式已移除，改用支援分頁的版本。所有清單操作現在均採用分頁方式，但仍可透過 `perPage: false` 擷取所有紀錄。分頁讓整個 API 的清單操作保持一致，亦可避免意外載入大量資料。
 
-若要遷移，請透過網域儲存使用分頁方法。若要取得所有記錄，請使用`perPage: false`.
+遷移時，請透過對應儲存領域的 store 呼叫分頁方法。如需擷取所有紀錄，請使用 `perPage: false`。
 
 ```diff
 - // Non-paginated direct access
@@ -562,11 +562,11 @@ npx @mastra/codemod@latest v1/storage-postgres-schema-name .
 + });
 ```
 
-### `getTraces`和`getTracesPaginated` {/* #gettraces-and-gettracespaginated */}
+### `getTraces` 和 `getTracesPaginated` {/* #gettraces-and-gettracespaginated */}
 
-這`getTraces()` and `getTracesPaginated()` methods have been removed from storage. Use the observability package to access traces instead of core storage.
+儲存系統中的 `getTraces()` 和 `getTracesPaginated()` 方法已移除。請透過可觀測性套件存取 trace，而非透過核心儲存系統存取。
 
-要遷移，請改用可觀察性儲存方法。
+遷移時，請改用可觀測性儲存方法。
 
 ```diff
 - const traces = await storage.getTraces({ traceId: 'trace-123' });
@@ -578,11 +578,11 @@ npx @mastra/codemod@latest v1/storage-postgres-schema-name .
 + // Access traces through observability API
 ```
 
-### 評估測試實用程序 {/* #evals-test-utilities */}
+### Evals 測試工具 {/* #evals-test-utilities */}
 
-Evals 域測試實用程式已從`@internal/test-utils`. This change reflects the removal of legacy evals functionality.
+Evals 儲存領域的測試工具已從 `@internal/test-utils` 移除。這反映了舊版 evals 功能的移除。
 
-若要遷移，請直接使用儲存 API 進行測試，而不是專門的 evals 測試實用程式。
+遷移時，請直接使用儲存 API 進行測試，不再使用專門的 Evals 測試工具。
 
 ```diff
 - import { createEvalsTests } from '@internal/test-utils/domains/evals';
@@ -591,8 +591,8 @@ Evals 域測試實用程式已從`@internal/test-utils`. This change reflects th
 + // Use storage APIs directly for testing
 ```
 
-### 來自 MSSQL 儲存的 TABLE\_EVALS {/* #table_evals-from-mssql-storage */}
+### 從 MSSQL 儲存系統移除 TABLE\_EVALS {/* #table_evals-from-mssql-storage */}
 
-這`TABLE_EVALS` table has been removed from MSSQL storage implementations. This change reflects the removal of legacy evals functionality.
+MSSQL 儲存實作中的 `TABLE_EVALS` 資料表已移除。這反映了舊版 evals 功能的移除。
 
-如果您將 MSSQL 儲存空間與 evals 一起使用，請遷移到其他儲存適配器或刪除 evals 功能。
+如果使用 MSSQL 儲存系統執行 evals，請遷移至其他儲存轉接器，或移除 evals 功能。

@@ -1,17 +1,17 @@
 ---
 title: "Cloudflare Sandbox | Sandbox"
-description: "Execute commands and manage files in remote Cloudflare Sandboxes through the Sandbox Bridge API, with credentials, session reuse, and previews."
+description: "通过 Sandbox Bridge API 在远程 Cloudflare Sandbox 中执行命令和管理文件，支持凭据认证、会话复用和预览。"
 packages:
   - "@mastra/cloudflare-sandbox"
 ---
 
 # Cloudflare Sandbox
 
-`CloudflareSandbox`执行命令并管理远程文件[Cloudflare Sandbox](https://developers.cloudflare.com/sandbox/)通过[沙盒桥 HTTP API](https://developers.cloudflare.com/sandbox/bridge/http-api/).
+`CloudflareSandbox` 通过 [Sandbox Bridge HTTP API](https://developers.cloudflare.com/sandbox/bridge/http-api/) 在远程 [Cloudflare Sandbox](https://developers.cloudflare.com/sandbox/) 中执行命令和管理文件。
 
-：：：警告
+:::warning
 
-部署并保护[Sandbox Bridge Worker](https://developers.cloudflare.com/sandbox/bridge/) before using this provider. The bridge can create and delete sandboxes, execute commands, and write files on behalf of its callers.
+使用此 Provider 前，请先部署 [Sandbox Bridge Worker](https://developers.cloudflare.com/sandbox/bridge/) 并做好安全防护。Bridge 可以代表调用方创建和删除 Sandbox、执行命令以及写入文件。
 
 :::
 
@@ -21,9 +21,9 @@ packages:
 npm install @mastra/cloudflare-sandbox
 ```
 
-## 用法 {/* #usage */}
+## 使用方法 {/* #usage */}
 
-添加`CloudflareSandbox` to a workspace and assign it to an agent:
+将 `CloudflareSandbox` 添加到 Workspace，再将该 Workspace 分配给 Agent。
 
 ```typescript title="src/mastra/agents/dev-agent.ts"
 import { Agent } from '@mastra/core/agent'
@@ -48,11 +48,11 @@ export const agent = new Agent({
 })
 ```
 
-提供程序在Workspace启动时创建远程Sandbox。经过`sandboxId` to reconnect to an existing sandbox instead.
+Workspace 启动时，Provider 会创建远程 Sandbox。若要重新连接到已有的 Sandbox，请传入 `sandboxId`。
 
 ## 执行命令 {/* #execute-commands */}
 
-通过传递命令参数、环境变量、工作目录和流式回调`executeCommand()`. The provider sends the command as an `argv` array, so the bridge handles shell escaping:
+调用 `executeCommand()` 时，可以传入命令参数、环境变量、工作目录和处理流式输出的回调函数。Provider 以 `argv` 数组的形式发送命令，由 Bridge 处理 Shell 转义。
 
 ```typescript
 const result = await workspace.sandbox?.executeCommand?.('npm', ['test'], {
@@ -67,9 +67,9 @@ const result = await workspace.sandbox?.executeCommand?.('npm', ['test'], {
 
 ## 写入文件 {/* #write-files */}
 
-相对路径在下解析`/workspace`. Absolute paths must also resolve within `/workspace`. Each file is sent as its own bridge request, and the bridge caps a single file at 32 MiB.
+相对路径以 `/workspace` 为基准解析，绝对路径解析后也必须位于 `/workspace` 内。每个文件通过单独的请求发送给 Bridge，单个文件最大为 32 MiB。
 
-Cloudflare Sandbox无法设置每个文件的权限，因此`writeFiles` call that includes a `mode` is rejected rather than silently ignored.
+Cloudflare Sandbox 无法为单个文件设置权限，因此会直接拒绝包含 `mode` 的 `writeFiles` 调用。
 
 ```typescript
 await workspace.sandbox?.writeFiles?.([
@@ -80,18 +80,18 @@ await workspace.sandbox?.writeFiles?.([
 
 ## 读取文件 {/* #read-files */}
 
-读回单个文件`/workspace` as raw bytes. Relative paths resolve under `/workspace`, and absolute paths must also resolve within it.
+从 `/workspace` 读取单个文件，返回原始字节。相对路径以 `/workspace` 为基准解析，绝对路径解析后也必须位于该目录内。
 
 ```typescript
 const bytes = await workspace.sandbox?.readFile?.('src/index.ts')
 const source = new TextDecoder().decode(bytes)
 ```
 
-## 让文件跨容器休眠 {/* #keep-files-across-container-sleep */}
+## 在容器休眠后保留文件 {/* #keep-files-across-container-sleep */}
 
-Cloudflare 在以下时间后停止空闲容器`sleepAfter` (10 minutes by default). The next command starts a fresh container, so anything written under `/workspace` is gone. Treat `/workspace` as scratch space, and put files that must survive on a mounted bucket.
+容器空闲时间达到 `sleepAfter`（默认为 10 分钟）后，Cloudflare 会停止该容器。下一条命令会启动全新的容器，先前直接写入 `/workspace` 的内容会丢失。请将 `/workspace` 用作临时空间，将需要保留的文件存入已挂载的存储桶。
 
-通过Workspace挂载 S3 兼容存储桶，例如 Cloudflare R2`mounts` option. The sandbox mounts it on `start()`. A slept container boots without its mounts, so the sandbox re-mounts any dropped paths before the next filesystem operation, keeping mounted data durable across sleep.
+通过 Workspace 的 `mounts` 选项配置与 S3 兼容的存储桶，例如 Cloudflare R2。Sandbox 会在 `start()` 时挂载存储桶。容器从休眠中恢复时不会保留原有挂载，所以 Sandbox 会在下一次文件系统操作前重新挂载失去挂载的路径。存储桶中的数据因此能在容器休眠后继续使用。
 
 ```typescript
 import { Workspace } from '@mastra/core/workspace'
@@ -115,13 +115,13 @@ const workspace = new Workspace({
 })
 ```
 
-桥接器安装带有 s3fs 的存储桶，因此只需`type: 's3'` mount configs are accepted. GCS and Azure filesystems, and S3 credentials that include a `sessionToken`, return a failed `MountResult` without contacting the bridge.
+Bridge 使用 s3fs 挂载存储桶，因此只接受 `type: 's3'` 的挂载配置。对于 GCS 或 Azure 文件系统，以及包含 `sessionToken` 的 S3 凭据，Provider 会直接返回表示挂载失败的 `MountResult`，无需向 Bridge 发送请求。
 
-默认`getInstructions()` text tells the model that `/workspace` does not survive between commands and lists the mounted paths to write to instead.
+`getInstructions()` 默认返回的说明会告诉模型，`/workspace` 中的数据可能在两条命令之间丢失，并列出应该写入的挂载路径。
 
-## 保留并恢复Workspace {/* #persist-and-restore-the-workspace */}
+## 备份和恢复 Workspace {/* #persist-and-restore-the-workspace */}
 
-`persistWorkspace()`档案`/workspace` and returns the raw tar bytes; `hydrateWorkspace()` restores it from those bytes. Use this for one-off backups. It is not a substitute for mounts: restoring must happen before the first command after a wake, and a persist taken from a freshly woken container overwrites the archive with an empty workspace.
+`persistWorkspace()` 将 `/workspace` 打包并返回 tar 归档的原始字节，`hydrateWorkspace()` 根据这些字节恢复 Workspace。这种方式适用于一次性备份，无法替代挂载。容器唤醒后，必须在执行第一条命令前恢复数据。如果在容器刚唤醒时就保存备份，空的 Workspace 会覆盖原有归档。
 
 ```typescript
 // Back up before the container can sleep
@@ -133,7 +133,7 @@ const archive = await myStorage.get('workspace-backup')
 await workspace.sandbox?.hydrateWorkspace?.(archive)
 ```
 
-对于执行会话，请使用`CloudflareSandboxBridgeClient` methods (`createSession`, `deleteSession`) directly.
+要管理执行会话，请直接调用 `CloudflareSandboxBridgeClient` 的 `createSession` 和 `deleteSession` 方法。
 
 ## 构造函数参数 {/* #constructor-parameters */}
 
@@ -142,57 +142,57 @@ await workspace.sandbox?.hydrateWorkspace?.(archive)
 {
   name: 'baseUrl',
   type: 'string',
-  description: 'URL of the deployed Cloudflare Sandbox Bridge Worker.',
+  description: '已部署的 Cloudflare Sandbox Bridge Worker 的 URL。',
 },
 {
   name: 'apiToken',
   type: 'string',
-  description: "Bearer token matching the Worker's SANDBOX_API_KEY secret.",
+  description: "与 Worker 的 SANDBOX_API_KEY 密钥匹配的 Bearer 令牌。",
   isOptional: true,
 },
 {
   name: 'sandboxId',
   type: 'string',
-  description: 'Existing Cloudflare sandbox ID to reconnect to instead of creating a sandbox.',
+  description: '已有 Cloudflare Sandbox 的 ID。指定后会重新连接到该 Sandbox，省去新建步骤。',
   isOptional: true,
 },
 {
   name: 'id',
   type: 'string',
-  description: 'Stable Mastra identifier. Defaults to a generated UUID-based value.',
+  description: '固定的 Mastra 标识符。默认使用基于 UUID 生成的值。',
   isOptional: true,
 },
 {
   name: 'name',
   type: 'string',
-  description: 'Human-readable sandbox name.',
+  description: '便于识别的 Sandbox 名称。',
   isOptional: true,
   defaultValue: 'Cloudflare Sandbox',
 },
 {
   name: 'env',
   type: 'Record<string, string>',
-  description: 'Environment variables applied to every command.',
+  description: '应用于每条命令的环境变量。',
   isOptional: true,
 },
 {
   name: 'workingDirectory',
   type: 'string',
   description:
-    'Default directory for command execution when no per-command `cwd` is given. A per-command `cwd` always wins.',
+    '未为单条命令指定 `cwd` 时使用的默认工作目录。单条命令指定的 `cwd` 始终优先。',
   isOptional: true,
 },
 {
   name: 'commandTimeout',
   type: 'number',
-  description: 'Default command timeout in milliseconds.',
+  description: '命令的默认超时时间，单位为毫秒。',
   isOptional: true,
   defaultValue: '300000',
 },
 {
   name: 'instructions',
   type: 'string | ((options) => string)',
-  description: 'Custom instructions returned by getInstructions().',
+  description: 'getInstructions() 返回的自定义指令。',
   isOptional: true,
 },
 ]}
@@ -200,10 +200,10 @@ await workspace.sandbox?.hydrateWorkspace?.(archive)
 
 ## 生命周期行为 {/* #lifecycle-behavior */}
 
-* `start()`: 重新连接到`sandboxId` or creates a remote sandbox, then mounts any Workspace `mounts`.
-* `stop()`：分离 Mastra 生命周期而不删除远程Sandbox，因为桥接器不公开挂起操作。
-* `destroy()`：删除远程Sandbox。
+* `start()`：重新连接到 `sandboxId` 指定的 Sandbox，或创建远程 Sandbox，然后应用 Workspace 的 `mounts` 挂载配置。
+* `stop()`：解除远程 Sandbox 与 Mastra 生命周期的关联，保留远程 Sandbox，因为 Bridge 没有提供挂起操作。
+* `destroy()`：删除远程 Sandbox。
 
 ## 局限性 {/* #limitations */}
 
-该提供程序直接在Sandbox上提供命令执行、流式输出、文件读取和写入、S3 兼容存储桶安装以及Workspace持久性。会话在桥客户端上可用（`CloudflareSandboxBridgeClient`) but not on the `CloudflareSandbox` surface. PTY terminals are not exposed, and the provider doesn't support background process management, stdin, snapshots, or port URLs.
+此 Provider 通过 Sandbox 接口直接提供命令执行、流式输出、文件读写、S3 兼容存储桶挂载和 Workspace 持久化功能。会话仅能通过 Bridge 客户端（`CloudflareSandboxBridgeClient`）使用，`CloudflareSandbox` 接口不提供会话功能。此 Provider 不提供 PTY 终端，也不支持后台进程管理、标准输入（stdin）、快照或端口 URL。

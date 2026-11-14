@@ -9,31 +9,31 @@ packages:
 
 狀態訊號讓模型了解隨時間變化的情況，例如使用者的瀏覽器頁面或後台任務的進度。它在線程上有一個穩定的名稱，例如`browser`，因此更新描述了跨輪的同一上下文。這些更新提供上下文而不是聊天訊息。
 
-您的應用程式程式碼、背景作業或整合提供更新。這段程式碼被稱為**producer**. It sends either a full description of the current state, called a **snapshot**，或對發生變化的描述，稱為**三角洲**。 Mastra 儲存更新並將其文字包含在模型的上下文中。您的生產者負責比較和組合值。
+應用程式、背景工作或整合程式會提供更新，相關程式碼稱為**生產者**。它可送出完整描述目前狀態的**快照**，或只說明變化的**增量**。Mastra 會儲存更新，並將其文字納入模型上下文；比較和合併數值則由生產者處理。
 
 ## 狀態訊號如何運作 {/* #how-state-signals-work */}
 
-由狀態標識的命名槽`id` is also called a **state lane**. Start it with a snapshot. After that, send deltas while the model still has the snapshot it needs to understand them. Send a fresh snapshot if the old one has left the model's context, or if you're unsure a delta is sufficient.
+由狀態 `id` 標識的具名位置亦稱為**狀態通道**。先傳送快照。只要模型仍有解讀增量所需的快照，便可傳送增量。若舊快照已不在模型上下文內，或無法確定增量是否足夠，便應傳送新快照。
 
-Mastra 追蹤當前`cacheKey` and mode for each state ID. If both match an incoming update, [`sendStateSignal()`](/reference/agents/agent#sendstatesignalstate-options) skips it and returns `{ skipped: true, reason: 'unchanged' }`. Change the cache key when the state changes.
+Mastra 會記錄每個狀態 ID 目前的 `cacheKey` 和模式。若收到的更新兩者都相同，[`sendStateSignal()`](/reference/agents/agent#sendstatesignalstate-options) 會略過更新並回傳 `{ skipped: true, reason: 'unchanged' }`。狀態有變時，請更新快取鍵。
 
 狀態訊號是持久的，因此它們可以在以後的回合中存活下來，並且透過共享存儲，進程可以重新啟動。因為每個接受的更新都會成為上下文，所以在發送之前批量或總結頻繁的更改。
 
-對於使用者輸入，請使用[`sendMessage()`](/reference/agents/agent#sendmessagemessage-options). If context only matters for one model request, send a [transient reactive signal](/docs/signals/sending-signals#send-context-from-a-system) instead. External events that need a durable inbox record and delivery policy belong in [notifications](/docs/signals/notifications).
+使用者輸入應用 [`sendMessage()`](/reference/agents/agent#sendmessagemessage-options) 傳送。若上下文只供一次模型請求使用，請傳送[短暫反應訊號](/docs/signals/sending-signals#send-context-from-a-system)。如外部事件需要永久保存收件匣紀錄及指定傳送策略，應使用[通知](/docs/signals/notifications)。
 
 ## 發送狀態訊號 {/* #send-a-state-signal */}
 
-`sendStateSignal()`, configure [Memory](/docs/memory/overview) on the agent and ensure the target thread exists. Unlike a user message, this call can't create a missing thread.
+調用 `sendStateSignal()` 前，請先為 Agent 設定 [Memory](/docs/memory/overview)，並確認目標對話串已存在。與傳送使用者訊息不同，此方法不能建立尚未存在的對話串。
 
 當生產者偵測到變更時，發送這些欄位：
 
 * `id`：國家名稱，例如`browser`.
-* `mode`: `snapshot` for the full state or `delta` for changes.
+- `mode`：用 `snapshot` 傳送完整狀態，或用 `delta` 傳送變化。
 * `cacheKey`：用於跳過重複更新的版本標識符。
 * `contents`：模型讀取的文字。
 * `value`：適用於您的應用程式和處理器的可選結構化資料。它不會自動顯示給模型。
 
-這[Agent reference](/reference/agents/agent#sendstatesignalstate-options) lists all fields and return values.
+[Agent 參考](/reference/agents/agent#sendstatesignalstate-options)列出所有欄位和回傳值。
 
 ```typescript title="src/mastra/browser-watcher.ts"
 await agent.sendStateSignal(
@@ -57,7 +57,7 @@ await agent.sendStateSignal(
 
 ## 計算處理器中的狀態 {/* #compute-state-in-a-processor */}
 
-使用[`computeStateSignal()`](/reference/processors/processor-interface#computestatesignal) when a processor owns a state lane. Mastra calls it once per model input step after [`processInputStep()`](/reference/processors/processor-interface#processinputstep) and before the model request is finalized. The processor reads `activeStateSignals`, the last snapshot, and `deltasSinceSnapshot`, and returns `undefined` when nothing changed. The [Processors guide](/docs/agents/processors) covers its place in the execution order.
+如由處理器管理狀態通道，可使用 [`computeStateSignal()`](/reference/processors/processor-interface#computestatesignal)。Mastra 會在每個模型輸入步驟中調用它一次，安排在 [`processInputStep()`](/reference/processors/processor-interface#processinputstep) 之後、模型請求定稿之前。處理器會讀取 `activeStateSignals`、最近的快照和 `deltasSinceSnapshot`；沒有變化便回傳 `undefined`。執行次序見[處理器指南](/docs/agents/processors)。
 
 ```typescript title="src/mastra/processors/browser-state.ts"
 import type { ComputeStateSignalArgs, Processor } from '@mastra/core/processors'
@@ -88,19 +88,19 @@ export const browserStateProcessor: Processor = {
 }
 ```
 
-本範例中的瀏覽器讀取、比較、快取鍵和描述幫助程式是您提供的應用程式程式碼。马斯特拉提供`lastSnapshot` and `deltasSinceSnapshot`, loading them from message history if needed. Your processor uses them to decide what changed and what text to send.
+範例中用來讀取瀏覽器、比較狀態、產生快取鍵和描述的輔助函數，由應用程式提供。Mastra 會提供 `lastSnapshot` 和 `deltasSinceSnapshot`，有需要時從訊息記錄載入。處理器會根據兩者判斷有何變化，以及應傳送甚麼文字。
 
 ## 內建用途 {/* #built-in-uses */}
 
 Mastra 使用狀態訊號來實現長期上下文，並且相同的模式適用於您的應用程式：
 
-* 這[browser](/docs/browser) context processor keeps the active page and tabs under `browser`.
+- [瀏覽器](/docs/browser)上下文處理器會在 `browser` 下維護目前頁面和分頁。
 * [目標](/docs/harness/goals)保持目前目標`goal` id.
 * [任務追蹤](/docs/agents/tools#task-tracking)透過儲存任務狀態[`TaskStateProcessor`](/reference/signals/task-signal-provider).
-* [工作記憶](/docs/memory/working-memory#opt-in-to-state-signals-experimental)可以移出系統提示符號並進入`working-memory` state signal with `useStateSignals: true`.
+- 設定 `useStateSignals: true`，便可將[工作記憶](/docs/memory/working-memory#opt-in-to-state-signals-experimental)由系統提示移到 `working-memory` 狀態訊號。
 
 ## 持久化和截斷 {/* #persistence-and-truncation */}
 
 狀態訊號不能是瞬態的。 Mastra 從持久歷史記錄中重建追蹤元數據，因此僅傳遞訊號會破壞重複資料刪除。透過共享存儲，持久狀態及其追蹤可以在重新啟動後繼續存在；如果沒有它，新的流程就會在沒有通道的情況下開始。
 
-`contextWindow.hasSnapshot`告訴處理器活動視窗是否已包含通道的快照。如果是`false`, return a fresh `snapshot` so the model sees current state after older state messages are trimmed.
+`contextWindow.hasSnapshot` 會告知處理器目前視窗是否已包含該通道的快照。如為 `false`，請回傳新的 `snapshot`，讓模型在較舊的狀態訊息被截去後，仍可看到目前狀態。

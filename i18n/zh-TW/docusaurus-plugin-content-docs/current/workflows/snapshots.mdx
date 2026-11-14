@@ -1,6 +1,6 @@
 ---
-title: "Snapshots | Workflows"
-description: "Store and retrieve Mastra workflow snapshots so suspended executions preserve step results and state and can resume reliably across processes."
+title: "快照 | Workflow"
+description: "儲存與讀取 Mastra Workflow 快照，讓暫停的執行保有步驟結果與狀態，並能可靠地跨程序繼續執行。"
 packages:
   - "@mastra/core"
   - "@mastra/libsql"
@@ -8,33 +8,33 @@ packages:
 
 # 快照
 
-在 Mastra 中，快照是Workflow在特定時間點的完整執行狀態的可序列化表示。快照捕獲從中斷位置恢復Workflow所需的所有信息，包括：
+在 Mastra 中，快照會以可序列化的形式記錄 Workflow 在特定時間點的完整執行狀態。其中包含從暫停處繼續執行所需的所有資訊，包括：
 
-* Workflow中每個步驟的當前狀態
-* 已完成步驟的輸出
-* Workflow的執行路徑
-* 任何暫停的步驟及其元數據
-* 每個步驟的剩餘重試次數
-* 恢復執行所需的附加上下文數據
+- 各個步驟目前的狀態
+- 已完成步驟的輸出
+- Workflow 已走過的執行路徑
+- 所有暫停的步驟及其中繼資料
+- 各步驟剩餘的重試次數
+- 繼續執行所需的其他上下文資料
 
-每當Workflow暫停時，Mastra 都會自動建立和管理快照，並將其保留到配置的儲存系統中。
+每當 Workflow 暫停時，Mastra 都會自動建立及管理快照，並將快照持久儲存到設定的儲存系統。
 
-## 快照在掛起和恢復中的作用 {/* #the-role-of-snapshots-in-suspend-and-resume */}
+## 快照在暫停與繼續執行時的作用 {/* #the-role-of-snapshots-in-suspend-and-resume */}
 
-快照是實現 Mastra 暫停和恢復功能的關鍵機制。當Workflow步驟呼叫時`await suspend()`:
+Mastra 透過快照實現暫停與繼續執行。當 Workflow 步驟呼叫 `await suspend()` 時：
 
-1.
-2. Workflow的當前狀態被捕獲為快照
-3. 快照持久化到存儲
-4. Workflow步驟被標記為“已暫停”，狀態為`'suspended'`
-5. 後來，當`resume()` is called on the suspended step, the snapshot is retrieved
-6.
+1. Workflow 會在呼叫處暫停。
+1. 系統將 Workflow 當下的狀態記錄成快照。
+1. 系統將快照寫入持久儲存空間。
+1. 步驟會標記為暫停，狀態是 `'suspended'`。
+1. 之後對暫停的步驟呼叫 `resume()` 時，系統會讀取快照。
+1. Workflow 從原本暫停的位置繼續執行。
 
-該機制提供了一種強大的方法來實現人機互動Workflow、處理速率限制、等待外部資源以及實現可能需要長時間暫停的複雜分支Workflow。
+這個機制可用來建立有人員參與的 Workflow、處理速率限制、等待外部資源，或實作可能需要長時間暫停的複雜分支 Workflow。
 
-## 快照解剖 {/* #snapshot-anatomy */}
+## 快照的內容 {/* #snapshot-anatomy */}
 
-每個快照包括`runId`, input, step status (`success`, `suspended`, etc.), any suspend and resume payloads, and the final output. As a result, full context is available when resuming execution.
+每份快照都包含 `runId`、輸入、步驟狀態（如 `success` 或 `suspended`）、暫停和繼續執行的酬載（若有），以及最終輸出。因此，繼續執行時可取得完整的上下文。
 
 ```json
 {
@@ -85,36 +85,36 @@ packages:
 }
 ```
 
-## 如何儲存和檢索快照 {/* #how-snapshots-are-saved-and-retrieved */}
+## 儲存與讀取快照 {/* #how-snapshots-are-saved-and-retrieved */}
 
-快照儲存到配置的儲存系統。預設情況下，它們使用 libSQL，但您可以設定 Upstash、PostgreSQL 或 OracleDB。每個快照都保存在`workflow_snapshots` table and identified by the workflow's `runId`.
+快照會寫入設定的儲存系統。預設使用 libSQL，也能改用 Upstash、PostgreSQL 或 OracleDB。每份快照都存放在 `workflow_snapshots` 資料表，並以 Workflow 的 `runId` 識別。
 
-閱讀更多有關：
+更多資訊：
 
-* [libSQL 儲存](/integrations/databases/libsql)
-* [Upstash存儲](/integrations/databases/upstash)
-* [PostgreSQL 存儲](/integrations/databases/postgresql)
-* [Oracle資料庫儲存](/integrations/databases/oracledb)
+- [libSQL 儲存](/integrations/databases/libsql)
+- [Upstash 儲存](/integrations/databases/upstash)
+- [PostgreSQL 儲存](/integrations/databases/postgresql)
+- [OracleDB 儲存](/integrations/databases/oracledb)
 
 ### 儲存快照 {/* #saving-snapshots */}
 
-當Workflow暫停時，Mastra 透過以下步驟自動保留Workflow快照：
+Workflow 暫停時，Mastra 會依照下列流程自動持久儲存快照：
 
-1. 這`suspend()` function in a step execution triggers the snapshot process
-2. 這`WorkflowInstance.suspend()` method records the suspended machine
-3. `persistWorkflowSnapshot()`被呼叫來保存當前狀態
-4. 快照被序列化並儲存在配置的資料庫中`workflow_snapshots` table
-5. 儲存記錄包括Workflow名稱、運行 ID 和序列化快照
+1. 步驟執行時呼叫 `suspend()` 函式，觸發快照流程。
+1. `WorkflowInstance.suspend()` 方法會記錄暫停的狀態機。
+1. 系統呼叫 `persistWorkflowSnapshot()` 儲存目前的狀態。
+1. 系統將快照序列化後，寫入設定的資料庫中的 `workflow_snapshots` 資料表。
+1. 儲存的紀錄包含 Workflow 名稱、執行 ID 及序列化後的快照。
 
-### 檢索快照 {/* #retrieving-snapshots */}
+### 讀取快照 {/* #retrieving-snapshots */}
 
-當Workflow復原時，Mastra 透過以下步驟檢索持久快照：
+Workflow 繼續執行時，Mastra 會依照下列流程讀取已儲存的快照：
 
-1. 這`resume()` method is called with a specific step ID
-2. 快照是使用以下方式從儲存裝置載入的`loadWorkflowSnapshot()`
-3. 快照已解析並準備恢復
-4. 使用快照狀態重新建立Workflow執行
-5. 暫停的步驟恢復，繼續執行
+1. 呼叫 `resume()` 方法，並傳入指定的步驟 ID。
+1. 使用 `loadWorkflowSnapshot()` 從儲存空間載入快照。
+1. 解析快照，準備繼續執行。
+1. 依快照狀態重建 Workflow 的執行。
+1. 讓暫停的步驟恢復並繼續執行。
 
 ```typescript
 const storage = mastra.getStorage()
@@ -130,7 +130,7 @@ console.log(snapshot)
 
 ## 快照的儲存選項 {/* #storage-options-for-snapshots */}
 
-快照是使用`storage` instance configured on the `Mastra` class. This storage layer is shared across all workflows registered to that instance. Mastra supports multiple storage options for flexibility in different environments.
+快照會透過 `Mastra` 類別上設定的 `storage` 執行個體持久儲存。註冊到同一 Mastra 執行個體的所有 Workflow 共用這個儲存層。Mastra 支援多種儲存選項，以配合不同環境。
 
 ```typescript title="src/mastra/index.ts"
 import { Mastra } from '@mastra/core'
@@ -146,26 +146,26 @@ export const mastra = new Mastra({
 })
 ```
 
-* [libSQL 儲存](/integrations/databases/libsql)
-* [PostgreSQL 存儲](/integrations/databases/postgresql)
-* [Oracle資料庫儲存](/integrations/databases/oracledb)
-* [MongoDB 存儲](/integrations/databases/mongodb)
-* [Upstash存儲](/integrations/databases/upstash)
-* [Cloudflare D1](/integrations/databases/cloudflare-d1)
-* [動態資料庫](/integrations/databases/dynamodb)
-* [更多儲存Provider](/docs/storage)
+- [libSQL 儲存](/integrations/databases/libsql)
+- [PostgreSQL 儲存](/integrations/databases/postgresql)
+- [OracleDB 儲存](/integrations/databases/oracledb)
+- [MongoDB 儲存](/integrations/databases/mongodb)
+- [Upstash 儲存](/integrations/databases/upstash)
+- [Cloudflare D1](/integrations/databases/cloudflare-d1)
+- [DynamoDB](/integrations/databases/dynamodb)
+- [更多儲存 Provider](/docs/storage)
 
-## 最佳實踐 {/* #best-practices */}
+## 最佳實務 {/* #best-practices */}
 
-1. **確保可串行性**：任何需要包含在快照中的資料都必須是可序列化的（可轉換為 JSON）。
-2. **最小化快照大小**：避免將大型資料物件直接儲存在Workflow上下文中。相反，儲存對它們的引用（如 ID）並在需要時檢索資料。
-3. **小心處理履歷上下文**：恢復Workflow時，請仔細考慮要提供的上下文。這將與現有快照資料合併。
-4. **設定適當的監控**：對暫停的Workflow（尤其是長時間運行的Workflow）實施監控，並確保它們正確恢復。
-5. **考慮儲存擴充**：對於具有許多暫停Workflow的應用程序，請確保您的儲存解決方案已適當擴展。
+1. **確認資料可序列化**：要寫入快照的所有資料都必須可序列化，也就是能轉成 JSON。
+1. **縮小快照**：避免直接把大型資料物件放進 Workflow 上下文。只保留參照，例如 ID，需要時再取得資料。
+1. **審慎處理繼續執行時的上下文**：請仔細決定恢復 Workflow 時要提供哪些上下文，這些內容會與現有快照資料合併。
+1. **妥善設定監控**：監控暫停中的 Workflow，尤其是長時間執行的 Workflow，並確認它們能正常繼續執行。
+1. **考量儲存擴充性**：若應用程式有許多暫停的 Workflow，請確認儲存方案的規模能滿足需求。
 
-## 自訂快照元數據 {/* #custom-snapshot-metadata */}
+## 自訂快照中繼資料 {/* #custom-snapshot-metadata */}
 
-您可以在暫停Workflow時附加自訂元數據，方法是定義`suspendSchema`. This metadata is stored in the snapshot and made available when the workflow is resumed.
+定義 `suspendSchema` 後，即可在暫停 Workflow 時附加自訂中繼資料。這些資料會存入快照，供 Workflow 繼續執行時使用。
 
 ```typescript {30-34} title="src/mastra/workflows/test-workflow.ts"
 import { createWorkflow, createStep } from '@mastra/core/workflows'
@@ -212,9 +212,9 @@ const approvalStep = createStep({
 })
 ```
 
-### 提供履歷數據 {/* #providing-resume-data */}
+### 提供繼續執行所需的資料 {/* #providing-resume-data */}
 
-使用`resumeData` to pass structured input when resuming a suspended step. It must match the step’s `resumeSchema`.
+繼續執行暫停的步驟時，可用 `resumeData` 傳入結構化輸入。資料必須符合步驟的 `resumeSchema`。
 
 ```typescript {14-20}
 const workflow = mastra.getWorkflow('approvalWorkflow')
@@ -240,9 +240,9 @@ if (result.status === 'suspended') {
 }
 ```
 
-## 有關的 {/* #related */}
+## 相關文件 {/* #related */}
 
-* [控制流程](/docs/workflows/control-flow)
-* [暫停和恢復](/docs/workflows/suspend-and-resume)
-* [時間旅行](/docs/workflows/time-travel)
-* [人在迴路](/docs/workflows/human-in-the-loop)
+- [控制流程](/docs/workflows/control-flow)
+- [暫停與繼續執行](/docs/workflows/suspend-and-resume)
+- [時間回溯](/docs/workflows/time-travel)
+- [人員參與](/docs/workflows/human-in-the-loop)

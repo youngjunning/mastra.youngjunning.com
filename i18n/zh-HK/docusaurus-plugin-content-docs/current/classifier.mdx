@@ -1,52 +1,52 @@
 ---
-title: 'Classifier'
-description: 'Ask a decision model typed questions about your application state and act on structured answers instead of parsing generated text.'
+title: '分類器'
+description: '把應用程式狀態及有明確類型的問題交給決策模型，按結構化答案採取行動，毋須解析生成的文字。'
 packages:
   - '@mastra/core'
 ---
 
 # 分類器
 
-**添加於：** `@mastra/core@1.69.0`
+**加入版本** `@mastra/core@1.69.0`
 
-語言模型編寫文本供人閱讀。當您的應用程式需要在該文本中進行判斷時，您會要求提供散文，然後從中解析出一個決定。分類器完全避免了解析。您發送您的狀態的決策模型，它可以是任何與 JSON 相容的數據，以及一組固定的鍵入問題，並且它會為每個問題返回一個鍵入的答案。
+語言模型生成供人閱讀的文字。若應用程式需要當中的判斷，通常要先請模型生成文字，再解析出結論。分類器可省去解析這一步。把任何與 JSON 相容的狀態資料，連同一組固定而類型明確的問題傳送給決策模型，就會逐題收到符合類型的答案。
 
-決策模型是為回答鍵入的問題而建構的模型。使用提供者的創建它`decisionModel()` factory, such as the [TypeSafe AI provider](https://ai-sdk.dev/providers/ai-sdk-providers/typesafe-ai). It isn't the agent's language model, and the constructor doesn't accept a `'provider/model'`細繩。看[選擇決策模型](#choosing-a-decision-model).
+決策模型專門回答類型明確的問題。可透過 Provider 的 `decisionModel()` 工廠方法建立，例如 [TypeSafe AI Provider](https://ai-sdk.dev/providers/ai-sdk-providers/typesafe-ai)。它有別於 Agent 使用的語言模型，建構函數亦不接受 `'provider/model'` 字串。參閱 [選擇決策模型](#choosing-a-decision-model)。
 
-答案是清單中的命名選擇、有序尺度上的位置或陳述為真的機率。選擇和評分答案還可以帶有每個選項或等級的機率，因此您的程式碼可以設定閾值、比較選項或權衡一個答案與另一個答案。模型提供判斷，程式碼提供策略。在您的應用程式對其進行操作之前，答案不會發生任何變化。
+答案可以是列表中的具名選項、有序量表上的位置，或一項陳述成立的概率。選項及評分答案也可附上各選項或級別的概率，讓程式碼設定門檻、比較選項或權衡各個答案。模型提供判斷，程式碼負責套用策略。應用程式按答案採取行動後，才會有實際變化。
 
-## 何時使用分類器 {/* #when-to-use-a-classifier */}
+## 適合使用分類器的情況 {/* #when-to-use-a-classifier */}
 
-當決策具有少量已知結果時，請使用分類器：
+若可預先確定結果只有少數幾種，可使用分類器。
 
-* 將請求路由到正確的團隊、處理程序或Workflow分支。
-* 將操作限制在閾值上，例如Tool呼叫是否需要人工審核。
-* 對輸出的一個維度進行評分，例如音調或品質。
-* 回答有關輸入的是或否的問題，例如訊息是否不安全。
+* 將請求分流至合適的團隊、處理程式或 Workflow 分支。
+* 按門檻決定如何處理某項操作，例如工具呼叫是否需要人手審核。
+* 按單一面向為輸出評分，例如語氣或質素。
+* 就輸入回答是非題，例如判斷某則訊息是否不安全。
 
-當您可以將決策描述為具有固定答案形狀的問題時，分類器就適合。如果模型需要產生具有許多相互依賴欄位的資料對象，請使用[structured output](/docs/agents/structured-output) on an agent instead.
+若可把決策寫成答案格式固定的問題，就適合用分類器。模型如需產生含多個互相依賴欄位的資料物件，可採用 Agent 的 [結構化輸出](/docs/agents/structured-output)。
 
-[埃瓦爾斯](/docs/evals/overview)回答一個不同的問題：它們衡量輸出隨著時間的推移是否良好，而分類器在運行時做出應用程式執行的決定。使用[`createClassifierScorer()`](/reference/evals/create-classifier-scorer) to project a classifier answer into a score for the eval pipeline.
+[Evals](/docs/evals/overview) 用於持續衡量輸出質素。分類器會在執行時作出單次判斷，供應用程式採取行動。可用 [`createClassifierScorer()`](/reference/evals/create-classifier-scorer) 將分類器的答案轉為評估流程使用的分數。
 
 ## 分類器如何運作 {/* #how-classifiers-work */}
 
-分類器包含一組命名問題和一個決策模型。每個[`decide()`](/reference/classifier/classifier#decideoptions) call sends the state once, with every question attached, and returns one answer per question, keyed by question name. Because the questions travel in the same request, adding another one doesn't add a round trip.
+分類器由一組有名稱的問題和一個決策模型組成。每次呼叫 [`decide()`](/reference/classifier/classifier#decideoptions) 只傳送一次狀態，並附上全部問題，再按問題名稱逐一傳回答案。問題透過同一請求傳送，新增問題不會增加請求往返。
 
-問題分為三種：
+問題分為以下三種類型。
 
-|類型 |詢問|返回|
+| 類型 | 問題 | 傳回值 |
 | - | - | - |
-|`choice` | Which key of the `criteria` record applies? | `choice`, plus a probability for every option when the provider reports them |
-| `score` | Where on the ordered `criteria` list does the state fall? | `score`, plus a probability for every level when the provider reports them |
-| `boolean` | Is this statement true? | `probability` |
+| `choice` | `criteria` 記錄中應採用哪個鍵？ | `choice`，如 Provider 有提供概率，亦會傳回各選項的概率 |
+| `score` | 狀態在有序 `criteria` 列表中處於哪個位置？ | `score`，如 Provider 有提供概率，亦會傳回各級別的概率 |
+| `boolean` | 這項陳述是否成立？ | `probability` |
 
-為了`score`, the indexes of the `criteria` list define the range of answers, and scores can be fractional.
+`score` 的答案範圍由 `criteria` 列表的索引決定，分數可為小數。
 
-一個`boolean` answer is the probability that the statement is true. A value of `0.9` means the decision model estimates a 90% chance the answer is `true`. It doesn't mean the model is 90% confident of whichever outcome is more likely.
+`boolean` 答案表示陳述成立的概率。`0.9` 表示模型估計答案為 `true` 的概率是 90%，而非模型對較可能結果的信心程度。
 
-每個問題都應該要求一個判斷。一個權衡多個因素的問題會產生一個你無法確定的答案，因為任何因素的改變都會改變它。單獨詢問因素並將答案合併到程式碼中，您可以在程式碼中重新調整閾值而無需重寫提示。看[Designing questions](/reference/classifier/classifier#designing-questions).
+每條問題只宜要求一項判斷。如問題混合多個因素，任何一項變動都會影響答案，難以據此分流。可分開提問，再在程式碼中綜合答案，調整門檻時便毋須重寫提示。參閱 [設計問題](/reference/classifier/classifier#designing-questions)。
 
-此範例使用 TypeSafe AI 提供者。安裝`@ai-sdk/typesafe-ai` and set `TYPESAFE_AI_API_KEY` before running it. It asks one boolean question and acts on the answer:
+以下示例使用 TypeSafe AI Provider。執行前請安裝 `@ai-sdk/typesafe-ai`，並設定 `TYPESAFE_AI_API_KEY`。示例提出一條布林問題，再按答案採取行動。
 
 ```typescript title="src/mastra/safety.ts"
 import { Classifier } from '@mastra/core/classifier'
@@ -74,33 +74,33 @@ if (answers.unsafe.type === 'refusal') {
 }
 ```
 
-決策模型可以拒絕問題，例如當安全性策略阻止其回答時。返回被拒絕的問題`{ type: 'refusal' }` with no `choice`, `score`, or `probability`, while the other questions in the same call keep their answers. Check `type` before reading an answer field.
+決策模型有時會拒答，例如受安全政策所限。遭拒答的問題會傳回 `{ type: 'refusal' }`，沒有 `choice`、`score` 或 `probability`。同一次呼叫中的其他問題仍會傳回答案。讀取答案欄位前，請先檢查 `type`。
 
-如果提供者呼叫失敗或答案無效，`decide()` rejects instead of returning partial answers. [Validation and errors](/reference/classifier/classifier#validation-and-errors) covers the checks and the retry behavior.
+如呼叫 Provider 失敗或答案未能通過驗證，`decide()` 傳回的 Promise 會被拒絕，不會傳回部分答案。檢查及重試行為見 [驗證及錯誤](/reference/classifier/classifier#validation-and-errors)。
 
-## 分類器運作的地方 {/* #where-classifiers-run */}
+## 在哪裏執行分類器 {/* #where-classifiers-run */}
 
-稱呼`decide()` directly when your application controls the decision point. Mastra also runs classifiers in several places:
+若由應用程式決定何時作出判斷，可直接呼叫 `decide()`。Mastra 亦會在以下位置執行分類器。
 
-* **Workflow路由。**&#x4E00;個[`.classifier()`](/docs/workflows/control-flow#route-with-a-classifier) step classifies the workflow input before `.branch()` routes on the answer.
-* **護欄和節制。** [`ClassifierProcessor`](/reference/processors/classifier-processor) runs a classifier over agent input, output, or stream chunks and passes the answers to `onResult`, where you can abort or filter the content. See [Guardrails](/docs/agents/guardrails).
-* **型號選擇。** [`ModelSelectionProcessor`](/reference/processors/model-selection-processor) classifies the incoming request and can downgrade the agent to a cheaper model. By default it routes on the selected choice. Set `minProbability` to require a confident answer before switching.
-* **得分手。** `createClassifierScorer()` turns one classifier question into a scorer for the eval pipeline.
+* **Workflow 分流**。[`.classifier()`](/docs/workflows/control-flow#route-with-a-classifier) 步驟先將 Workflow 的輸入分類，再由 `.branch()` 按答案選擇分支。
+* **護欄與內容審核**。[`ClassifierProcessor`](/reference/processors/classifier-processor) 會對 Agent 的輸入、輸出或串流區塊分類，並把答案傳給 `onResult`，可在此中止處理或篩走內容。參閱 [護欄](/docs/agents/guardrails)。
+* **選擇模型**。[`ModelSelectionProcessor`](/reference/processors/model-selection-processor) 會對收到的請求分類，並可讓 Agent 改用成本較低的模型。預設按選中的選項分流。設定 `minProbability`，就只會在答案達到指定概率時切換。
+* **Scorer**。`createClassifierScorer()` 會將分類器中的一條問題轉為評估流程使用的 Scorer。
 
-您還可以在`Mastra` instance, which shares them across your application and lets workflows reference them by ID. See [Registering classifiers](/reference/classifier/classifier#registering-classifiers).
+亦可在 `Mastra` 實例註冊分類器，供整個應用程式共用，Workflow 也可按 ID 引用。參閱 [註冊分類器](/reference/classifier/classifier#registering-classifiers)。
 
 ## 選擇決策模型 {/* #choosing-a-decision-model */}
 
-本頁上的範例使用 TypeSafe AI 提供者。其他 AI SDK 提供商，包括 OpenAI、Anthropic 和 Google，都公开了`decisionModel()` factories as well. Each provider declares which question types its models support. For the full list of providers and model IDs, see [Decision models](/reference/classifier/classifier#decision-models).
+本頁示例使用 TypeSafe AI Provider。OpenAI、Anthropic、Google 等其他 AI SDK Provider 亦提供 `decisionModel()` 工廠方法。各 Provider 會列明其模型支援的問題類型。完整 Provider 及模型 ID 列表見 [決策模型](/reference/classifier/classifier#decision-models)。
 
-如果提供者輸出在分類器驗證之前需要標準化，請將決策模型包裝在[`MastraDecisionModel`](/reference/classifier/classifier#customize-provider-responses). The classifier wraps a raw AI SDK decision model in `MastraDecisionModel` automatically.
+若 Provider 的輸出須在分類器驗證前統一格式，可用 [`MastraDecisionModel`](/reference/classifier/classifier#customize-provider-responses) 包裝決策模型。若直接傳入原始 AI SDK 決策模型，分類器會自動以 `MastraDecisionModel` 包裝。
 
-分類器將您傳遞給提供者的狀態以及每個問題的`instructions`. Send only the data the decision needs. If the state contains sensitive fields, redact them before the call or use a provider that meets your data-handling requirements.
+分類器會將你傳入的狀態連同每條問題的 `instructions` 一併轉交 Provider。請只傳送決策所需的資料。若狀態含敏感欄位，請在呼叫前遮蔽相關資料，或採用符合資料處理要求的 Provider。
 
-## 後續步驟 {/* #next-steps */}
+## 下一步 {/* #next-steps */}
 
-* [分類器參考](/reference/classifier/classifier)：建構函數選項、每次呼叫問題、傳回值、驗證和自訂提供者回應
-* [可觀察性](/reference/classifier/classifier#observability)
-* [帶分類器的路由](/docs/workflows/control-flow#route-with-a-classifier)：使用答案來驅動Workflow分支
-* [分類器處理器](/reference/processors/classifier-processor)：對Agent輸入和輸出執行策略
-* [](/docs/agents/human-in-the-loop#conditional-approval-with-a-function)：將分類器與Tool批准相結合
+* [分類器參考](/reference/classifier/classifier)介紹建構函數選項、逐次呼叫的問題、傳回值、驗證及自訂 Provider 回應。
+* [可觀測性](/reference/classifier/classifier#observability)說明 span 屬性、token 指標，以及如何在 Trace 中隱藏狀態與答案。
+* [使用分類器分流](/docs/workflows/control-flow#route-with-a-classifier) 說明如何按答案選擇 Workflow 分支。
+* [ClassifierProcessor](/reference/processors/classifier-processor) 可對 Agent 的輸入及輸出執行政策。
+* [以函數進行條件式審批](/docs/agents/human-in-the-loop#conditional-approval-with-a-function) 說明如何結合分類器與工具審批。

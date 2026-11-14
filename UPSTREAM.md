@@ -27,11 +27,14 @@ were updated through upstream `main` commit
 page sets across the three Chinese locales. The source/translation comparison
 queue contains no pending content files or removals at this baseline.
 
-The required AI editorial pass is in progress. The core Agent overview has been
-reviewed independently for `zh-CN`, `zh-TW`, and `zh-HK`, so each locale has 1
-reviewed page set and 1,023 pending. Build, MDX, terminology, and heading-anchor
-validation do not satisfy this quality gate on their own. Translation freshness
-and AI-polish completion are tracked separately so an unchanged reviewed page
+On 2026-11-15, the required AI editorial pass was completed for all 1,024 page
+sets in `zh-CN`, `zh-TW`, and `zh-HK`. Each localized page was reviewed against
+the English source after machine translation, with its reviewed source and
+locale blobs recorded in the incremental ledger. All three locales therefore
+have 1,024 reviewed page sets and no pending AI-polish work at this baseline.
+Build, MDX, terminology, and heading-anchor validation remain separate quality
+checks; they do not replace the editorial gate. Translation freshness and
+AI-polish completion are tracked independently so an unchanged reviewed page
 can be reused while a changed source or locale blob automatically returns to the
 polish queue.
 

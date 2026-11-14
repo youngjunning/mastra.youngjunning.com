@@ -1,23 +1,23 @@
 ---
-title: "Reference: LeaseProvider | PubSub"
-description: "LeaseProvider is the distributed leasing contract, separate from event delivery (PubSub)."
+title: "参考：LeaseProvider | PubSub"
+description: "LeaseProvider 定义分布式租约协议，独立于事件传递（PubSub）。"
 packages:
   - "@mastra/core"
 ---
 
-# 租赁Provider
+# LeaseProvider
 
-`LeaseProvider`是分布式租赁合约，与事件交付分开（[`PubSub`](/reference/pubsub/base)）。马斯特拉的[信号层](/docs/signals/overview)使用它跨多个进程（例如，无服务器调用）为资源（最常见的是线程键）选择单个所有者。所有者是唤醒并运行Agent流的进程，因此其他进程将后续工作路由到它，而不是启动竞争运行。
+`LeaseProvider` 定义分布式租约协议，与事件传递（[`PubSub`](/reference/pubsub/base)）相互独立。Mastra 的 [signals 层](/docs/signals/overview) 用它在多个进程（如无服务器调用）之间为资源（通常是线程键）选出唯一所有者。所有者进程负责唤醒并运行 Agent 流；其他进程会将后续工作路由给它，而不是启动竞争性运行。
 
-[持久剂](/docs/harness/durable-agents#run-ownership)当Workflow存储不支持运行防护时，还声明每次运行都通过租约，因此崩溃恢复可以判断另一个进程是否仍在驱动运行。
+当 Workflow 存储不支持运行隔离时，[持久化 Agent](/docs/harness/durable-agents#run-ownership) 也会通过租约认领每次运行，以便崩溃恢复时判断是否仍有其他进程在执行该运行。
 
-租赁与发布/订阅是分开的。一个`LeaseProvider` implementation needs actual lock coordination, whether through an atomic Redis operation such as `SET` or Lua or through an in-memory map for a single process. For backends that omit leasing, the signals runtime preserves single-process behavior with a no-op provider.
+租约与发布/订阅相互独立。`LeaseProvider` 实现必须真正协调锁，例如使用 Redis 的原子 `SET` 操作或 Lua，单进程场景则可使用内存映射。对于没有租约能力的后端，signals 运行时使用空操作 Provider，保留单进程行为。
 
-内置的[`RedisStreamsPubSub`](/reference/pubsub/redis-streams) implements `LeaseProvider`, which is what enables signals to coordinate across instances in distributed and serverless deployments.
+内置的 [`RedisStreamsPubSub`](/reference/pubsub/redis-streams) 实现了 `LeaseProvider`，使 signals 能在分布式和无服务器部署中跨实例协调。
 
 ## 使用示例 {/* #usage-example */}
 
-你不构建一个`LeaseProvider` directly. Configure a pub/sub backend that implements it (such as `RedisStreamsPubSub`) on the `Mastra` constructor, and the signals runtime uses it automatically for cross-process coordination.
+无需直接构造 `LeaseProvider`。配置实现该接口的发布/订阅后端（如 `RedisStreamsPubSub`）时，请将其传入 `Mastra` 构造函数，signals 运行时便会自动使用它协调跨进程工作。
 
 ```typescript title="src/mastra/index.ts"
 import { Mastra } from '@mastra/core'
@@ -31,7 +31,7 @@ export const mastra = new Mastra({
 })
 ```
 
-要在自定义后端中实现租赁，请实现以下方法。信号运行时从结构上检测功能（因此它可以跨包边界工作），并且仅在所有方法都存在时才使用它。
+如需在自定义后端中实现租约，请实现下列方法。signals 运行时通过结构识别此能力（因此可跨 package 边界工作），并且仅在所有方法都存在时使用。
 
 ```typescript title="src/mastra/pubsub.ts"
 import { PubSub } from '@mastra/core/events'
@@ -49,11 +49,11 @@ export class CustomPubSub extends PubSub implements LeaseProvider {
 
 ## 方法 {/* #methods */}
 
-### 租赁 {/* #leasing */}
+### 租约操作 {/* #leasing */}
 
 #### `acquireLease(key, owner, ttlMs)` {/* #acquireleasekey-owner-ttlms */}
 
-以原子方式尝试获取密钥的租约。退货`{ acquired: true, owner }` if the caller claimed the lease, or `{ acquired: false, owner }` where `owner` is the current holder, so the caller can route follow-up work to them. A failed acquisition can omit `owner` when the holder is unknown, for example when the backend is closed or the competing lease expired before it could be read. Check for `owner` before routing to it. The same owner can call `acquireLease` idempotently to renew or re-claim.
+以原子操作尝试取得指定键的租约。调用者取得租约时返回 `{ acquired: true, owner }`；否则返回 `{ acquired: false, owner }`，其中 `owner` 是当前持有者，调用者可将后续工作路由给它。如果持有者未知，例如后端已关闭，或竞争租约在读取前过期，失败结果可能不含 `owner`。路由前请先检查 `owner`。同一所有者可幂等调用 `acquireLease` 来续约或重新认领。
 
 ```typescript
 const result = await pubsub.acquireLease('thread:abc', runId, 15000)
@@ -67,52 +67,52 @@ if (result.acquired) {
 }
 ```
 
-返回：`Promise<{ acquired: boolean; owner?: string }>`
+返回值：`Promise<{ acquired: boolean; owner?: string }>`
 
 <PropertiesTable
   content={[
 {
   name: 'key',
   type: 'string',
-  description: 'The lease key, such as a thread key.',
+    description: '租约键，例如线程键。',
 },
 {
   name: 'owner',
   type: 'string',
   description:
-    'Identifier for the owner, such as a `runId`. The same owner can call `acquireLease` idempotently to renew or release.',
+    '所有者标识，例如 `runId`。同一所有者可幂等调用 `acquireLease` 来续约或释放租约。',
 },
 {
   name: 'ttlMs',
   type: 'number',
-  description: 'Time-to-live in milliseconds for the lease.',
+    description: '租约的存活时间，单位为毫秒。',
 },
 ]}
 />
 
 #### `getLeaseOwner(key)` {/* #getleaseownerkey */}
 
-读取租约的当前所有者，或`undefined` if no lease is held.
+读取租约的当前所有者；若没有租约被持有，则返回 `undefined`。
 
 ```typescript
 const owner = await pubsub.getLeaseOwner('thread:abc')
 ```
 
-返回：`Promise<string | undefined>`
+返回值：`Promise<string | undefined>`
 
 #### `releaseLease(key, owner)` {/* #releaseleasekey-owner */}
 
-释放租约。如果调用者不是当前所有者，则这是一个无操作：实现在释放之前自动检查所有权，因此另一个所有者的并发更新永远不会被破坏。
+释放租约。如果调用者不是当前所有者，则不执行任何操作：实现会在释放前以原子方式检查所有权，因此不会覆盖其他所有者的并发续约。
 
 ```typescript
 await pubsub.releaseLease('thread:abc', runId)
 ```
 
-返回：`Promise<void>`
+返回值：`Promise<void>`
 
 #### `renewLease(key, owner, ttlMs)` {/* #renewleasekey-owner-ttlms */}
 
-续签拥有的现有租约`owner`, extending its TTL. Returns `true` if the renewal succeeded and the caller still owns the lease, or `false` if the lease was lost (TTL expired or another owner took it).
+延长由 `owner` 持有的现有租约的 TTL。续约成功且调用者仍持有租约时返回 `true`；若租约已失效（TTL 过期或被其他所有者取得），则返回 `false`。
 
 ```typescript
 const stillOwned = await pubsub.renewLease('thread:abc', runId, 15000)
@@ -122,13 +122,13 @@ if (!stillOwned) {
 }
 ```
 
-返回：`Promise<boolean>`
+返回值：`Promise<boolean>`
 
 #### `transferLease(key, fromOwner, toOwner, ttlMs)` {/* #transferleasekey-fromowner-toowner-ttlms */}
 
-以原子方式转移持有的租约`fromOwner` to `toOwner` and refreshes its TTL without releasing the key in between. This gap-free primitive lets a follow-up owner take over the same key immediately after the current owner finishes. For example, a queued follow-up run can take over when a thread run completes. A naive release-then-acquire briefly leaves the key empty. A racing process could then win the freed lease and start a competing run.
+以原子方式将现有租约从 `fromOwner` 转给 `toOwner` 并刷新 TTL，中间不会释放键。这种无间隙操作使后续所有者能在当前所有者完成后立即接管同一键。例如，排队中的后续运行可在线程运行结束时接管。若先释放再获取，键会短暂处于无主状态，竞争进程可能抢先取得租约并启动冲突的运行。
 
-退货`true` if `fromOwner` still held the lease and ownership moved to `toOwner`, or `false` if the lease was already lost, in which case the caller should fall back to a fresh `acquireLease`.
+返回 `true` 表示 `fromOwner` 仍持有租约且所有权已转给 `toOwner`；若租约已失效，返回 `false`，调用者此时应重新调用 `acquireLease`。
 
 ```typescript
 const transferred = await pubsub.transferLease('thread:abc', currentRunId, nextRunId, 15000)
@@ -139,21 +139,21 @@ if (!transferred) {
 }
 ```
 
-返回：`Promise<boolean>`
+返回值：`Promise<boolean>`
 
 :::警告
-无法自动传输租约的后端必须使用尽力而为的方式`releaseLease(fromOwner)` followed by `acquireLease(toOwner)`. They must document that the swap is non-atomic because another process can claim the key between those calls. Keeping the method required gives callers one code path while making atomicity an explicit per-backend decision.
+无法以原子方式转移租约的后端，必须尽力先调用 `releaseLease(fromOwner)`，再调用 `acquireLease(toOwner)`。它们必须注明这次交接不是原子的，因为其他进程可能在两次调用之间认领该键。将此方法设为必需项，可让调用者使用同一条代码路径，同时明确各后端对原子性的选择。
 :::
 
 ## 能力检测 {/* #capability-detection */}
 
-运行时检测到的信号`LeaseProvider` structurally rather than with `instanceof`, so detection works even when a separately published backend resolves a different copy of `@mastra/core`. A value is treated as a `LeaseProvider` when it exposes all five methods (`acquireLease`, `getLeaseOwner`, `releaseLease`, `renewLease`, `transferLease`).
+signals 运行时检测 `LeaseProvider` 时依据结构，而非使用 `instanceof`，因此单独发布的后端即使解析到另一份 `@mastra/core` 也能被识别。一个值只有作为 `LeaseProvider` 提供全部五个方法（`acquireLease`、`getLeaseOwner`、`releaseLease`、`renewLease`、`transferLease`）时，才会被识别。
 
-当配置的 pub/sub 后端未实现时`LeaseProvider`, the runtime falls back to an always-win no-op provider. Every caller wins its own lease race, and release, renew, and transfer are inert, which preserves the expected single-process behavior.
+当配置的发布/订阅后端未实现 `LeaseProvider` 时，运行时会回退到始终判定获取成功的空操作 Provider。每个调用者都会赢得自己的租约竞争，而释放、续约和转移操作均不起作用，以保留预期的单进程行为。
 
-## 有关的 {/* #related */}
+## 相关内容 {/* #related */}
 
-* [发布订阅](/reference/pubsub/base)：活动交付合同，与租赁分开
-* [RedisStreamsPubSub](/reference/pubsub/redis-streams)：内置后端实现`LeaseProvider`
-* [信号](/docs/signals/overview)：使用租赁来协调跨进程的线程执行的运行时
-* [渠道](/docs/channels)：使用租赁来协调无服务器和多实例部署中的Agent运行
+- [PubSub](/reference/pubsub/base)：事件传递协议，与租约相互独立。
+- [RedisStreamsPubSub](/reference/pubsub/redis-streams)：实现 `LeaseProvider` 的内置后端。
+- [Signals](/docs/signals/overview)：使用租约协调跨进程线程执行的运行时。
+- [Channels](/docs/channels)：使用租约协调无服务器和多实例部署中的 Agent 运行。

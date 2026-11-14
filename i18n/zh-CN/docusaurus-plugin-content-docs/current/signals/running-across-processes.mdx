@@ -1,6 +1,6 @@
 ---
-title: 'Running across processes | Signals'
-description: 'Run Mastra agent threads across multiple processes with a shared PubSub backend and thread leases.'
+title: '跨进程运行 | 信号'
+description: '使用共享的 PubSub 后端和线程租约，在多个进程间运行 Mastra Agent 的线程。'
 packages:
   - '@mastra/core'
   - '@mastra/redis-streams'
@@ -10,77 +10,77 @@ packages:
 
 # 跨进程运行
 
-当您运行多个 Mastra 进程时，信号可能会到达与运行Agent的进程不同的进程。这些进程需要相互传递输入并就哪个进程可以运行一个达成一致[thread](/docs/memory/message-history#threads-and-resources).
+运行多个 Mastra 进程时，收到信号的进程可能不是正在运行 Agent 的进程。这些进程需要相互传递输入，并协调由哪个进程运行某个[线程](/docs/memory/message-history#threads-and-resources)。
 
-Mastra 使用共享[PubSub](/docs/server/pubsub) backend to carry signals between processes. A [lease](/reference/pubsub/lease-provider)，一种有时间限制的所有权声明，赋予一个进程对线程的责任。共享存储保存对话历史记录。当多个进程可以处理同一线程时，您需要全部三个。
+Mastra 使用共享的 [PubSub](/docs/server/pubsub) 后端在进程之间传递信号。[租约](/reference/pubsub/lease-provider)让一个进程在限定时间内负责该线程。共享存储保存对话历史。多个进程可处理同一线程时，这三项都必不可少。
 
 ## 为什么需要共享后端 {/* #why-you-need-a-shared-backend */}
 
-默认[`EventEmitterPubSub`](/reference/pubsub/event-emitter) delivers events inside one process. That's enough for a single server, but it can't reach another instance.
+默认的 [`EventEmitterPubSub`](/reference/pubsub/event-emitter) 在单个进程内传递事件。这足以支持单台服务器，但无法将事件送到其他实例。
 
-考虑共享数据库的两个 API 实例。用户在 A 上启动运行，然后他们的下一条消息到达 B。如果没有共享后端，B 无法发布到 A 的运行并在同一线程上启动第二次运行。两者都调用模型并写入消息，从而留下竞争运行。
+例如，两个 API 实例共用一个数据库。用户在 A 上启动一次运行，下一条消息却到达 B。没有共享后端时，B 无法向 A 上的运行发布消息，就会在同一线程上启动第二次运行。两次运行都会调用模型并写入消息，造成竞争。
 
-共享后端修复交付：B 在线程主题上发布，A 进行消费。租约可确保只有一个进程声明该线程。到达它的其他路线。
+共享后端解决了消息传递问题：B 向线程的主题发布消息，A 从中消费。租约确保同一时间仅有一个进程取得线程的运行权，其他进程把消息转发给它。
 
-每个可以处理相同线程的实例都需要相同的 PubSub 后端和存储。不同的后端无法针对同一数据库进行协调。
+能处理同一线程的每个实例都需要使用同一个 PubSub 后端和存储。即使共用数据库，不同的后端也无法相互协调。
 
 ## 选择拓扑 {/* #choose-a-topology */}
 
 根据进程运行的位置选择后端。
 
-|部署|后端 |它提供什么 |
+| 部署方式 | 后端 | 提供的能力 |
 | - | - | - |
-|一个流程 |[`EventEmitterPubSub`](/reference/pubsub/event-emitter) (default) | In-process delivery and leases |
-| Several processes on one host | [`UnixSocketPubSub`](/reference/pubsub/unix-socket-pubsub) | Delivery and leases over a Unix domain socket |
-| Several hosts | [`RedisStreamsPubSub`](/reference/pubsub/redis-streams) or [`ValkeyStreamsPubSub`](/reference/pubsub/valkey-streams) | Cross-host delivery, retained events, and leases |
-| Several hosts with Google Cloud Pub/Sub | [`GoogleCloudPubSub`](/reference/pubsub/google-cloud-pubsub) | Cross-host delivery without leases |
+| 单进程 | [`EventEmitterPubSub`](/reference/pubsub/event-emitter)（默认） | 进程内传递和租约 |
+| 单台主机上的多个进程 | [`UnixSocketPubSub`](/reference/pubsub/unix-socket-pubsub) | 通过 Unix 域套接字传递事件和提供租约 |
+| 多台主机 | [`RedisStreamsPubSub`](/reference/pubsub/redis-streams) 或 [`ValkeyStreamsPubSub`](/reference/pubsub/valkey-streams) | 跨主机传递、事件保留和租约 |
+| 多台主机使用 Google Cloud Pub/Sub | [`GoogleCloudPubSub`](/reference/pubsub/google-cloud-pubsub) | 跨主机传递，无租约 |
 
-[`UnixSocketPubSub`](/reference/pubsub/unix-socket-pubsub)选择一个进程作为套接字Agent，如果退出则重新选择一个新进程。它不能跨机器工作。
+[`UnixSocketPubSub`](/reference/pubsub/unix-socket-pubsub) 选出一个进程充当套接字代理，若该进程退出则重新选举。它无法跨机器工作。
 
-[`GoogleCloudPubSub`](/reference/pubsub/google-cloud-pubsub)跨进程传递事件但不实现租约。 Mastra 无法判断哪个实例拥有线程，因此任何接收到信号的实例都可以尝试运行它。仅当另一层保证每个线程一个进程时才使用它。
+[`GoogleCloudPubSub`](/reference/pubsub/google-cloud-pubsub) 可跨进程传递事件，但不提供租约。Mastra 无法判断哪个实例拥有线程，因此任何收到信号的实例都可能尝试运行该线程。只有在其他层能保证每个线程仅由一个进程运行时，才应使用它。
 
-## 线程所有权和租约 {/* #thread-ownership-and-leases */}
+## 线程所有权与租约 {/* #thread-ownership-and-leases */}
 
-Mastra 在开始跑步之前获得了租约。只有持有者可以运行该线程，其他进程将信号路由到它。
+Mastra 在启动运行前先取得租约。只有持有者可以运行该线程，其他进程将信号转发给它。
 
-默认情况下，租约持续 15 秒，所有者每 5 秒更新一次。续订间隔是租约生存时间 (TTL) 的三分之一。这让业主有时间在索赔到期之前从错过的续约中恢复过来。看[Configuration](#configuration) to change these values.
+租约默认有效期为 15 秒，持有者每 5 秒续约一次。续约间隔为租约生存时间（TTL）的三分之一，漏掉一次续约时，持有者仍有时间在租约到期前补救。有关如何修改这些值，见[配置](#configuration)。
 
-如果续约失败且当地截止日期已过，业主将停止跑步。它无法再证明另一个进程没有声明该线程，并且继续意味着两个所有者向一个对话写入内容。然后，新所有者从存储中开始下一次运行。
+如果续约失败且本地期限已过，持有者会停止运行。此时它已无法确认是否有其他进程取得线程的运行权，继续执行可能导致两个持有者写入同一个对话。随后，新的持有者从共享存储启动下一次运行。
 
-[持久剂](/docs/harness/durable-agents#run-ownership)当Workflow存储不支持运行防护时，使用相同的租约。支持隔离的存储会记录声明并拒绝来自丢失声明的执行的写入。这[`LeaseProvider` reference](/reference/pubsub/lease-provider) documents the contract.
+如果 Workflow 存储不支持运行隔离（run fencing），[持久化 Agent](/docs/harness/durable-agents#run-ownership) 也使用同样的租约机制。支持隔离的存储会记录运行权，并拒绝已失去运行权的执行写入。接口约定见 [`LeaseProvider` 参考](/reference/pubsub/lease-provider)。
 
-## 将信号路由到另一个进程 {/* #route-signals-to-another-process */}
+## 将信号路由到其他进程 {/* #route-signals-to-another-process */}
 
-当信号到达时，运行时会查找线程的当前所有者。如果发布了一个信号，则该信号将在线程主题上发布，并且所有者会加入其活动运行或从其队列中启动一个运行。
+收到信号后，运行时会查找线程当前的持有者。如果有已公布的持有者，就向线程主题发布信号，由持有者接入当前运行，或从自己的队列启动一次运行。
 
-如果没有通告所有者，则接收进程会尝试声明该线程。获胜意味着该进程运行Agent。丢失意味着另一个进程先声明了它，因此该进程转发信号并`accepted` resolves to `deliver` rather than `wake`. [`sendSignal()`](/reference/agents/agent#sendsignalsignal-options) documents the accepted result.
+若没有已公布的持有者，接收进程会尝试取得线程的运行权。取得运行权便运行 Agent。如果另一进程先取得运行权，接收进程会转发信号，此时 `accepted` 解析为 `deliver` 而非 `wake`。结果说明见 [`sendSignal()`](/reference/agents/agent#sendsignalsignal-options)。
 
-放`ifIdle.requireClaimedOwner: true` when an idle wake must not start a run on an arbitrary instance. The wake only reaches an advertised owner, and `accepted` rejects if none responds within the discovery window.
+如果空闲时的唤醒不能在任意实例上启动运行，请设置 `ifIdle.requireClaimedOwner: true`。唤醒只会发送给已公布的持有者，如果在发现窗口内没有响应，`accepted` 会被拒绝。
 
-## 交货保证和副本 {/* #delivery-guarantees-and-duplicates */}
+## 投递保证与重复投递 {/* #delivery-guarantees-and-duplicates */}
 
-PubSub 后端可以在超时、确认失败或崩溃后重新传送事件。因此，运行时假设至少传递一次。当所有者保留其簿记时，重新传递的信号不会启动同一逻辑消息的第二次运行。
+PubSub 后端可能在超时、确认失败或崩溃后重新投递事件，因此运行时按至少一次投递处理。只要持有者保留着处理记录，重复投递的信号就不会为同一条逻辑消息启动第二次运行。
 
-这并不能保证每个事件都一次性交付。如果您的处理程序写入数据库或触发其他操作，请使其具有幂等性：处理同一事件两次应该与处理一次具有相同的效果。
+这并不保证每个事件恰好投递一次。如果处理程序会写入数据库或触发其他操作，请确保其幂等，即同一事件处理两次与处理一次的效果相同。
 
-## 信号和进程崩溃 {/* #signals-and-process-crashes */}
+## 信号与进程崩溃 {/* #signals-and-process-crashes */}
 
-崩溃后什么能幸存取决于数据所在的位置：
+进程崩溃后能保留哪些数据，取决于数据存放的位置：
 
-* 运行时队列驻留在进程内存中。在跑步消耗它们之前发生的碰撞会丢失这些信号。
-* 发送的信号`persist` behavior are written to memory storage and survive a restart when that storage is shared.
-* [状态信号](/docs/signals/state-signals)它们的跟踪存储在线程上，并通过共享存储重新启动后仍然存在。
-* [通知](/docs/signals/notifications)是通知存储中的持久记录。他们的调度员可以在重新启动后重试交付。
-* 共享 PubSub 后端传输事件，但不是持久的输入队列。保留的事件可以帮助订阅者重新连接，但它们不会取代存储。
-* 持久Agent恢复从其检查点恢复运行。它不会恢复崩溃进程的内存信号队列。
+- 运行时队列位于进程内存中。如果运行尚未消费队列中的信号就发生崩溃，这些信号会丢失。
+- 使用 `persist` 行为发送的信号会写入 Memory 存储。使用共享存储时，重启后仍可读取这些信号。
+- [状态信号](/docs/signals/state-signals)及其跟踪记录保存在所属线程上。使用共享存储时，重启后仍可读取。
+- [通知](/docs/signals/notifications)以持久化记录的形式保存在通知存储中，分发器可在重启后重试投递。
+- 共享 PubSub 后端负责传递事件，不能充当持久化输入队列。保留的事件有助于订阅者重新连接，但无法替代存储。
+- 持久化 Agent 会从检查点恢复执行，崩溃进程的内存信号队列无法恢复。
 
-如果信号必须在接受它的进程中幸存下来，请将其保留或记录在您自己的系统中。不要依赖 PubSub 保留作为记录系统。
+如果接收进程退出后仍需保留信号，请持久化信号或记录到自己的系统中。请勿把 PubSub 保留的事件当作权威记录。
 
 ## 无服务器 {/* #serverless */}
 
-无服务器函数一旦返回响应就会冻结。如果您的函数开始运行，请通过消耗其输出流来使其保持活动状态，直到运行完成。
+无服务器函数返回响应后可能立即被冻结。如果函数启动了一次运行，请持续消费其输出流，让函数保持活跃，直到运行结束。
 
-将此工作传递给您的平台`waitUntil` so it can continue after the HTTP response:
+将这项工作交给平台的 `waitUntil`，让它在返回 HTTP 响应后继续执行：
 
 ```typescript title="src/routes/signal.ts"
 const result = agent.sendSignal(signal, { resourceId, threadId })
@@ -94,19 +94,19 @@ ctx.waitUntil(
 )
 ```
 
-当另一个进程拥有该线程时，`accepted` resolves to `deliver` and there's no local output to drain. When this invocation wins the lease, it gets `wake` and must stay alive until the output settles.
+如果另一个进程持有线程，`accepted` 会解析为 `deliver`，本地无需消费输出。若本次调用取得租约，则会收到 `wake`，此时必须保持活跃，直到输出流结束。
 
-在无服务器平台上也使用共享的 PubSub 后端和共享存储。短暂的实例使得内存中的队列特别脆弱。
+在无服务器平台上同样要使用共享的 PubSub 后端和存储。实例生命周期短，内存队列尤其容易丢失。
 
-## 优雅关机 {/* #graceful-shutdown */}
+## 优雅关闭 {/* #graceful-shutdown */}
 
-停止接受新的 webhook 或信号请求，然后让正在进行的工作稳定下来。生成的Mastra服务器句柄`SIGINT` and `SIGTERM`, stops accepting connections, drains active requests, and calls [`mastra.shutdown()`](/docs/deployment/mastra-server#graceful-shutdown-and-rolling-deploys). If you embed Mastra in your own server, call it from your shutdown hook.
+停止接受新的 webhook 或信号请求，再等待正在处理的工作结束。生成的 Mastra 服务器会处理 `SIGINT` 和 `SIGTERM`，停止接受新连接，等现有请求处理完毕，然后调用 [`mastra.shutdown()`](/docs/deployment/mastra-server#graceful-shutdown-and-rolling-deploys)。如果将 Mastra 嵌入自己的服务器，请在关闭钩子中调用该方法。
 
-信号提供者有自己的生命周期。称呼[`provider.stop()`](/reference/signals/signal-provider#stop) to stop polling and clear in-memory subscriptions. Stop routing webhooks to a [`WebhookSignalProvider`](/reference/signals/webhook-signal-provider) before shutdown so new requests don't arrive while the process exits.
+信号 Provider 有自己的生命周期。调用 [`provider.stop()`](/reference/signals/signal-provider#stop) 停止轮询并清除内存中的订阅。关闭之前停止向 [`WebhookSignalProvider`](/reference/signals/webhook-signal-provider) 转发 webhook，避免进程退出时仍收到新请求。
 
 ## 配置 {/* #configuration */}
 
-共享的 Redis Streams 后端处理信号传递和线程租用：
+共享的 Redis Streams 后端同时负责信号传递和线程租约：
 
 ```typescript title="src/mastra/index.ts"
 import { Mastra } from '@mastra/core'
@@ -126,13 +126,13 @@ export const mastra = new Mastra({
 })
 ```
 
-每个实例点`storage` at the same database, so persisted signals, state signals, and notification records survive a restart and are visible to whichever process owns the thread.
+让所有实例的 `storage` 指向同一数据库。持久化信号、状态信号和通知记录在重启后仍会保留，并可由当前持有线程的进程读取。
 
-使用相同的`keyPrefix` on every coordinating instance, and a different prefix for environments sharing one Redis server. Vercel's managed Redis and Upstash Redis both work with `RedisStreamsPubSub`.
+参与协调的实例应使用相同的 `keyPrefix`。不同环境共用一个 Redis 服务器时，各环境应使用不同的前缀。Vercel 托管的 Redis 和 Upstash Redis 都可与 `RedisStreamsPubSub` 配合使用。
 
-租约设置是环境变量：
+通过以下环境变量设置租约：
 
-* `MASTRA_AGENT_THREAD_LEASE_TTL_MS`设置租赁期限。默认为`15000` milliseconds.
-* `MASTRA_AGENT_THREAD_LEASE_RENEW_INTERVAL_MS`设置更新间隔。默认值为 TTL 的三分之一，并且不短于 TTL 的值将回退到该值。
+- `MASTRA_AGENT_THREAD_LEASE_TTL_MS` 设置租约有效期，默认为 `15000` 毫秒。
+- `MASTRA_AGENT_THREAD_LEASE_RENEW_INTERVAL_MS` 设置续约间隔，默认是 TTL 的三分之一。若设为大于或等于 TTL，则回退到默认值。
 
-保持两个值在实例之间保持一致。较短的 TTL 可以更快地释放崩溃的所有者线程，但为缓慢更新留下的空间较小。较长的 TTL 会起到相反的作用。保留默认值，除非您的部署有理由更改它们。请参阅[`RedisStreamsPubSub` reference](/reference/pubsub/redis-streams) for other backends.
+所有实例的这两项设置应保持一致。缩短 TTL 能在持有者崩溃后更快释放线程，但留给较慢续约的时间更少。延长 TTL 则相反。除非部署确有需要，否则请保留默认值。其他后端见 [`RedisStreamsPubSub` 参考](/reference/pubsub/redis-streams)。

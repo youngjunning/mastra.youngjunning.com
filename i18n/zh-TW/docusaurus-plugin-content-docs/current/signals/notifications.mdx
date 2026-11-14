@@ -1,6 +1,6 @@
 ---
-title: 'Notifications | Signals'
-description: 'Create durable Mastra notification records, resolve delivery policy, and deliver notifications or summaries to an agent thread.'
+title: '通知 | 訊號'
+description: '建立可持久保存的 Mastra 通知記錄、判定傳送策略，並將通知或摘要傳送至 Agent 的對話執行緒。'
 packages:
   - '@mastra/core'
   - '@mastra/client-js'
@@ -8,17 +8,17 @@ packages:
 
 # 通知
 
-通知記錄Agent程式要處理的事件，例如失敗的建置、拉取請求評論或已完成的後台作業。 Mastra 將其儲存在持久的收件匣中，與對話訊息分開。即使客服人員到達時正忙，該事件仍然可用。
+通知會記錄待 Agent 處理的事件，例如建置失敗、提取要求的留言或背景工作完成。Mastra 將通知持久保存在獨立於對話訊息的收件匣。即使通知送達時 Agent 正忙，之後仍可讀取。
 
-傳遞策略決定是否立即發送事件、將其與其他事件匯總或留待稍後發送。客服人員使用收件匣讀取、忽略或存檔記錄。傳遞可能會失敗，且策略可能會丟棄事件，因此儲存記錄並不能保證Agent會對其採取行動。這[Notifications reference](/reference/signals/notifications) describes the record lifecycle and policy options.
+傳送策略決定要立即送出事件、與其他事件彙整成摘要，或留待稍後處理。Agent 可以在收件匣中讀取、略過或封存記錄。傳送可能失敗，策略也可能捨棄事件，因此保存記錄無法保證 Agent 會處理它。記錄的生命週期和策略選項請參閱[通知參考](/reference/signals/notifications)。
 
-對需要此收件匣和傳遞行為的事件使用通知。使用[`sendMessage()`](/reference/agents/agent#sendmessagemessage-options) for user input, a [state signal](/docs/signals/state-signals)用於更改應用程式上下文，或[瞬態無功訊號](/docs/signals/sending-signals#send-context-from-a-system)用於一個模型請求所需的上下文。[`sendSignal({ type: 'notification' })`](/reference/agents/agent#sendsignalsignal-options)發送事件上下文而不建立收件匣記錄或提供其重試。
+事件需要收件匣和傳送機制時，請使用通知。使用者輸入請用 [`sendMessage()`](/reference/agents/agent#sendmessagemessage-options)，應用程式的上下文變更請用[狀態訊號](/docs/signals/state-signals)，只供單次模型請求使用的上下文則用[暫態反應式訊號](/docs/signals/sending-signals#send-context-from-a-system)。[`sendSignal({ type: 'notification' })`](/reference/agents/agent#sendsignalsignal-options) 會傳送事件上下文，但不建立收件匣記錄，也不提供記錄的重試機制。
 
 ## 快速入門 {/* #quickstart */}
 
-稱呼[`agent.sendNotificationSignal()`](/reference/agents/agent#sendnotificationsignalnotification-options) to create the record and apply its delivery policy. To let the agent read pending records, add [`createNotificationInboxTool()`](/reference/signals/create-notification-inbox-tool) as shown in [Work with the inbox](#work-with-the-inbox).
+呼叫 [`agent.sendNotificationSignal()`](/reference/agents/agent#sendnotificationsignalnotification-options) 建立記錄並套用傳送策略。若要讓 Agent 讀取待處理記錄，請依照[使用收件匣](#work-with-the-inbox)加入 [`createNotificationInboxTool()`](/reference/signals/create-notification-inbox-tool)。
 
-記錄需要一個儲存適配器`notifications` domain. This example uses libSQL, subscribes to the thread first, then sends a high-priority CI failure:
+通知記錄需要支援 `notifications` 網域的儲存配接器。以下範例使用 libSQL，先訂閱對話執行緒，再送出高優先順序的 CI 失敗通知：
 
 ```typescript title="src/mastra/notifications.ts"
 import { Mastra } from '@mastra/core'
@@ -77,29 +77,29 @@ for await (const chunk of subscription.stream) {
 }
 ```
 
-在空閒執行緒上，高優先權通知會立即傳遞並開始運作。在活動執行緒上，Mastra 首先對其進行匯總，然後在執行緒空閒時傳遞完整的通知。訂閱會同時收到摘要和完整通知：[thread stream](/docs/signals/thread-streams) chunks.
+對話執行緒閒置時，高優先順序的通知會立即傳送並啟動一次執行。執行緒仍在運作時，Mastra 會先彙整通知，等到閒置再傳送完整通知。訂閱會以[執行緒串流](/docs/signals/thread-streams)區塊的形式收到摘要和完整通知。
 
 ## 通知記錄 {/* #notification-records */}
 
-當通知到達時，`sendNotificationSignal()` creates a record or merges it into a matching pending record. It then checks the delivery policy. If delivery is scheduled for later, the dispatcher reads the record when it's due and sends the notification or a summary.
+收到通知時，`sendNotificationSignal()` 會建立記錄，或將通知合併至符合條件的待處理記錄，接著檢查傳送策略。若排定稍後傳送，派送器會在時間一到時讀取記錄並送出通知或摘要。
 
-儲存的記錄包括路由、優先權、狀態、投遞嘗試和原始記錄`payload`. The model receives an XML element built from `summary` and attributes. It doesn't receive `payload` automatically.
+儲存的記錄包含路由資訊、優先順序、狀態、傳送嘗試和原始 `payload`。模型會收到由 `summary` 和屬性組成的 XML 元素，系統不會自動傳入 `payload`。
 
-記錄的狀態可以是`pending`, `delivered`, `seen`, `dismissed`, `archived`, `discarded`, or `failed`. A summarized record stays `pending`, because a summary tells the model that records exist without marking them delivered. The reference lists every [記錄字段](/reference/signals/notifications#notification-records)和[地位](/reference/signals/notifications#priorities-and-statuses).
+記錄的狀態可以是 `pending`、`delivered`、`seen`、`dismissed`、`archived`、`discarded` 或 `failed`。送出摘要後，記錄仍為 `pending`，因為摘要只會告知模型有這些記錄，不會將它們標示為已傳送。參考文件列出所有[記錄欄位](/reference/signals/notifications#notification-records)和[狀態](/reference/signals/notifications#priorities-and-statuses)。
 
-## 建立和合併記錄 {/* #create-and-coalesce-records */}
+## 建立與合併記錄 {/* #create-and-coalesce-records */}
 
-`sendNotificationSignal()`接受一個通知或一組通知。每個項目都是獨立建立的，然後儲存決定是否可以合併到現有的待處理記錄中。
+`sendNotificationSignal()` 接受單筆通知或通知陣列。各項目會分別建立，再由儲存層判斷能否合併至現有的待處理記錄。
 
-使用`dedupeKey` to identify one event that may arrive more than once. Use `coalesceKey` to group related events into one pending record, a process called coalescing. Both keys use the same matching rules.
+使用 `dedupeKey` 識別可能重複送達的同一事件。使用 `coalesceKey` 將相關事件合併成一筆待處理記錄。兩種索引鍵採用相同的比對規則。
 
-合併僅考慮同一執行緒、來源、種類、Agent和資源上仍待處理的記錄。這[Notifications reference](/reference/signals/notifications#coalescing-pending-records) documents the fields that merge and their precedence.
+只有處於待處理狀態，且執行緒、來源、種類、Agent 和資源都相同的記錄才會納入合併。[通知參考](/reference/signals/notifications#coalescing-pending-records)說明哪些欄位會合併及其優先順序。
 
-## 儲存和調度程序設置 {/* #storage-and-dispatcher-setup */}
+## 設定儲存與派送器 {/* #storage-and-dispatcher-setup */}
 
-通知記錄需要一個儲存適配器`notifications` domain: [libSQL](/integrations/databases/libsql), [PostgreSQL](/integrations/databases/postgresql), or [MongoDB](/integrations/databases/mongodb). Without it, `sendNotificationSignal()` throws instead of silently dropping the record.
+通知記錄需要支援 `notifications` 網域的儲存配接器，例如 [libSQL](/integrations/databases/libsql)、[PostgreSQL](/integrations/databases/postgresql) 或 [MongoDB](/integrations/databases/mongodb)。缺少該網域時，`sendNotificationSignal()` 會擲出錯誤，避免記錄在沒有提示的情況下遭捨棄。
 
-默认情况下启用计划调度并通过工作流调度程序运行。將其配置在`Mastra` instance:
+排程派送預設開啟，由 Workflow 排程器執行。請在 `Mastra` 執行個體上設定：
 
 ```typescript title="src/mastra/index.ts"
 import { Mastra } from '@mastra/core'
@@ -117,20 +117,20 @@ export const mastra = new Mastra({
 })
 ```
 
-預設值是`enabled: true`, `cron: '*/1 * * * *'` (once per minute), and `batchSize: 100`. Only apps that defer or summarize a notification create the lazy dispatch schedule and activate the workflow scheduler with it. Set `enabled: false` to opt out.
+預設值為 `enabled: true`、`cron: '*/1 * * * *'`（每分鐘一次）和 `batchSize: 100`。只有在延後傳送通知或彙整摘要時，應用程式才會按需建立派送排程，並啟動 Workflow 排程器。設定 `enabled: false` 即可停用。
 
-## 出貨政策 {/* #delivery-policy */}
+## 傳送策略 {/* #delivery-policy */}
 
-每筆記錄在收到時都會做出決定，並且可能在發送時再次做出決定。內建策略使用優先權和執行緒狀態：
+每筆記錄在收到時都會進行策略判定，派送時也可能再判定一次。內建策略依據優先順序和執行緒狀態：
 
-|優先|空閒執行緒|活動執行緒 |
+| 優先順序 | 閒置執行緒 | 運作中的執行緒 |
 | - | - | - |
-|`urgent` | Deliver immediately | Deliver immediately |
-| `high` | Deliver immediately | Summarize now, then deliver when idle |
-| `medium` | Deliver immediately | Batch into a summary |
-| `low` | Batch into a summary | Batch into a summary |
+| `urgent` | 立即傳送 | 立即傳送 |
+| `high` | 立即傳送 | 先傳送摘要，等到閒置再傳送通知 |
+| `medium` | 立即傳送 | 批次彙整為摘要 |
+| `low` | 批次彙整為摘要 | 批次彙整為摘要 |
 
-當預設值不適合時，在Agent上配置策略。來源規則在優先權規則之前運行，因此可以在其他所有內容交付的同時匯總噪音源：
+預設行為不符合需求時，可在 Agent 上設定策略。來源規則會先於優先順序規則執行，因此可將事件過多的來源彙整為摘要，其餘通知照常傳送：
 
 ```typescript title="src/mastra/agents/ci-agent.ts"
 import { Agent } from '@mastra/core/agent'
@@ -157,60 +157,60 @@ export const ciAgent = new Agent({
 })
 ```
 
-Mastra 按以下順序評估該政策：
+Mastra 會依下列順序評估策略：
 
-1. 客製化`decide()` function.
-2. `sources`, 匹配`record.source`.
-3. `priorities`, 匹配`record.priority`.
+1. 自訂 `decide()` 函式。
+1. `sources`，比對 `record.source`。
+1. `priorities`，比對 `record.priority`。
 4. `default`.
-5. 內建優先策略。
+1. 內建的優先順序策略。
 
-`decide()`對於第一個決定推遲或安排摘要的記錄，在接收時運行並在交付時再次運行。存储的时间表确定了他们交付的时间和方式。僅限交付榮譽`streamOptions` and `hold` from the new decision. Keep `decide()` side-effect free.
+`decide()` 會在收到記錄時執行。如果第一次判定為延後傳送或排定摘要，傳送時會再執行一次。傳送時間與方式由已儲存的排程決定，傳送時只採用新判定的 `streamOptions` 和 `hold`。請讓 `decide()` 保持無副作用。
 
-## 派遣 {/* #dispatch */}
+## 派送 {/* #dispatch */}
 
-`agentId`, `resourceId`, and `threadId`, and emits signals through the thread runtime.
+派送器會讀取到期記錄，依 `agentId`、`resourceId` 和 `threadId` 將摘要分組，並透過執行緒的執行環境發出訊號。
 
-|決定|結果 |
+| 判定 | 結果 |
 | - | - |
-|`deliver` | Send the full notification immediately |
-| `queue` | Keep the record pending for a later dispatch pass |
-| `summarize` | Send a summary now or at `summaryAt` |
-| `defer` | Keep the record pending until `deliverAt` |
-| `persist` | Store the record without sending a signal |
-| `discard` | Mark the record discarded |
+| `deliver` | 立即傳送完整通知 |
+| `queue` | 保持待處理，留待後續派送 |
+| `summarize` | 立即傳送摘要，或於 `summaryAt` 傳送 |
+| `defer` | 保持待處理，直到 `deliverAt` |
+| `persist` | 只儲存記錄，不發出訊號 |
+| `discard` | 將記錄標示為已捨棄 |
 
-一個決定與`hold` leaves the record for another process's dispatcher without counting a delivery attempt.
+判定包含 `hold` 時，記錄會留給另一個處理程序的派送器，不計入傳送嘗試次數。
 
 ### 摘要 {/* #summaries */}
 
-摘要可防止繁忙的執行緒接收大量的單獨通知。該模型看到一個緊湊的摘要：
+摘要可避免忙碌的執行緒短時間內收到大量個別通知。模型會看到精簡的摘要：
 
 ```xml
 <notification-summary pending="10">github: 3, email: 5, slack: 2</notification-summary>
 ```
 
-完整的通知將記錄的摘要作為其內容：
+完整通知會以該筆記錄的摘要作為內容：
 
 ```xml
 <notification source="github" kind="ci-status" priority="high" status="delivered">CI failed on main: 3 tests failed in the API suite.</notification>
 ```
 
-總結一目了然`summaryAt` and sets `summarySignalId`. The records stay `pending` and readable. A full notification sets `deliveredSignalId` and marks the record `delivered`.
+傳送摘要會清除 `summaryAt` 並設定 `summarySignalId`，記錄維持 `pending` 且仍可讀取。傳送完整通知則會設定 `deliveredSignalId`，並將記錄標示為 `delivered`。
 
-摘要不標記已交付的記錄。當Agent程式需要完整內容時，透過收件匣讀取記錄；讀取可注入完整訊號並標記記錄`seen`, preventing duplicate delivery later.
+傳送摘要不會將記錄標示為已傳送。Agent 若需要完整內容，可從收件匣讀取記錄。讀取時可注入完整訊號，並將記錄標示為 `seen`，避免之後重複傳送。
 
-### 重試和失敗 {/* #retries-and-failures */}
+### 重試與失敗 {/* #retries-and-failures */}
 
-失敗的嘗試會增加`deliveryAttempts` and records `lastDeliveryAttemptAt` and `lastDeliveryError`. The record stays pending and is due again on the next dispatch pass.
+傳送失敗會增加 `deliveryAttempts`，並記錄 `lastDeliveryAttemptAt` 和 `lastDeliveryError`。記錄維持待處理狀態，下輪派送便可重試。
 
-五次嘗試失敗後，記錄移至`failed` and stops being due. The cap is exported as `MAX_NOTIFICATION_DELIVERY_ATTEMPTS`. A `hold` leaves it pending without counting an attempt, so another dispatcher can pick it up.
+五次嘗試失敗後，記錄會轉為 `failed`，不再排入派送。這個上限以 `MAX_NOTIFICATION_DELIVERY_ATTEMPTS` 匯出。`hold` 會讓記錄維持待處理且不計入嘗試次數，其他派送器仍可接手。
 
-如果自訂策略在通知首次到達時拋出，則記錄將保持待處理狀態並立即`deliverAt` and a failed attempt, so the dispatcher can retry it.
+若自訂策略在首次收到通知時擲出錯誤，記錄會維持待處理，`deliverAt` 會設為立即傳送並記一次失敗，讓派送器可以重試。
 
 ## 使用收件匣 {/* #work-with-the-inbox */}
 
-為Agent提供收件匣Tool，以便它可以在不公開儲存 API 的情況下檢查記錄：
+為 Agent 提供收件匣 Tool，即可讓它檢視記錄，無須公開儲存 API：
 
 ```typescript title="src/mastra/agents/ci-agent.ts"
 import { Agent } from '@mastra/core/agent'
@@ -226,12 +226,12 @@ export const ciAgent = new Agent({
 })
 ```
 
-`list`, `read`, `search`, `markSeen`, `dismiss`, and `archive`. Listing and searching mark returned unread records `seen`, including `failed` records so the agent learns delivery gave up. `list` defaults to pending, delivered, and failed records. `search` spans all statuses. `read` only acts on pending and delivered records, so it skips `failed` ones. A record `read` can't deliver, because neither the record nor the calling agent supplies a `resourceId`, stays pending.
+這個 Tool 支援 `list`、`read`、`search`、`markSeen`、`dismiss` 和 `archive`。列出或搜尋時，傳回的未讀記錄會標示為 `seen`，包括 `failed` 記錄，讓 Agent 得知系統已停止嘗試傳送。`list` 預設傳回待處理、已傳送和失敗的記錄。`search` 涵蓋所有狀態。`read` 只處理待處理與已傳送的記錄，因此會略過 `failed` 記錄。若記錄和呼叫端 Agent 都未提供 `resourceId`，使 `read` 無法傳送，記錄會維持待處理狀態。
 
-`read`總結後的事項。它將所選記錄的完整內容作為通知信號而不是普通Tool輸出提供。即使呼叫傳回了簡短的狀態訊息，Agent也會看到執行緒上的上下文。
+收到摘要後，可用 `read` 取得完整內容。它會透過通知訊號傳送選定記錄的完整內容，而非透過一般 Tool 輸出。即使呼叫只傳回簡短的狀態訊息，Agent 仍可在執行緒中看到相關上下文。
 
-## Agent和客戶端介面 {/* #agent-and-client-surfaces */}
+## Agent 與用戶端介面 {/* #agent-and-client-surfaces */}
 
-[`agent.sendNotificationSignal()`](/reference/agents/agent#sendnotificationsignalnotification-options)`accepted`, `signal`, and `persisted` when a signal was emitted, matching the other signal methods described in [Sending signals](/docs/signals/sending-signals).
+[`agent.sendNotificationSignal()`](/reference/agents/agent#sendnotificationsignalnotification-options) 是建立持久通知記錄的標準方法。它會傳回記錄與策略判定。若發出訊號，還會傳回 `accepted`、`signal` 和 `persisted`，與[傳送訊號](/docs/signals/sending-signals)所述的其他方法一致。
 
-JavaScript 用戶端 SDK 可以透過以下方式傳送通知形狀的上下文[`client.getAgent().sendSignal()`](/reference/client-js/agents#sendsignal). That path bypasses inbox storage, so use it only when the event needs no record, retries, or later reading. Durable records over HTTP go through the AgentController Session notification route, which forwards to `sendNotificationSignal()`. See the [Session reference](/reference/agent-controller/session) and [Agent Controller](/docs/harness/agent-controller).
+JavaScript 用戶端 SDK 可透過 [`client.getAgent().sendSignal()`](/reference/client-js/agents#sendsignal) 傳送通知格式的上下文。這個做法會略過收件匣儲存，只適用於無須記錄、重試或稍後讀取的事件。若要透過 HTTP 建立持久記錄，請使用 AgentController Session 的通知路由，它會轉交給 `sendNotificationSignal()`。請參閱 [Session 參考](/reference/agent-controller/session)和 [Agent Controller](/docs/harness/agent-controller)。

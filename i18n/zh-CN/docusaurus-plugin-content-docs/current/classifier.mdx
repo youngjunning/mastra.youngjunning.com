@@ -1,52 +1,52 @@
 ---
-title: 'Classifier'
-description: 'Ask a decision model typed questions about your application state and act on structured answers instead of parsing generated text.'
+title: '分类器'
+description: '向决策模型提供应用状态及类型明确的问题，并根据结构化答案采取行动，省去解析生成文本的步骤。'
 packages:
   - '@mastra/core'
 ---
 
 # 分类器
 
-**添加于：** `@mastra/core@1.69.0`
+**引入版本** `@mastra/core@1.69.0`
 
-语言模型编写文本供人们阅读。当您的应用程序需要在该文本中进行判断时，您会要求提供散文，然后从中解析出一个决定。分类器完全避免了解析。您发送您的状态的决策模型，它可以是任何与 JSON 兼容的数据，以及一组固定的键入问题，并且它会为每个问题返回一个键入的答案。
+语言模型生成供人阅读的文本。当应用需要其中的判断时，通常要先让模型生成文字，再从中提取结论。分类器省去了文本解析。把任意兼容 JSON 的状态数据和一组固定、类型明确的问题交给决策模型，它会为每个问题返回符合类型的答案。
 
-决策模型是为回答键入的问题而构建的模型。使用Provider的创建它`decisionModel()` factory, such as the [TypeSafe AI provider](https://ai-sdk.dev/providers/ai-sdk-providers/typesafe-ai). It isn't the agent's language model, and the constructor doesn't accept a `'provider/model'`细绳。看[选择决策模型](#choosing-a-decision-model).
+决策模型专门回答类型明确的问题。通过 Provider 的 `decisionModel()` 工厂方法创建，例如 [TypeSafe AI Provider](https://ai-sdk.dev/providers/ai-sdk-providers/typesafe-ai)。它独立于 Agent 的语言模型，构造函数也不接受 `'provider/model'` 字符串。参见 [选择决策模型](#choosing-a-decision-model)。
 
-答案是列表中的命名选择、有序尺度上的位置或陈述为真的概率。选择和评分答案还可以带有每个选项或级别的概率，因此您的代码可以设置阈值、比较选项或权衡一个答案与另一个答案。模型提供判断，代码提供策略。在您的应用程序对其进行操作之前，答案不会发生任何变化。
+答案可以是列表中的一个具名选项、有序量表上的位置，或某个陈述为真的概率。如果选项或评分答案还附带每个选项或级别的概率，代码就可以设置阈值、比较选项或权衡不同答案。模型负责判断，代码负责执行策略。只有应用根据答案采取行动，才会产生实际变化。
 
 ## 何时使用分类器 {/* #when-to-use-a-classifier */}
 
-当决策具有少量已知结果时，请使用分类器：
+当可能的决策结果数量少且事先已知时，可以使用分类器。
 
-* 将请求路由到正确的团队、处理程序或Workflow分支。
-* 将操作限制在阈值上，例如Tool调用是否需要人工审核。
-* 对输出的一个维度进行评分，例如音调或质量。
-* 回答有关输入的是或否的问题，例如消息是否不安全。
+* 将请求路由到合适的团队、处理程序或 Workflow 分支。
+* 根据阈值决定是否放行，例如判断工具调用是否需要人工审核。
+* 对输出的某个维度打分，例如语气或质量。
+* 对输入作是非判断，例如判断消息是否不安全。
 
-当您可以将决策描述为具有固定答案形状的问题时，分类器就适合。如果模型需要生成具有许多相互依赖字段的数据对象，请使用[structured output](/docs/agents/structured-output) on an agent instead.
+如果能把决策表述为答案格式固定的问题，就适合使用分类器。如果模型需要生成包含多个相互依赖字段的数据对象，请为 Agent 使用 [结构化输出](/docs/agents/structured-output)。
 
-[埃瓦尔斯](/docs/evals/overview)回答一个不同的问题：它们衡量输出随着时间的推移是否良好，而分类器在运行时做出应用程序执行的决定。使用[`createClassifierScorer()`](/reference/evals/create-classifier-scorer) to project a classifier answer into a score for the eval pipeline.
+[Evals](/docs/evals/overview) 用于持续衡量输出质量。分类器在运行时给出单次判断，供应用采取行动。用 [`createClassifierScorer()`](/reference/evals/create-classifier-scorer) 可将分类器的答案转换为评估流程中的分数。
 
 ## 分类器如何工作 {/* #how-classifiers-work */}
 
-分类器包含一组命名问题和一个决策模型。每个[`decide()`](/reference/classifier/classifier#decideoptions) call sends the state once, with every question attached, and returns one answer per question, keyed by question name. Because the questions travel in the same request, adding another one doesn't add a round trip.
+分类器包含一组具名问题和一个决策模型。每次调用 [`decide()`](/reference/classifier/classifier#decideoptions) 只发送一次状态，并附上所有问题；返回值按问题名称索引，每个问题对应一个答案。所有问题共用一个请求，因此增加问题不会多一次请求往返。
 
-问题分为三种类型：
+问题分为三种类型。
 
-|类型 |询问|返回|
+| 类型 | 问题 | 返回值 |
 | - | - | - |
-|`choice` | Which key of the `criteria` record applies? | `choice`, plus a probability for every option when the provider reports them |
-| `score` | Where on the ordered `criteria` list does the state fall? | `score`, plus a probability for every level when the provider reports them |
-| `boolean` | Is this statement true? | `probability` |
+| `choice` | `criteria` 记录中的哪个键适用？ | `choice`，若 Provider 提供概率，还会返回每个选项的概率 |
+| `score` | 状态在有序 `criteria` 列表中处于哪个位置？ | `score`，若 Provider 提供概率，还会返回每个级别的概率 |
+| `boolean` | 这个陈述是否为真？ | `probability` |
 
-为了`score`, the indexes of the `criteria` list define the range of answers, and scores can be fractional.
+对 `score` 而言，`criteria` 列表的索引决定答案范围，分数可以是小数。
 
-一个`boolean` answer is the probability that the statement is true. A value of `0.9` means the decision model estimates a 90% chance the answer is `true`. It doesn't mean the model is 90% confident of whichever outcome is more likely.
+`boolean` 答案表示陈述为真的概率。`0.9` 表示模型估计答案为 `true` 的概率是 90%，而非对较可能结果的置信度。
 
-每个问题都应该要求一个判断。一个权衡多个因素的问题会产生一个你无法确定的答案，因为任何因素的变化都会改变它。单独询问因素并将答案合并到代码中，您可以在代码中重新调整阈值而无需重写提示。看[Designing questions](/reference/classifier/classifier#designing-questions).
+每个问题只应要求一项判断。若一个问题混合多个因素，任一因素变化都会改变答案，难以据此路由。请分别提问，在代码中组合答案，这样调整阈值时无需重写提示词。参见 [设计问题](/reference/classifier/classifier#designing-questions)。
 
-此示例使用 TypeSafe AI 提供程序。安装`@ai-sdk/typesafe-ai` and set `TYPESAFE_AI_API_KEY` before running it. It asks one boolean question and acts on the answer:
+此示例使用 TypeSafe AI Provider。运行前请安装 `@ai-sdk/typesafe-ai` 并设置 `TYPESAFE_AI_API_KEY`。示例提出一个布尔问题，并根据答案采取行动。
 
 ```typescript title="src/mastra/safety.ts"
 import { Classifier } from '@mastra/core/classifier'
@@ -74,33 +74,33 @@ if (answers.unsafe.type === 'refusal') {
 }
 ```
 
-决策模型可以拒绝问题，例如当安全策略阻止其回答时。返回被拒绝的问题`{ type: 'refusal' }` with no `choice`, `score`, or `probability`, while the other questions in the same call keep their answers. Check `type` before reading an answer field.
+决策模型可能拒绝回答某个问题，例如受安全策略限制时。该问题返回 `{ type: 'refusal' }`，不含 `choice`、`score` 或 `probability`。同一次调用的其他问题仍会返回答案。读取答案字段前，请先检查 `type`。
 
-如果Provider呼叫失败或答案无效，`decide()` rejects instead of returning partial answers. [Validation and errors](/reference/classifier/classifier#validation-and-errors) covers the checks and the retry behavior.
+如果调用 Provider 失败，或答案未通过验证，`decide()` 返回的 Promise 会被拒绝，不会返回部分答案。验证与重试机制见 [验证和错误](/reference/classifier/classifier#validation-and-errors)。
 
-## 分类器运行的地方 {/* #where-classifiers-run */}
+## 分类器的运行位置 {/* #where-classifiers-run */}
 
-称呼`decide()` directly when your application controls the decision point. Mastra also runs classifiers in several places:
+由应用决定何时判断时，直接调用 `decide()`。Mastra 也会在以下位置运行分类器。
 
-* **Workflow程路由。**&#x4E00;个[`.classifier()`](/docs/workflows/control-flow#route-with-a-classifier) step classifies the workflow input before `.branch()` routes on the answer.
-* **护栏和节制。** [`ClassifierProcessor`](/reference/processors/classifier-processor) runs a classifier over agent input, output, or stream chunks and passes the answers to `onResult`, where you can abort or filter the content. See [Guardrails](/docs/agents/guardrails).
-* **型号选择。** [`ModelSelectionProcessor`](/reference/processors/model-selection-processor) classifies the incoming request and can downgrade the agent to a cheaper model. By default it routes on the selected choice. Set `minProbability` to require a confident answer before switching.
-* **得分手。** `createClassifierScorer()` turns one classifier question into a scorer for the eval pipeline.
+* **Workflow 路由**。[`.classifier()`](/docs/workflows/control-flow#route-with-a-classifier) 步骤先对 Workflow 输入分类，`.branch()` 再根据答案选择分支。
+* **护栏与内容审核**。[`ClassifierProcessor`](/reference/processors/classifier-processor) 会对 Agent 的输入、输出或流式数据块进行分类，并把答案传给 `onResult`，供你中止处理或过滤内容。参见 [护栏](/docs/agents/guardrails)。
+* **模型选择**。[`ModelSelectionProcessor`](/reference/processors/model-selection-processor) 会对收到的请求分类，可以为 Agent 切换到成本更低的模型。默认按选中的选项路由。设置 `minProbability` 可要求答案达到指定概率后才切换。
+* **Scorer**。`createClassifierScorer()` 将分类器中的一个问题转换为用于评估流程的 Scorer。
 
-您还可以在`Mastra` instance, which shares them across your application and lets workflows reference them by ID. See [Registering classifiers](/reference/classifier/classifier#registering-classifiers).
+也可以将分类器注册到 `Mastra` 实例，让整个应用共享，并支持 Workflow 按 ID 引用。参见 [注册分类器](/reference/classifier/classifier#registering-classifiers)。
 
 ## 选择决策模型 {/* #choosing-a-decision-model */}
 
-本页上的示例使用 TypeSafe AI 提供程序。其他 AI SDK Provider，包括 OpenAI、Anthropic 和 Google，都公开了`decisionModel()` factories as well. Each provider declares which question types its models support. For the full list of providers and model IDs, see [Decision models](/reference/classifier/classifier#decision-models).
+本页示例使用 TypeSafe AI Provider。OpenAI、Anthropic 和 Google 等其他 AI SDK Provider 也提供 `decisionModel()` 工厂方法。各 Provider 会声明其模型支持的问题类型。完整的 Provider 和模型 ID 列表见 [决策模型](/reference/classifier/classifier#decision-models)。
 
-如果提供者输出在分类器验证之前需要标准化，请将决策模型包装在[`MastraDecisionModel`](/reference/classifier/classifier#customize-provider-responses). The classifier wraps a raw AI SDK decision model in `MastraDecisionModel` automatically.
+如果 Provider 的输出需要先统一格式，再由分类器验证，请用 [`MastraDecisionModel`](/reference/classifier/classifier#customize-provider-responses) 包装决策模型。直接传入原始 AI SDK 决策模型时，分类器会自动用 `MastraDecisionModel` 包装。
 
-分类器将您传递给提供者的状态以及每个问题的`instructions`. Send only the data the decision needs. If the state contains sensitive fields, redact them before the call or use a provider that meets your data-handling requirements.
+分类器会将你传入的状态和每个问题的 `instructions` 一起转发给 Provider。请只发送决策所需的数据。如果状态包含敏感字段，请在调用前脱敏，或使用符合数据处理要求的 Provider。
 
 ## 后续步骤 {/* #next-steps */}
 
-* [分类器参考](/reference/classifier/classifier)：构造函数选项、每次调用问题、返回值、验证和自定义提供程序响应
-* [可观察性](/reference/classifier/classifier#observability)：跨度属性、令牌指标以及隐藏状态和跟踪答案
-* [带分类器的路由](/docs/workflows/control-flow#route-with-a-classifier)：使用答案来驱动Workflow程分支
-* [分类器处理器](/reference/processors/classifier-processor)：对Agent输入和输出执行策略
-* [有条件批准的功能](/docs/agents/human-in-the-loop#conditional-approval-with-a-function)：将分类器与Tool批准相结合
+* [分类器参考](/reference/classifier/classifier)介绍构造函数选项、单次调用的问题、返回值、验证和自定义 Provider 响应。
+* [可观测性](/reference/classifier/classifier#observability)介绍 span 属性、token 指标和如何在 Trace 中隐藏状态与答案。
+* [使用分类器路由](/docs/workflows/control-flow#route-with-a-classifier) 说明如何根据答案选择 Workflow 分支。
+* [ClassifierProcessor](/reference/processors/classifier-processor) 可对 Agent 的输入和输出执行策略。
+* [使用函数进行条件审批](/docs/agents/human-in-the-loop#conditional-approval-with-a-function) 介绍如何将分类器与工具审批结合。

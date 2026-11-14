@@ -1,23 +1,23 @@
 ---
-title: "Reference: ResponseCache | Processors"
-description: "ResponseCache is an input processor that caches LLM responses on the request/response boundary inside the agentic loop."
+title: "參考：ResponseCache | 處理器"
+description: "ResponseCache 是輸入處理器，在 Agent 循環的請求與回應邊界快取 LLM 回應。"
 packages:
   - "@mastra/core"
 ---
 
 # 回應快取
 
-:::測試版
+:::beta
 
-在 API 穩定之前，可能會在沒有重大版本更新的情況下發生重大變更。
+在 API 穩定之前，即使不提升主版本號，也可能出現不兼容的改動。
 
 :::
 
-`ResponseCache`是一個輸入處理器，用於在Agent循環內的請求/回應邊界上快取 LLM 回應。它掛鉤到`processLLMRequest` for cache lookup and short-circuits on a hit. It uses `processLLMResponse`寫出完整的回覆。
+`ResponseCache` 是輸入處理器，在 Agent 循環的請求與回應邊界快取 LLM 回應。它透過 `processLLMRequest` 查詢快取；命中時直接返回快取結果，並透過 `processLLMResponse` 寫入已完成的回應。
 
-快取鍵源自已解析的`LanguageModelV2Prompt` Mastra is about to send to the model (i.e. *after* memory has loaded and earlier input processors have transformed the prompt) so two users with different memory contexts produce different cache keys. Each step in an agentic tool loop is independently cached.
+快取鍵根據 Mastra 即將傳送給模型的最終 `LanguageModelV2Prompt` 產生，即在載入記憶、先前的輸入處理器修改提示詞*之後*產生。因此，不同用戶的記憶上下文不同時，快取鍵也不同。Agent 工具循環中的每個步驟都會分別快取。
 
-不存在用於回應快取的Agent級選項。登記`ResponseCache` explicitly on `inputProcessors`. Per-call overrides flow through `RequestContext` via [`ResponseCache.context()`](#static-helpers)和[`ResponseCache.applyContext()`](#static-helpers).
+Agent 沒有專門的回應快取選項。請將 `ResponseCache` 明確註冊至 `inputProcessors`。如要覆寫單次調用的設定，可透過 [`ResponseCache.context()`](#static-helpers) 和 [`ResponseCache.applyContext()`](#static-helpers) 將設定寫入 `RequestContext`。
 
 ## 使用範例 {/* #usage-example */}
 
@@ -48,7 +48,7 @@ await agent.generate('What is the capital of France?', {
 })
 ```
 
-看[Response caching](/docs/agents/processors#response-caching) for the conceptual overview, scoping rules, and recommended deployment patterns.
+概念說明、作用範圍規則及建議的部署方式，請參閱[回應快取](/docs/agents/processors#response-caching)。
 
 ## 建構函數參數 {/* #constructor-parameters */}
 
@@ -58,14 +58,14 @@ await agent.generate('What is the capital of France?', {
   name: 'cache',
   type: 'MastraServerCache',
   description:
-    'The cache backend. Required. Pass any `MastraServerCache` implementation — `InMemoryServerCache` for local development, `RedisServerCache` from `@mastra/redis` for production, or your own subclass for a custom backend.',
+    '快取後端，必填。可傳入任何 `MastraServerCache` 實作：本機開發使用 `InMemoryServerCache`，正式環境使用 `@mastra/redis` 的 `RedisServerCache`，亦可自行繼承類別實作後端。',
   isOptional: false,
 },
 {
   name: 'ttl',
   type: 'number',
   description:
-    "Time-to-live (seconds) for entries written by this processor. Defaults to 300 seconds (5 minutes), matching OpenRouter's reference implementation.",
+    "此處理器寫入的快取項目存活時間，以秒為單位。預設為 300 秒（5 分鐘），與 OpenRouter 的參考實作相同。",
   isOptional: true,
   defaultValue: '300',
 },
@@ -73,21 +73,21 @@ await agent.generate('What is the capital of France?', {
   name: 'scope',
   type: 'string | null',
   description:
-    'Tenant scope appended to the cache key. `null` opts out of scoping. When omitted, the processor falls back to the resource id resolved from the request context (`MASTRA_RESOURCE_ID_KEY`) for automatic per-user isolation.',
+    '附加至快取鍵的租戶作用範圍。設為 `null` 可停用範圍隔離；省略時，處理器使用從請求上下文解析出的資源 ID（`MASTRA_RESOURCE_ID_KEY`），自動隔離不同用戶。',
   isOptional: true,
 },
 {
   name: 'key',
   type: 'string | (inputs: ResponseCacheKeyInputs) => string | Promise<string>',
   description:
-    'Override the auto-derived cache key. Pass a string to pin a key, or a function that receives `{ agentId, scope, model, prompt, stepNumber }` and returns a key. If the function throws, the processor falls back to the deterministic hash so the call still benefits from caching.',
+    '覆寫自動產生的快取鍵。傳入字串可固定快取鍵；亦可傳入函式，接收 `{ agentId, scope, model, prompt, stepNumber }` 並返回快取鍵。若函式拋出異常，處理器會改用確定性雜湊，仍可使用快取。',
   isOptional: true,
 },
 {
   name: 'bust',
   type: 'boolean',
   description:
-    'Force a cache miss on every call: skip the read but still write on completion. Useful for explicit refresh paths.',
+    '強制每次調用都不命中快取：略過讀取，但在完成後仍會寫入。適用於明確要求重新整理的流程。',
   isOptional: true,
   defaultValue: 'false',
 },
@@ -95,7 +95,7 @@ await agent.generate('What is the capital of France?', {
   name: 'agentId',
   type: 'string',
   description:
-    "Logical id used in the cache key namespace. Defaults to `'mastra-response-cache'`. Set this to the owning agent's id when you want cache entries scoped per-agent.",
+    "快取鍵命名空間使用的邏輯 ID。預設為 `'mastra-response-cache'`。如要按 Agent 隔離快取項目，可設為所屬 Agent 的 ID。",
   isOptional: true,
   defaultValue: "'mastra-response-cache'",
 },
@@ -104,11 +104,11 @@ await agent.generate('What is the capital of France?', {
 
 ## 靜態助手 {/* #static-helpers */}
 
-`ResponseCache`公開兩個靜態助手，用於設定每次呼叫覆蓋`RequestContext`. The helpers keep the underlying context key a private implementation detail: prefer them over reading/writing the raw key.
+`ResponseCache` 提供兩個靜態輔助方法，用於在 `RequestContext` 中覆寫單次調用的設定。這些方法將底層上下文鍵保留為私有實作細節；請優先使用它們，避免直接讀寫原始鍵。
 
 ### `ResponseCache.context(options)` {/* #responsecachecontextoptions */}
 
-打造一個新鮮的`RequestContext` preloaded with per-call response cache overrides.
+建立新的 `RequestContext`，並預先寫入單次調用的回應快取覆寫設定。
 
 ```typescript
 await agent.stream('hello', {
@@ -118,7 +118,7 @@ await agent.stream('hello', {
 
 ### `ResponseCache.applyContext(requestContext, options)` {/* #responsecacheapplycontextrequestcontext-options */}
 
-將每次呼叫響應快取覆蓋合併到現有的`RequestContext`. Returns the same context for chaining.
+將單次調用的回應快取覆寫設定合併到現有的 `RequestContext`，並返回同一個上下文，方便鏈式調用。
 
 ```typescript
 const ctx = new RequestContext()
@@ -129,68 +129,68 @@ await agent.stream('hello', { requestContext: ctx })
 
 ## 回應快取上下文選項 {/* #responsecachecontextoptions-1 */}
 
-形狀傳遞給`ResponseCache.context()` / `ResponseCache.applyContext()`.
+傳給 `ResponseCache.context()` 或 `ResponseCache.applyContext()` 的參數結構。
 
 <PropertiesTable
   content={[
 {
   name: 'key',
   type: 'string | (inputs: ResponseCacheKeyInputs) => string | Promise<string>',
-  description: 'Overrides the auto-derived cache key for this request only.',
+    description: '僅覆寫本次請求自動產生的快取鍵。',
   isOptional: true,
 },
 {
   name: 'scope',
   type: 'string | null',
-  description: 'Overrides the tenant scope for this request only. `null` opts out of scoping.',
+    description: '僅覆寫本次請求的租戶作用範圍。設為 `null` 可停用範圍隔離。',
   isOptional: true,
 },
 {
   name: 'bust',
   type: 'boolean',
-  description: 'Skip the cache read but still write on completion.',
+    description: '略過快取讀取，但在完成後仍會寫入。',
   isOptional: true,
 },
 ]}
 />
 
-`cache`, `ttl`, and `agentId` are intentionally not overridable per call: they're instance-level concerns that shouldn't vary per request.
+`cache`、`ttl` 和 `agentId` 無法按單次調用覆寫：它們是實例層級的設定，不應隨請求改變。
 
 ## 響應快取鍵輸入 {/* #responsecachekeyinputs */}
 
-參數傳遞給`key` function (constructor or per-call). All fields contribute to the deterministic hash by default.
+傳給 `key` 函式的參數（無論函式是在建構時或單次調用時提供）。預設情況下，所有欄位都會參與確定性雜湊的計算。
 
 <PropertiesTable
   content={[
 {
   name: 'agentId',
   type: 'string',
-  description: 'Logical processor id used to namespace the cache key.',
+    description: '用於區分快取鍵命名空間的處理器邏輯 ID。',
   isOptional: false,
 },
 {
   name: 'scope',
   type: 'string | null | undefined',
-  description: 'Resolved scope for this request, or `null` when scoping is disabled.',
+    description: '本次請求解析出的作用範圍；設為 `null` 表示停用範圍隔離。',
   isOptional: true,
 },
 {
   name: 'model',
   type: '{ provider?: string; modelId?: string; specVersion?: string }',
-  description: 'Provider/model identity. Different models produce different responses.',
+    description: 'Provider 及模型的識別資訊。不同模型會產生不同回應。',
   isOptional: false,
 },
 {
   name: 'prompt',
   type: 'LanguageModelV2Prompt',
   description:
-    'The exact prompt the provider would receive, post memory load and post any prompt-modifying input processors.',
+      'Provider 實際收到的提示詞，即載入記憶並經過所有會修改提示詞的輸入處理器之後的內容。',
   isOptional: false,
 },
 {
   name: 'stepNumber',
   type: 'number',
-  description: '0-indexed step number within the agentic loop. Greater than zero for tool steps.',
+    description: 'Agent 循環中從 0 開始的步驟編號；工具步驟的編號大於 0。',
   isOptional: false,
 },
 ]}
@@ -198,11 +198,11 @@ await agent.stream('hello', { requestContext: ctx })
 
 ## 助手導出 {/* #helper-exports */}
 
-* `buildResponseCacheKey(inputs)`：預設使用的確定性哈希。重新匯出它以覆蓋各個字段，同時保留標準密鑰形狀的其餘部分。
-* `DEFAULT_RESPONSE_CACHE_TTL_SECONDS`:預設`ttl` (`300`).
-* `RESPONSE_CACHE_CONTEXT_KEY`： 這`RequestContext` key the static helpers write to. Exposed for advanced cases (e.g. clearing the override mid-pipeline). Prefer the helpers.
+- `buildResponseCacheKey(inputs)`：預設使用的確定性雜湊函式。重新匯出後，可覆寫個別欄位，同時保留標準快取鍵的其餘欄位。
+- `DEFAULT_RESPONSE_CACHE_TTL_SECONDS`：預設 `ttl`（`300`）。
+- `RESPONSE_CACHE_CONTEXT_KEY`：靜態輔助方法寫入的 `RequestContext` 鍵。此鍵可用於在流程中途清除覆寫設定等進階情況；一般請優先使用輔助方法。
 
-## 有關的 {/* #related */}
+## 相關內容 {/* #related */}
 
 * [回應快取](/docs/agents/processors#response-caching)
 * [處理器](/docs/agents/processors)

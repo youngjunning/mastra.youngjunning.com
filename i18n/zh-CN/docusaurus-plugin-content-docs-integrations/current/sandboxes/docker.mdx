@@ -1,13 +1,13 @@
 ---
 title: "Docker | Sandbox"
-description: "Run Mastra workspace commands in long-lived local Docker containers with environment variables, bind mounts, background processes, and reconnection."
+description: "在长期运行的本地 Docker 容器中执行 Mastra Workspace 命令，支持环境变量、绑定挂载、后台进程和重新连接。"
 packages:
   - "@mastra/docker"
 ---
 
-# 码头工人
+# Docker
 
-在本地计算机上的 Docker 容器内执行命令。使用长寿命容器`docker exec`用于命令执行。针对本地开发、CI/CD、气隙部署以及不需要云Sandbox的成本敏感场景。接口详情请参见[Workspace沙盒界面](/reference/workspace/sandbox).
+在本机的 Docker 容器内执行命令。容器会长期运行，命令通过 `docker exec` 执行。适用于本地开发、CI/CD、隔离网络部署，以及不需要云端 Sandbox、注重成本的场景。接口详情请参阅 [WorkspaceSandbox 接口](/reference/workspace/sandbox)。
 
 ## 安装 {/* #installation */}
 
@@ -15,11 +15,11 @@ packages:
 npm install @mastra/docker
 ```
 
-需要[Docker Engine](https://docs.docker.com/engine/install/) running on the host machine.
+主机上需要运行 [Docker Engine](https://docs.docker.com/engine/install/)。
 
 ## 用法 {/* #usage */}
 
-添加一个`DockerSandbox` to a workspace and assign it to an agent:
+将 `DockerSandbox` 添加到 Workspace，并将该 Workspace 分配给 Agent：
 
 ```typescript
 import { Agent } from '@mastra/core/agent'
@@ -40,11 +40,9 @@ const agent = new Agent({
 })
 ```
 
-### 存储库模板 {/* #repository-templates */}
+### 仓库模板 {/* #repository-templates */}
 
-`createDockerRepoTemplate`构建一个已经包含结帐的图像
-存储库及其设置命令的输出，因此会话从
-安装的依赖项而不是冷克隆：
+`createDockerRepoTemplate` 构建的镜像已包含检出的仓库和初始化命令的执行结果，因此会话启动时依赖项已经安装，无需从头克隆：
 
 ```typescript
 import { DockerSandbox, createDockerRepoTemplate } from '@mastra/docker'
@@ -60,30 +58,15 @@ const sandbox = new DockerSandbox({
 })
 ```
 
-`getRepositoryAccess`提供克隆 URL，对于私有存储库，提供
-短暂的凭证。凭证作为构建传递到克隆步骤
-秘密，永远不会进入图像、其层次或图像身份。什么时候`getRepositoryAccess` is `undefined`, `createDockerRepoTemplate` returns
-`undefined`, which selects the provider's default image without a conditional
-at the call site.
+`getRepositoryAccess` 提供克隆 URL；对于私有仓库，还提供短期凭证。凭证仅作为构建密钥传入克隆步骤，不会进入镜像、镜像层或镜像标识。如果 `getRepositoryAccess` 为 `undefined`，`createDockerRepoTemplate` 也会返回 `undefined`，从而选用 Provider 的默认镜像，调用处无需另写条件判断。
 
-存储库被克隆到`<workingDirectory>/<repo>` (default
-`/workspace`), which becomes the working directory of the sandbox. Pass `ref`
-to prepare a branch, tag or commit other than the default branch. Right before
-the build the resolver runs `git ls-remote` to pin the ref to a commit, which
-is part of the image identity: a moved branch yields a fresh image on the next
-new sandbox and an unmoved one reuses the cached image. If the head can't be
-resolved the resolver rejects rather than caching an unpinned clone.
+仓库会克隆到 `<workingDirectory>/<repo>`（默认为 `/workspace`），该路径随后成为 Sandbox 的工作目录。传入 `ref` 可指定默认分支以外的分支、标签或提交。构建开始前，解析器会运行 `git ls-remote`，将 ref 固定到某个提交；该提交也是镜像标识的一部分。因此，分支指向新提交后，下次创建新的 Sandbox 时会生成新镜像；分支未变化时则复用缓存镜像。如果无法解析分支头，解析器会拒绝继续，而不会缓存未固定提交的克隆结果。
 
-`setupCommand`也接受一个数组。每个条目都作为自己的缓存构建运行
-步骤。命令不能包含空的换行符，否则会开始一个新的行
-Dockerfile 指令。该行结束于`\` or pass separate commands
-instead.
+`setupCommand` 也可以是数组，其中每条命令都是独立的可缓存构建步骤。命令不能包含未转义的换行符，否则会开始一条新的 Dockerfile 指令。可以在行尾使用 `\`，也可以将命令拆成多个条目。
 
-#### 一张图片中的多个存储库 {/* #several-repositories-in-one-image */}
+#### 在一个镜像中放入多个仓库 {/* #several-repositories-in-one-image */}
 
-经过`repos` instead of `getRepositoryAccess` to clone several repositories
-into one image, each with its own access resolver, `ref` and setup command (a string or an
-array, each entry its own build step):
+使用 `repos` 代替 `getRepositoryAccess`，可以将多个仓库克隆到同一个镜像中。每个仓库都可单独配置访问解析器、`ref` 和初始化命令；初始化命令可以是字符串或数组，数组中的每个条目都是独立的构建步骤：
 
 ```typescript
 const sandbox = new DockerSandbox({
@@ -110,28 +93,17 @@ const sandbox = new DockerSandbox({
 })
 ```
 
-每个存储库都被克隆到`<workingDirectory>/<repo>` and the working
-directory becomes the sandbox cwd. Public repositories are built before
-private ones, keeping the caller's order within each group. Each private
-credential is passed as a build secret to that repository's clone step only,
-so setup commands never see it.
+每个仓库都会克隆到 `<workingDirectory>/<repo>`，工作目录则成为 Sandbox 的当前目录。构建时先处理公开仓库，再处理私有仓库；每组内部保持调用方指定的顺序。私有仓库的凭证仅作为构建密钥传入该仓库的克隆步骤，初始化命令无法读取凭证。
 
-`workspaceSetupCommand`在每个存储库之后的工作目录中运行
-已设置。`continueOnSetupFailure` (default `false`) lets a failing setup
-command record its repository in `.mastra-sandbox/setup-failed` and continue
-instead of failing the build.
+所有仓库完成初始化后，`workspaceSetupCommand` 会在工作目录中运行。启用 `continueOnSetupFailure`（默认值为 `false`）后，某个初始化命令失败时会将对应仓库记录在 `.mastra-sandbox/setup-failed`，并继续构建，而不是让整个构建失败。
 
-标记告诉会话图像已经运行了什么：`.mastra-sandbox/repos/<repo>`
-per repository and `.mastra-sandbox/workspace-setup` after the workspace
-commands, all under the working directory. With `continueOnSetupFailure`,
-check `.mastra-sandbox/setup-failed` first.
+工作目录中的标记可供会话判断镜像已经执行了哪些步骤：每个仓库对应 `.mastra-sandbox/repos/<repo>`，Workspace 初始化命令执行后则有 `.mastra-sandbox/workspace-setup`。如果启用了 `continueOnSetupFailure`，请先检查 `.mastra-sandbox/setup-failed`。
 
-如果任何条目的访问或头无法解析，则整个解析将被拒绝
-并且Sandbox会回退到其默认模板。
+如果任一仓库的访问方式或分支头无法解析，整个解析过程都会失败，Sandbox 将回退到默认模板。
 
-## Docker 云Sandbox {/* #docker-cloud-sandboxes */}
+## Docker Cloud Sandboxes {/* #docker-cloud-sandboxes */}
 
-`DockerSandboxesSandbox`在 Docker Cloud Sandboxes microVM（而不是本地容器）中运行命令。提供经过验证的`@docker/sandboxes` client to access Docker Cloud Sandboxes.
+`DockerSandboxesSandbox` 在 Docker Cloud Sandboxes 的 microVM 中执行命令，而不是使用本地容器。要访问 Docker Cloud Sandboxes，请提供已完成身份验证的 `@docker/sandboxes` 客户端。
 
 ```typescript
 import { Sandboxes, pat } from '@docker/sandboxes'
@@ -154,41 +126,41 @@ const workspace = new Workspace({
 })
 ```
 
-这`id` is used as the remote sandbox display name for reconnection lookup, so a new instance with the same `id` reconnects to an existing microVM and restarts it if it was stopped. Each instance uses a separate creation idempotency key. Pass `sandboxId` to reconnect directly to a known remote sandbox.
+`id` 用作远程 Sandbox 的显示名称，以便重新连接时查找。新实例使用相同的 `id` 时，会重新连接到已有的 microVM；如果它已停止，还会将其重新启动。每个实例都使用独立的创建幂等键。传入 `sandboxId` 可直接重新连接到已知的远程 Sandbox。
 
-命令贯穿`sh -lc`, so command strings can use pipes, redirects and `&&`. Separate `args` are shell-quoted. `executeCommand` supports `timeout`, `abortSignal`, streaming `onStdout`/`onStderr` callbacks and `maxRetainedBytes` (default 1 MiB per stream). Calling `destroy()` deletes the remote sandbox.
+命令通过 `sh -lc` 执行，因此命令字符串可以使用管道、重定向和 `&&`。单独传入的 `args` 会进行 shell 引号转义。`executeCommand` 支持 `timeout`、`abortSignal`、流式 `onStdout`/`onStderr` 回调，以及 `maxRetainedBytes`（每个输出流默认保留 1 MiB）。调用 `destroy()` 会删除远程 Sandbox。
 
 <PropertiesTable
   content={[
 {
   name: 'image',
   type: 'string',
-  description: 'Image used to create the cloud sandbox.',
+  description: '用于创建云端 Sandbox 的镜像。',
 },
 {
   name: 'id',
   type: 'string',
-  description: 'Stable logical identifier used as the remote display name for reconnection lookup.',
+  description: '稳定的逻辑标识符，用作远程显示名称，以便重新连接时查找。',
   isOptional: true,
   defaultValue: 'Auto-generated',
 },
 {
   name: 'sandboxId',
   type: 'string',
-  description: 'Remote sandbox name to reconnect to directly.',
+  description: '用于直接重新连接的远程 Sandbox 名称。',
   isOptional: true,
 },
 {
   name: 'environment',
   type: 'Record<string, string>',
-  description: 'Environment variables set on a newly created cloud sandbox.',
+  description: '在新建云端 Sandbox 中设置的环境变量。',
   isOptional: true,
 },
 {
   name: 'client',
   type: 'Sandboxes',
   description:
-    'Authenticated Docker Cloud Sandboxes client. Supply one to access Docker Cloud Sandboxes; caller-owned clients are not closed on `destroy()`.',
+    '已完成身份验证的 Docker Cloud Sandboxes 客户端。访问 Docker Cloud Sandboxes 时需提供此客户端；调用 `destroy()` 不会关闭由调用方持有的客户端。',
   isOptional: true,
 },
 ]}
@@ -201,7 +173,7 @@ const workspace = new Workspace({
 {
   name: 'id',
   type: 'string',
-  description: 'Unique identifier for this sandbox instance. Used for label-based reconnection.',
+  description: '此 Sandbox 实例的唯一标识符，用于通过标签重新连接。',
   isOptional: true,
   defaultValue: 'Auto-generated',
 },
@@ -209,185 +181,185 @@ const workspace = new Workspace({
   name: 'name',
   type: 'string',
   description:
-    'Container display name passed to Docker as `--name`. Characters outside `[a-zA-Z0-9_.-]` are replaced with `-` and the result is prefixed if it would not start with an alphanumeric character.',
+    '容器显示名称，通过 `--name` 传给 Docker。不属于 `[a-zA-Z0-9_.-]` 的字符会替换为 `-`；如果结果不是以字母或数字开头，还会添加前缀。',
   isOptional: true,
-  defaultValue: 'The sandbox `id`',
+  defaultValue: 'Sandbox 的 `id`',
 },
 {
   name: 'image',
   type: 'string',
-  description: 'Docker image to use for the container.',
+  description: '容器使用的 Docker 镜像。',
   isOptional: true,
   defaultValue: "'node:22-slim'",
 },
 {
   name: 'command',
   type: 'string[]',
-  description: 'Container entrypoint command. Must keep the container alive for exec-based command execution.',
+  description: '容器的入口命令。必须让容器持续运行，才能通过 exec 执行命令。',
   isOptional: true,
   defaultValue: "['sleep', 'infinity']",
 },
 {
   name: 'env',
   type: 'Record<string, string>',
-  description: 'Environment variables to set in the container.',
+  description: '在容器中设置的环境变量。',
   isOptional: true,
 },
 {
   name: 'volumes',
   type: 'Record<string, string>',
-  description: 'Host-to-container bind mounts. Keys are host paths, values are container paths.',
+  description: '从主机到容器的绑定挂载。键为主机路径，值为容器路径。',
   isOptional: true,
 },
 {
   name: 'network',
   type: 'string',
-  description: 'Docker network to join.',
+  description: '要加入的 Docker 网络。',
   isOptional: true,
 },
 {
   name: 'privileged',
   type: 'boolean',
-  description: 'Run in privileged mode.',
+  description: '以特权模式运行。',
   isOptional: true,
   defaultValue: 'false',
 },
 {
   name: 'memory',
   type: 'number',
-  description: 'Memory limit in bytes. Docker treats 0 as unlimited. Maps to Docker HostConfig.Memory.',
+  description: '内存上限，以字节为单位。Docker 将 0 视为无限制。映射到 Docker HostConfig.Memory。',
   isOptional: true,
 },
 {
   name: 'memorySwap',
   type: 'number',
-  description: 'Total memory plus swap in bytes. Maps to Docker HostConfig.MemorySwap.',
+  description: '内存与交换空间的总量，以字节为单位。映射到 Docker HostConfig.MemorySwap。',
   isOptional: true,
 },
 {
   name: 'cpuShares',
   type: 'number',
-  description: 'CPU shares relative weight. Maps to Docker HostConfig.CpuShares.',
+  description: 'CPU shares 的相对权重。映射到 Docker HostConfig.CpuShares。',
   isOptional: true,
 },
 {
   name: 'cpuQuota',
   type: 'number',
-  description: 'CPU quota in microseconds per period. Maps to Docker HostConfig.CpuQuota.',
+  description: '每个周期的 CPU 配额，以微秒为单位。映射到 Docker HostConfig.CpuQuota。',
   isOptional: true,
 },
 {
   name: 'cpuPeriod',
   type: 'number',
-  description: 'CPU period in microseconds. Maps to Docker HostConfig.CpuPeriod.',
+  description: 'CPU 周期，以微秒为单位。映射到 Docker HostConfig.CpuPeriod。',
   isOptional: true,
 },
 {
   name: 'pidsLimit',
   type: 'number',
-  description: 'Maximum number of process IDs in the container. Maps to Docker HostConfig.PidsLimit.',
+  description: '容器中的最大进程 ID 数量。映射到 Docker HostConfig.PidsLimit。',
   isOptional: true,
 },
 {
   name: 'readonlyRootfs',
   type: 'boolean',
-  description: 'Mount the container root filesystem as read-only. Maps to Docker HostConfig.ReadonlyRootfs.',
+  description: '将容器根文件系统挂载为只读。映射到 Docker HostConfig.ReadonlyRootfs。',
   isOptional: true,
 },
 {
   name: 'capDrop',
   type: 'string[]',
   description:
-    "Linux capabilities to drop. Use ['ALL'] to drop all capabilities before adding specific ones. Maps to Docker HostConfig.CapDrop.",
+    "要移除的 Linux capabilities。使用 ['ALL'] 可先移除所有 capabilities，再按需添加特定项。映射到 Docker HostConfig.CapDrop。",
   isOptional: true,
 },
 {
   name: 'capAdd',
   type: 'string[]',
   description:
-    'Linux capabilities to add back after drops, such as NET_BIND_SERVICE. Maps to Docker HostConfig.CapAdd.',
+    '移除后要重新添加的 Linux capabilities，例如 NET_BIND_SERVICE。映射到 Docker HostConfig.CapAdd。',
   isOptional: true,
 },
 {
   name: 'securityOpt',
   type: 'string[]',
-  description: "Docker security options, such as ['no-new-privileges:true']. Maps to Docker HostConfig.SecurityOpt.",
+  description: "Docker 安全选项，例如 ['no-new-privileges:true']。映射到 Docker HostConfig.SecurityOpt。",
   isOptional: true,
 },
 {
   name: 'ulimits',
   type: 'Array<{ name: string; soft: number; hard: number }>',
-  description: 'Ulimit entries for the container. Maps to Docker HostConfig.Ulimits.',
+  description: '容器的 ulimit 配置项。映射到 Docker HostConfig.Ulimits。',
   isOptional: true,
 },
 {
   name: 'tmpfs',
   type: 'Record<string, string>',
-  description: 'tmpfs mount paths and options. Maps to Docker HostConfig.Tmpfs.',
+  description: 'tmpfs 挂载路径及选项。映射到 Docker HostConfig.Tmpfs。',
   isOptional: true,
 },
 {
   name: 'workingDirectory',
   type: 'string',
   description:
-    'Working directory inside the container, used as the default for command execution when no per-command `cwd` is given. A per-command `cwd` always wins.',
+    '容器内的工作目录。未为单条命令指定 `cwd` 时，用作执行命令的默认目录；单条命令的 `cwd` 始终优先。',
   isOptional: true,
   defaultValue: "'/workspace'",
 },
 {
   name: 'workingDir',
   type: 'string',
-  description: 'Deprecated alias for `workingDirectory`. When both are set, `workingDirectory` wins.',
+  description: '`workingDirectory` 的已弃用别名。两者同时设置时，以 `workingDirectory` 为准。',
   isOptional: true,
 },
 {
   name: 'labels',
   type: 'Record<string, string>',
-  description: 'Additional container labels. Mastra labels (mastra.sandbox, mastra.sandbox.id) are always included.',
+  description: '额外的容器标签。始终包含 Mastra 标签（mastra.sandbox、mastra.sandbox.id）。',
   isOptional: true,
 },
 {
   name: 'timeout',
   type: 'number',
-  description: 'Default command timeout in milliseconds.',
+  description: '默认命令超时时间，以毫秒为单位。',
   isOptional: true,
-  defaultValue: '300000 (5 minutes)',
+  defaultValue: '300000（5 分钟）',
 },
 {
   name: 'dockerOptions',
   type: 'Docker.DockerOptions',
   description:
-    'Pass-through dockerode connection options for custom socket paths, remote hosts, or TLS certificates.',
+    '直接传给 dockerode 的连接选项，可用于自定义套接字路径、远程主机或 TLS 证书。',
   isOptional: true,
 },
 {
   name: 'instructions',
   type: 'string | function',
   description:
-    'Custom instructions that override the default instructions returned by getInstructions(). Pass an empty string to suppress instructions.',
+    '自定义指令，用于覆盖 getInstructions() 返回的默认指令。传入空字符串可禁止提供指令。',
   isOptional: true,
 },
 ]}
 />
 
-## 特性 {/* #properties */}
+## 属性 {/* #properties */}
 
 <PropertiesTable
   content={[
 {
   name: 'id',
   type: 'string',
-  description: 'Sandbox instance identifier.',
+  description: 'Sandbox 实例标识符。',
 },
 {
   name: 'name',
   type: 'string',
-  description: "Provider name ('DockerSandbox').",
+  description: "Provider 名称（'DockerSandbox'）。",
 },
 {
   name: 'provider',
   type: 'string',
-  description: "Provider identifier ('docker').",
+  description: "Provider 标识符（'docker'）。",
 },
 {
   name: 'status',
@@ -398,20 +370,20 @@ const workspace = new Workspace({
   name: 'container',
   type: 'Container',
   description:
-    'The underlying dockerode Container instance. Throws SandboxNotReadyError if the sandbox has not been started.',
+    '底层的 dockerode Container 实例。如果 Sandbox 尚未启动，会抛出 SandboxNotReadyError。',
 },
 {
   name: 'processes',
   type: 'DockerProcessManager',
   description:
-    'Background process manager. See [SandboxProcessManager reference](/reference/workspace/process-manager).',
+    '后台进程管理器。请参阅 [SandboxProcessManager 参考文档](/reference/workspace/process-manager)。',
 },
 ]}
 />
 
 ## 后台进程 {/* #background-processes */}
 
-`DockerSandbox`包括一个内置的进程管理器，用于生成和管理后台进程。进程在容器内运行，使用`docker exec`.
+`DockerSandbox` 内置进程管理器，可启动和管理后台进程。进程通过 `docker exec` 在容器内运行。
 
 ```typescript
 const sandbox = new DockerSandbox({ id: 'dev-sandbox' })
@@ -430,11 +402,11 @@ await handle.closeStdin()
 await handle.wait()
 ```
 
-看[`SandboxProcessManager` reference](/reference/workspace/process-manager) for the full API.
+完整 API 请参阅 [`SandboxProcessManager` 参考文档](/reference/workspace/process-manager)。
 
 ## 环境变量 {/* #environment-variables */}
 
-在容器级别设置环境变量`env`. Per-command environment variables can also be passed when spawning processes:
+使用 `env` 设置容器级环境变量。启动进程时也可以为单条命令传入环境变量：
 
 ```typescript
 const sandbox = new DockerSandbox({
@@ -448,7 +420,7 @@ const sandbox = new DockerSandbox({
 
 ## 写入文件 {/* #write-files */}
 
-在一次调用中上传多个文件`writeFiles`. Relative paths resolve under the working directory. Set an optional per-file `mode` to control POSIX permissions; it must be an integer between `0o001` and `0o777`. When `mode` is omitted, new files are created with `0644`.
+使用 `writeFiles` 可在一次调用中上传多个文件。相对路径以工作目录为基准解析。可为每个文件单独设置可选的 `mode` 来控制 POSIX 权限；其值必须是 `0o001` 到 `0o777` 之间的整数。省略 `mode` 时，新文件以 `0644` 权限创建。
 
 ```typescript
 await sandbox.writeFiles([
@@ -457,11 +429,11 @@ await sandbox.writeFiles([
 ])
 ```
 
-Docker 是唯一应用显式的内置Sandbox`mode`. Providers that cannot honor per-file permissions (Vercel, E2B, Daytona, Cloudflare) reject a `writeFiles` call that includes a `mode` instead of silently dropping it.
+Docker 是唯一会应用显式 `mode` 的内置 Sandbox。无法遵循单文件权限设置的 Provider（Vercel、E2B、Daytona、Cloudflare）会拒绝包含 `mode` 的 `writeFiles` 调用，而不会悄悄忽略它。
 
-## 绑定坐骑 {/* #bind-mounts */}
+## 绑定挂载 {/* #bind-mounts */}
 
-使用以下命令将主机目录挂载到容器中`volumes` option:
+使用 `volumes` 选项将主机目录挂载到容器中：
 
 ```typescript
 const sandbox = new DockerSandbox({
@@ -473,11 +445,11 @@ const sandbox = new DockerSandbox({
 })
 ```
 
-绑定挂载在容器创建时应用。主机路径必须在Sandbox启动之前存在。
+绑定挂载在创建容器时生效。主机路径必须在 Sandbox 启动前存在。
 
-## 硬化 {/* #hardening */}
+## 安全加固 {/* #hardening */}
 
-使用 Docker 特定的资源和强化选项来限制Sandbox容器。以下示例限制了内存和进程数，同时将 CPU 限制为具有匹配的单核`cpuPeriod` and `cpuQuota` values. It drops Linux capabilities and makes the root filesystem read-only, with `/tmp` mounted as writable scratch space:
+使用 Docker 专有的资源限制和安全加固选项约束 Sandbox 容器。以下示例限制内存和进程数，并通过相匹配的 `cpuPeriod` 与 `cpuQuota` 将 CPU 限制为单核；同时移除 Linux capabilities，将根文件系统设为只读，并把 `/tmp` 挂载为可写的临时空间：
 
 ```typescript
 const sandbox = new DockerSandbox({
@@ -498,25 +470,25 @@ const sandbox = new DockerSandbox({
 })
 ```
 
-这些选项直接映射到 Docker`HostConfig` fields and aren't set unless you pass them.
+这些选项直接映射到 Docker 的 `HostConfig` 字段；未传入时不会设置。
 
-在启用强化之前检查这些权衡：
+启用安全加固前，请考虑以下影响：
 
-* `readonlyRootfs`：容器内软件包安装和在安装路径外部写入的Tool可能会失败。添加`tmpfs` entries for writable scratch paths such as `/tmp`, and mount tmpfs or volumes for package-manager caches such as `~/.npm` when needed.
-* `capDrop`：删除所有功能会禁用需要 Linux 功能的命令，包括`ping` and mount operations. FUSE-backed tools are also disabled. Add back only the capabilities your workload needs.
-* `memory`: Docker 对待`0` as unlimited. Omit `memory` or pass `0` only when you don't want a memory cap.
-* `memorySwap`：Docker 内存和交换行为取决于主机和 Docker 守护进程配置。当你设置`memory` without `memorySwap`, Docker allows swap up to twice the memory limit by default. Set `memorySwap` equal to `memory` when you want to disable swap for the container; Docker also accepts `-1` for unlimited swap.
-* `pidsLimit`：非常低的值可能会损坏`docker exec` workloads because each command starts additional processes inside the long-lived container.
-* `privileged`：特权容器绕过功能和安全选项控制。不要合并`privileged: true` with capability or security options unless the workload requires it.
-* 重新连接：`DockerSandbox` reuses an existing container when the sandbox ID matches and warns if inspected `HostConfig` hardening values differ. Destroy and recreate the sandbox to apply changed hardening options. Docker can normalize inspected values, and changing `memorySwap` on reconnect can trigger a warning if the original container used Docker's default swap behavior.
-* Docker Desktop：资源限制适用于 macOS 和 Windows 上的 Docker Desktop 虚拟机内部，因此 VM 分配的资源可以限制容器接收的资源。
+* `readonlyRootfs`：在容器内安装软件包，或使用会向挂载路径以外写入内容的 Tool，可能会失败。可为 `/tmp` 等临时写入路径添加 `tmpfs`；必要时也可为 `~/.npm` 等包管理器缓存挂载 tmpfs 或卷。
+* `capDrop`：移除所有 capabilities 会禁用需要 Linux capabilities 的命令，包括 `ping` 和挂载操作。依赖 FUSE 的工具也会被禁用。只重新添加工作负载确实需要的 capabilities。
+* `memory`：Docker 将 `0` 视为无限制。只有不需要内存上限时，才省略 `memory` 或传入 `0`。
+* `memorySwap`：Docker 的内存和交换空间行为取决于主机及 Docker 守护进程的配置。设置 `memory` 但未设置 `memorySwap` 时，Docker 默认允许交换空间用量达到内存上限的两倍。若要禁用容器的交换空间，请将 `memorySwap` 设为与 `memory` 相同；Docker 也接受 `-1`，表示交换空间无限制。
+* `pidsLimit`：值设得过低可能影响 `docker exec` 工作负载，因为长期运行的容器每执行一条命令都会启动额外进程。
+* `privileged`：特权容器会绕过 capabilities 和安全选项的控制。除非工作负载确有需要，否则不要将 `privileged: true` 与 capabilities 或安全选项一起使用。
+* 重新连接：Sandbox ID 匹配时，`DockerSandbox` 会复用现有容器。如果检查到的 `HostConfig` 加固值不同，它会发出警告。要应用修改后的加固选项，需销毁并重新创建 Sandbox。Docker 可能会规范化检查结果中的值；如果原容器使用 Docker 默认的交换空间行为，重新连接时修改 `memorySwap` 也可能触发警告。
+* Docker Desktop：在 macOS 和 Windows 上，资源限制作用于 Docker Desktop 虚拟机内部，因此虚拟机分配到的资源可能进一步限制容器可用资源。
 
 ## 重连 {/* #reconnection */}
 
-`DockerSandbox`可以通过匹配标签重新连接到现有容器。什么时候`start()` is called, it checks for a container with the `mastra.sandbox.id` label matching the sandbox ID. If found:
+`DockerSandbox` 可以通过匹配标签重新连接到现有容器。调用 `start()` 时，它会查找 `mastra.sandbox.id` 标签与 Sandbox ID 匹配的容器。找到后：
 
-* 运行中的容器可以直接复用。
-* 已停止的容器将重新启动。
+* 直接复用正在运行的容器。
+* 重新启动已停止的容器。
 
 ```typescript
 // First run — creates a new container
@@ -530,7 +502,7 @@ await sandbox2._start()
 
 ## Docker 连接选项 {/* #docker-connection-options */}
 
-连接到远程 Docker 主机或使用自定义套接字路径`dockerOptions`:
+通过 `dockerOptions` 连接远程 Docker 主机，或使用自定义套接字路径：
 
 ```typescript
 // Remote Docker host
@@ -552,10 +524,10 @@ const sandbox = new DockerSandbox({
 })
 ```
 
-## 有关的 {/* #related */}
+## 相关内容 {/* #related */}
 
-* [SandboxProcessManager 参考](/reference/workspace/process-manager)
-* [Workspace沙盒界面](/reference/workspace/sandbox)
-* [本地沙盒参考](/reference/workspace/local-sandbox)
-* [E2BSandbox参考](/integrations/sandboxes/e2b)
-* [沙盒](/docs/sandbox/overview)
+* [SandboxProcessManager 参考文档](/reference/workspace/process-manager)
+* [WorkspaceSandbox 接口](/reference/workspace/sandbox)
+* [LocalSandbox 参考文档](/reference/workspace/local-sandbox)
+* [E2BSandbox 参考文档](/integrations/sandboxes/e2b)
+* [Sandbox](/docs/sandbox/overview)

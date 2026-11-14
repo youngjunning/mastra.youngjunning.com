@@ -1,6 +1,6 @@
 ---
-title: "Build an eval loop"
-description: "Use datasets, LLM judges, and Mastra Studio experiments to compare agent changes, investigate failures, and build regression checks."
+title: "建立評估循環"
+description: "運用資料集、LLM 評審與 Mastra Studio 實驗，比較 Agent 的變更、分析失敗原因並建立迴歸檢查。"
 packages:
   - "@mastra/core"
   - "@mastra/evals"
@@ -8,11 +8,11 @@ packages:
 
 # 建構評估循環
 
-您嘗試幾個問題，閱讀答案，然後調整提示，直到客服人員感覺正確為止。這是一個有用的開始，但共鳴不會告訴您最新的更改是否使其變得更好。法學碩士是隨機的：相同的輸入可以產生不同的答案。用戶會問一些你沒有預料到的問題。隨著智能體運作時間的延長、步驟和決策的增多，錯誤影響接下來發生的事情的機會也隨之增加。
+你可以先試幾個問題、閱讀回答，再調整 prompt，直到 Agent 看起來表現合宜。這是有用的起點，但直覺無法判斷最新變更是否帶來改善。LLM 的輸出具有隨機性：相同輸入可能產生不同回答。使用者也會提出意料之外的問題。Agent 執行時間越長、步驟與決策越多，錯誤影響後續行為的機會就越高。
 
-您需要一種系統化的方法來衡量品質：定義什麼是良好行為，運行代表性案例，並在發生變化時比較結果。 eval 循環構成了開發的一部分。它為您提供了改進Agent、嘗試不同模型並捕捉停止工作的行為的證據。
+因此需要有系統地衡量品質：定義理想行為、執行具代表性的案例，並在變更後比較結果。評估循環將這套方法納入開發流程，提供證據來改善 Agent、嘗試其他模型，並找出原本正常的行為何時失效。
 
-本指南使此循環具體化。您將看到一個小數據集、一個可選的 LLM 法官以及 Mastra Studio 中的實驗如何組合在一起，然後利用生產故障來推動下一次改進。最後，您將了解什麼是 eval 循環、如何讀取其結果以及如何使用它們來決定下一步要更改的內容。
+本指南將評估循環化為具體步驟。你會了解小型資料集、可選的 LLM 評審及 Mastra Studio 實驗如何配合，再用一次正式環境中的失敗推動下一輪改善。讀完後，你會理解何謂評估循環、如何解讀結果，以及如何據此決定下一步變更。
 
 {/* vale Mastra.Contractions = NO */}
 
@@ -20,7 +20,7 @@ packages:
 
 {/* vale Mastra.Contractions = YES */}
 
-評估是衡量系統品質的系統方法。它結合了一個**test case**, a **task** (here, an agent run), and an **optional scorer**。根據測試輸入運行Agent，然後透過手動審核、評分器或兩者來根據您的期望評估其行為。
+評估（eval）是有系統地衡量品質的方法，結合一個**測試案例**、一項**任務**（此處是 Agent 的一次執行），以及一個**選用的評分器**。讓 Agent 處理測試輸入，再透過人工檢視、評分器或兩者並用，對照其行為與預期。
 
 評估可幫助您回答以下問題：
 
@@ -36,7 +36,7 @@ packages:
 
 {/* vale Mastra.Contractions = YES */}
 
-
+:::note
 
 ```mermaid
 ---
@@ -59,23 +59,23 @@ flowchart LR
 
 此循環分為三個步驟：
 
-1. **規劃測試用例。**&#x5EFA;立一個[dataset](/docs/evals/datasets) of inputs and expected behavior, authored manually or sourced from production traces. These expectations, sometimes called **ground truth**, describe what an answer should include or avoid, without requiring an exact wording match.
-2. **評價。**&#x5C07;案例作為[experiment](/docs/evals/experiments). Read the answers against your expectations and compare them with the previous run to see what changed. Optional [scorers](/docs/evals/overview) provide scores and explanations to help with that review.
-3. **診斷並改善。**&#x8ABF;查故障並對Agent的指令、上下文或模型進行有針對性的變更。保持資料集和評分器固定，以便您可以評估變更的影響。
+1. **整理測試案例。** 建立涵蓋輸入與預期行為的[資料集](/docs/evals/datasets)，案例可手動撰寫，也可取自正式環境的 trace。這些預期有時稱為**標準答案（ground truth）**，描述回答應包含或避免的內容，不要求逐字相同。
+1. **評估。** 將案例作為[實驗](/docs/evals/experiments)執行。對照預期閱讀回答，並與前次執行比較，找出變化。選用的[評分器](/docs/evals/overview)會提供分數與說明，協助檢視。
+1. **診斷並改善。** 調查失敗原因，再針對 Agent 的指令、脈絡或模型進行調整。維持資料集與評分器不變，才能評估這次變更的效果。
 
-**Evaluate** to check whether the change helped and whether previously working cases still pass. Expand the dataset as you discover gaps, including unexpected behavior in production.
+接著從**評估**步驟重新開始，確認變更是否有效，以及先前通過的案例是否仍能通過。發現涵蓋不足時擴充資料集，包括正式環境中出現的意外行為。
 
 ## 被測Agent {/* #the-agent-under-test */}
 
 
 
-這[companion repository](https://github.com/bookercodes/mastra-eval-loop-guide) contains the complete example, including environment configuration, database setup, and agent and scorer registration. This guide focuses on the eval loop and the code that explains it. Use the repository for setup instructions and runnable scripts.
+[配套儲存庫](https://github.com/bookercodes/mastra-eval-loop-guide)提供完整範例，包括環境設定、資料庫設置，以及 Agent 與評分器的註冊。本指南著重評估循環與說明其運作的程式碼；設定步驟及可執行腳本請參閱儲存庫。
 
 :::
 
-Aster Space 是一家虛構的商業航太營運商，提供短期失重的亞軌道客運航班。客戶支付預訂押金、接收任務任務並參加飛行前培訓。下面的公司和政策是為此範例而設計的。
+Aster Space 是虛構的商業太空飛行業者，提供讓乘客短暫體驗失重的次軌道航班。顧客支付預約訂金、獲得飛行任務分配，並參加飛行前訓練。下述公司與政策皆為本範例虛構。
 
-Agent商使用其說明中的政策回答有關預訂押金退款的問題。它沒有處理取消或退款的Tool：
+Agent 依照指令中的政策回答預約訂金退款問題。它沒有處理取消預約或退款的 Tool：
 
 ```typescript title="src/mastra/agents/agent.ts"
 import { Agent } from '@mastra/core/agent'
@@ -101,12 +101,12 @@ export const refundPolicyAgent = new Agent({
 
 ## 建立一個小型黃金資料集 {/* #create-a-small-golden-dataset */}
 
-從涵蓋普通請求和邊緣情況的五個案例開始。每個案例都配對一個`input` with `groundTruth`, written as a rubric with two lists:
+先從五個涵蓋一般請求與邊界情況的案例開始。每個案例都將 `input` 與 `groundTruth` 配對；後者是包含兩份清單的評分準則：
 
 * `must`：答案必須滿足的要求
-* `mustNot`： 不得聲稱答案
+- `mustNot`：回答不得提出的主張
 
-產生的答案各不相同，因此這些標準描述了所需的含義而不是確切的措辭。在用它們來評判Agent之前，先根據政策檢查它們。這些審查的案例形成了**golden dataset**, a trusted reference for the behavior you expect.
+產生的回答會有差異，因此這些準則描述的是必要意涵，而非精確措辭。用它們評判 Agent 前，先依政策檢視。經檢視的案例構成**黃金資料集**，作為預期行為的可信參照。
 
 種子腳本定義數組中的初始情況：
 
@@ -162,7 +162,7 @@ const refundCases = [
 ]
 ```
 
-然後該腳本創建一個[Mastra dataset](/docs/evals/datasets) and adds the cases. A fixed dataset ID lets later scripts retrieve it, while each item gets its own identity for comparison across experiments:
+腳本接著建立 [Mastra 資料集](/docs/evals/datasets)並加入案例。固定的資料集 ID 讓後續腳本能擷取它；每個項目也有自己的識別碼，供不同實驗之間比較：
 
 ```typescript
 const dataset = await mastra.datasets.create({
@@ -172,21 +172,21 @@ const dataset = await mastra.datasets.create({
 await dataset.addItems({ items: refundCases })
 ```
 
-運行存儲庫的種子腳本一次`pnpm seed`. In Studio, open **Datasets → Aster refunds** to see all five items with their inputs and ground truth. Select an item to inspect its full contents.
+在儲存庫中執行一次種子腳本 `pnpm seed`。在 Studio 開啟 **Datasets → Aster refunds**，查看五個項目的輸入與標準答案；選取項目可檢視完整內容。
 
-![Aster refunds dataset in Studio, showing five rows with Input and Ground Truth columns. Each ground truth contains must and mustNot criteria.](/img/guides/build-an-eval-loop/aster-refunds-dataset.png)
+![Studio 中的 Aster refunds 資料集，顯示五筆資料及 Input、Ground Truth 欄位。每筆標準答案都包含 must 與 mustNot 條件。](/img/guides/build-an-eval-loop/aster-refunds-dataset.png)
 
 保持資料集足夠小，以便手動讀取結果。當發現差距時添加案例。
 
 ## 使用LLM來判斷正確性 {/* #use-an-llm-to-judge-correctness */}
 
-一個**LLM judge** uses one model to evaluate another model's answer. This [custom scorer](/docs/evals/custom-scorers) receives the input, generated answer, and the case's `must` and `mustNot` criteria. It judges meaning and returns a reason you can inspect.
+**LLM 評審**以一個模型評估另一個模型的回答。這個[自訂評分器](/docs/evals/custom-scorers)接收輸入、生成的回答，以及案例中的 `must` 與 `mustNot` 準則。它依據語意判斷，並回傳可檢視的理由。
 
-對於此策略，正確性是二元的：`1` means every requirement is satisfied and no prohibited claims appear. A score of `0` means at least one criterion failed. An answer that makes an unsupported refund promise fails even if the rest is correct. A fractional score such as `0.8` would obscure that distinction.
+對這項政策而言，正確性只有兩種結果：`1` 表示符合所有要求且沒有禁止的主張；`0` 表示至少一項準則未達成。即使其餘內容正確，無根據地承諾退款仍應判為失敗。`0.8` 這類分數會模糊這個區別。
 
-：：：提示
+:::tip
 
-從Agent商選擇不同的型號，最好是從其他Provider選擇。本範例使用 OpenAI 作為Agent，使用 Anthropic 作為判斷。在比較變化時保持判斷不變，並審查其判斷，因為它也會犯錯。
+選用與 Agent 不同的模型，最好來自另一個 Provider。本範例的 Agent 使用 OpenAI，評審使用 Anthropic。比較變更時請維持評審模型不變，並檢視其判斷，因為它也可能出錯。
 
 :::
 
@@ -244,29 +244,29 @@ export const refundCorrectnessScorer = createScorer({
 
 ## 在 Studio 中運行並比較實驗 {/* #run-and-compare-experiments-in-studio */}
 
-一個[experiment](/docs/evals/experiments) runs the dataset against the agent and records the results. In **Datasets → Aster refunds**, select **Run Experiment**. Choose **Aster Space Reservations** as the agent and **Refund correctness** as the scorer, name the experiment **Baseline**, then run it.
+[實驗](/docs/evals/experiments)會讓 Agent 處理整個資料集並記錄結果。在 **Datasets → Aster refunds** 選取 **Run Experiment**，將 **Aster Space Reservations** 設為 Agent、**Refund correctness** 設為評分器，將實驗命名為 **Baseline** 後執行。
 
-![Run Experiment dialog configured as Baseline: Aster refunds version 1 with five items, Aster Space Reservations as the target agent, and one scorer selected.](/img/guides/build-an-eval-loop/run-experiment-dialog.png)
+![設定為 Baseline 的 Run Experiment 對話方塊：選取了包含五項的 Aster refunds 第 1 版資料集、Aster Space Reservations Agent 與一個評分器。](/img/guides/build-an-eval-loop/run-experiment-dialog.png)
 
 開啟已完成的實驗，檢查每個輸入、答案、評分和判斷解釋。第一次運行時，請自行查看結果。這次運行將成為您下一次更改的比較點。
 
-![Baseline results: all five cases score 1.000 for refund correctness. The pipeline shows the dataset feeding the agent, then the scorer.](/img/guides/build-an-eval-loop/experiment-results.png)
+![Baseline 結果：五個案例的退款正確性分數都是 1.000。流程圖顯示資料集依序交給 Agent 與評分器。](/img/guides/build-an-eval-loop/experiment-results.png)
 
-現在測試一個較小的模型。在記錄的範例中，Agent從`openai/gpt-5.6-sol` to `openai/gpt-5.4-mini`. Keep the dataset, instructions, and scorer unchanged. Rerun in Studio and name the experiment **5.4-mini** so you can identify it later.
+接著測試較小的模型。錄製的範例將 Agent 從 `openai/gpt-5.6-sol` 切換至 `openai/gpt-5.4-mini`。維持資料集、指令及評分器不變，在 Studio 再次執行，並將實驗命名為 **5.4-mini**，方便日後識別。
 
-![Run Experiment dialog named 5.4-mini, with the same Aster refunds version 1 dataset, Aster Space Reservations agent, and one scorer selected.](/img/guides/build-an-eval-loop/run-experiment-model-change.png)
+![名為 5.4-mini 的 Run Experiment 對話方塊，仍選用 Aster refunds 第 1 版資料集、Aster Space Reservations Agent 與一個評分器。](/img/guides/build-an-eval-loop/run-experiment-model-change.png)
 
-兩次記錄的運行都通過了所有五個正確性案例。打開**Experiments** to find **Baseline** and **5.4-mini**. The list shows that each run completed and processed five items. Open the results to inspect the scores.
+錄製的兩次執行都通過了五個正確性案例。開啟 **Experiments**，找到 **Baseline** 與 **5.4-mini**。清單顯示兩次執行都已完成，且各處理五個項目。開啟結果檢視分數。
 
-![Experiments list showing Baseline and 5.4-mini, each marked Run completed with five processed items.](/img/guides/build-an-eval-loop/model-experiments-list.png)
+![Experiments 清單顯示 Baseline 與 5.4-mini，兩者皆標記為 Run completed，且各處理五個項目。](/img/guides/build-an-eval-loop/model-experiments-list.png)
 
-選擇**Compare**, choose both experiments, then select **Compare Experiments**.
+選取 **Compare**，勾選兩個實驗，再選取 **Compare Experiments**。
 
-![Comparison selection mode with Baseline and 5.4-mini checked, a 2/2 selected indicator, and the Compare Experiments button ready.](/img/guides/build-an-eval-loop/select-experiments-to-compare.png)
+![比較實驗的選取畫面：已勾選 Baseline 與 5.4-mini，顯示 2/2 selected，並可點選 Compare Experiments。](/img/guides/build-an-eval-loop/select-experiments-to-compare.png)
 
 並排閱讀答案，以確定您喜歡哪種語氣和詳細程度。比較成本和延遲以評估切換模型是否值得。這兩個答案都可以滿足正確性標準，同時提供不同的體驗。此手動比較不需要記分員。
 
-![Baseline and 5.4-mini answers side by side for a customer who accepted a mission assignment. Both deny the refund and score 1.00. The baseline answer is shorter. Timings for this case are 5.23 and 6.18 seconds, respectively.](/img/guides/build-an-eval-loop/model-experiment-comparison.png)
+![對已接受飛行任務分配的顧客，Baseline 與 5.4-mini 的回答並列顯示。兩者都拒絕退款，分數皆為 1.00；Baseline 回答較短。此案例分別耗時 5.23 秒與 6.18 秒。](/img/guides/build-an-eval-loop/model-experiment-comparison.png)
 
 Mastra 會保存實驗歷史記錄，以便您可以回到先前的結果。這五個通過的案例提供了有關測試行為的證據，而不是對未來每個請求的保證。
 
@@ -274,7 +274,7 @@ Mastra 會保存實驗歷史記錄，以便您可以回到先前的結果。這�
 
 審查答案以及預期結果並判斷解釋。檢查哪些方面有所改善，哪些方面停止了工作，包括分數保持不變的情況。失敗可能會暴露出Agent、預期結果或法官的問題。在更改任何內容之前先閱讀證據。
 
-您可以使用[Mastra CLI](/reference/cli/mastra) to retrieve experiment results and scorer reasons, then pass the input, expected outcome, actual answer, and reason to a coding agent. For example:
+可透過 [Mastra CLI](/reference/cli/mastra) 取得實驗結果與評分器理由，再將輸入、預期結果、實際回答及理由交給程式開發 Agent。例如：
 
 ```text
 Use the Mastra CLI to inspect the latest experiment on the Aster refunds
@@ -290,19 +290,19 @@ the experiment in Studio.
 
 ## 透過生產追蹤擴展您的數據集 {/* #expand-your-dataset-with-production-traces */}
 
-到目前為止，一切都適合本地開發，但您無法預測每個用例。實際的生產請求揭示了您最初的案例遺漏的差距。透過收集痕跡[Mastra Observability](/docs/observability/overview) so you can inspect the customer's input, the agent's context, and its answer in Studio.
+上述步驟都可在本機開發時完成，但無法預見所有使用情境。正式環境中的真實請求會揭露初始案例未涵蓋的問題。透過 [Mastra Observability](/docs/observability/overview) 蒐集 trace，就能在 Studio 檢視顧客輸入、Agent 脈絡及回答。
 
 例如，客戶詢問：
 
 > 我十天前付款了，還沒有接受任務。請立即取消我的預訂並退款。
 
-Agent商正確識別了退款資格，但要求提供預訂詳細信息，以便繼續取消。它沒有Tool可以做到這一點。初始資料集測試策略知識，而不測試Agent是否歪曲其能力。
+Agent 正確判斷顧客符合退款資格，卻要求提供預約資料，以便繼續取消預約。它沒有能執行該操作的 Tool。初始資料集只測試政策知識，沒有測試 Agent 是否錯誤宣稱自己具備處理能力。
 
-**Add full trace to dataset**.
+開啟 trace 的選單，選取 **Add full trace to dataset**。
 
-![Trace of an eligible customer requesting a refund. The agent asks for a reservation ID, full name, and payment method so it can proceed, despite having no refund tools. The trace menu highlights Add full trace to dataset.](/img/guides/build-an-eval-loop/production-trace-add-to-dataset.png)
+![符合退款資格的顧客提出退款請求。Agent 沒有退款 Tool，卻要求預約 ID、全名與付款方式，表示可繼續處理。Trace 選單中突顯 Add full trace to dataset。](/img/guides/build-an-eval-loop/production-trace-add-to-dataset.png)
 
-選擇**Aster refunds** and set the new case's ground truth:
+選取 **Aster refunds**，並為新案例設定標準答案：
 
 ```json
 {
@@ -317,15 +317,15 @@ Agent商正確識別了退款資格，但要求提供預訂詳細信息，以便
 }
 ```
 
-![Save as Dataset Item form targeting Aster refunds. The input is prefilled from the trace. Ground truth requires confirming eligibility and directing the customer to support, and prohibits offering to process the refund or collecting booking details for that purpose.](/img/guides/build-an-eval-loop/production-trace-ground-truth.png)
+![指向 Aster refunds 的 Save as Dataset Item 表單。輸入已由 trace 預填。標準答案要求確認退款資格並引導顧客聯絡支援團隊，同時禁止主動提出代辦退款或為此蒐集預約資料。](/img/guides/build-an-eval-loop/production-trace-ground-truth.png)
 
-在更改Agent之前運行擴展的資料集。檢查新案件的答案和法官的理由：如果Agent也提出處理退款，則正確識別資格是不夠的。也要回顧現有案例中的失敗。
+修改 Agent 前，先執行擴充後的資料集。檢視新案例的回答與評審理由：即使正確判斷退款資格，只要 Agent 還主動表示可以代辦退款，就不算通過。也要檢視原有案例中的失敗。
 
 打開失敗的結果以查看它違反了哪個要求。下面的螢幕截圖顯示了同一資料集中的不同案例：法官解釋了為什麼在接受任務分配後承諾退款是不正確的。
 
-![Failed result for a customer who already accepted a mission assignment. The agent promises a refund because payment was within 14 days. The judge assigns 0 and explains that the answer ignores the accepted-assignment restriction.](/img/guides/build-an-eval-loop/failed-case-judge-reason.png)
+![已接受飛行任務分配的顧客所對應的失敗結果。顧客在 14 天內付款，Agent 因此承諾退款；評審給出 0 分，並說明回答忽略了已接受任務分配的限制。](/img/guides/build-an-eval-loop/failed-case-judge-reason.png)
 
-使用輸入、預期行為、實際答案和判斷理由，自行或透過編碼Agent進行有針對性的修復。對於能力失敗，及時更改可以明確Agent的角色：
+結合輸入、預期行為、實際回答與評審理由，自行或透過程式開發 Agent 進行有針對性的修正。針對能力誤報，可修改 prompt 釐清 Agent 的職責：
 
 ```text
 You explain refund eligibility but can't cancel reservations or issue refunds.
@@ -333,15 +333,15 @@ Direct eligible customers to Aster support to cancel and request their refund.
 Do not request booking details to process a cancellation or refund.
 ```
 
-重新運行所有六個案例並比較實驗。檢查新答案是否引導客戶提供支持，以及原來的五個案例是否仍然滿足他們的期望。將新案例保留在資料集中，以便後續變更也可以根據它進行檢查。下一次生產故障可以提供下一個案例。
+重新執行全部六個案例並比較實驗。確認新回答會引導顧客聯絡支援團隊，且原有五個案例仍符合預期。將新案例保留在資料集，供後續變更繼續檢查。下一次正式環境的失敗可成為下一個案例。
 
 ## 重複使用您的評估作為迴歸檢查 {/* #reuse-your-evals-as-regression-checks */}
 
 循環的一個有用的副產品是一組可以在部署之前重複使用的案例。將 Studio 保留為檢查和比較答案的地方，並在希望持續整合 (CI) 自動阻止發佈時使用腳本。
 
-馬斯特拉的**verdict** summarizes whether an evaluation met its requirements. With a threshold of `1` for a binary correctness scorer, every answer must pass for the average to meet the threshold. Require a `passed` verdict so an incorrect refund answer makes the check fail.
+Mastra 的 **verdict** 會概括一次評估是否符合要求。二元正確性評分器的門檻設為 `1` 時，每個回答都須通過，平均分才能達到門檻。要求 verdict 為 `passed`，才能讓錯誤的退款回答使檢查失敗。
 
-配套儲存庫的回歸腳本將資料集項目載入到`data`, then runs the agent and scorer. This excerpt shows the check and its failure output:
+配套儲存庫的迴歸腳本將資料集項目載入 `data`，再執行 Agent 與評分器。以下節錄顯示檢查邏輯及失敗時的輸出：
 
 ```typescript title="scripts/check-refunds.ts (excerpt)"
 import { runEvals } from '@mastra/core/evals'
@@ -372,7 +372,7 @@ try {
 }
 ```
 
-運行存儲庫的檢查`pnpm eval:regression`. A passing run exits successfully:
+使用 `pnpm eval:regression` 執行儲存庫中的檢查。通過時，程序會以成功狀態結束：
 
 ```text
 Checking 5 refund cases…
@@ -385,7 +385,7 @@ PASS: I paid three weeks ago and haven't accepted an assignment. I have 90 days 
 Refund check: passed
 ```
 
-錯過得分閾值會產生`scored` verdict. The script requires `passed`, so it exits with code `1`. An execution error also exits unsuccessfully. Mastra supports mandatory gates whose failures produce `failed`. Requiring `passed` handles both verdicts. See [Gates and verdicts](/docs/evals/gates-and-verdicts).
+未達評分器門檻會產生 `scored` verdict。腳本要求 `passed`，因此會以結束碼 `1` 結束。執行錯誤也會讓腳本以非成功狀態結束。Mastra 另支援必要 gate，失敗時會產生 `failed`。要求 `passed` 可同時涵蓋兩種 verdict。請參閱 [Gates and verdicts](/docs/evals/gates-and-verdicts)。
 
 例如，此運行失敗摘錄顯示接受客戶錯誤的 90 天退款期限的答案。其他案例結果略：
 
@@ -414,11 +414,11 @@ ELIFECYCLE Command failed with exit code 1.
 
 ### 檢查升級 {/* #check-escalation */}
 
-當策略需要切換時，使用`checks.calledTool('escalateToHuman')` to check for a tool call, or `checks.includes('support@aster.example')` to check for a required contact email. These deterministic checks come from `@mastra/evals/checks` and don't need an LLM judge. See [Quick checks](/docs/evals/quick-checks).
+政策要求轉交人工時，可用 `checks.calledTool('escalateToHuman')` 檢查 Tool 呼叫，或以 `checks.includes('support@aster.example')` 檢查回答是否包含指定的聯絡信箱。這些來自 `@mastra/evals/checks` 的確定性檢查不需要 LLM 評審。請參閱 [Quick checks](/docs/evals/quick-checks)。
 
 ### 評估語氣 {/* #evaluate-tone-of-voice */}
 
-重複使用[rubric scorer](/reference/evals/rubric) with shared criteria across agents, instead of defining tone expectations for every test case:
+重複使用具備跨 Agent 共用準則的[評分規準評分器](/reference/evals/rubric)，不必為每個測試案例各自定義語氣預期：
 
 ```typescript
 import { createRubricScorer } from '@mastra/evals/scorers/prebuilt'
@@ -431,4 +431,4 @@ const toneOfVoice = createRubricScorer({
 
 ### 限制響應長度 {/* #limit-response-length */}
 
-使用`checks.matches(/^[\s\S]{1,1000}$/)` to require an answer between 1 and 1,000 characters. Choose a limit appropriate to the task. See [Text checks](/docs/evals/quick-checks#text-checks).
+使用 `checks.matches(/^[\s\S]{1,1000}$/)` 要求回答長度介於 1 至 1,000 個字元。請依任務選擇合適的上限。請參閱 [Text checks](/docs/evals/quick-checks#text-checks)。

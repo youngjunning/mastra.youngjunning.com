@@ -1,26 +1,26 @@
 ---
-title: "Reference: UnsupportedFileHandler | Processors"
-description: "The UnsupportedFileHandler is an error processor that uploads or notes the files a model rejects and calls the model again."
+title: "參考：UnsupportedFileHandler | Processors"
+description: "UnsupportedFileHandler 是錯誤處理器：模型拒絕檔案時，它會上傳檔案或提供檔案說明，然後重新呼叫模型。"
 packages:
   - "@mastra/core"
 ---
 
-# 不支援的文件處理程序
+# UnsupportedFileHandler
 
-這`UnsupportedFileHandler`是一個**錯誤處理器**當模型拒絕使用者發送的文件時，使Agent保持工作。它將文件從提示中取出並再次調用模型。當Agent程式的Workspace有沙箱時，檔案會上傳到那裡，模型會取得其路徑。否則，模型將使用佔位符來代替檔案。
+`UnsupportedFileHandler` 是一個**錯誤處理器**。當模型拒絕用戶傳送的檔案時，它會從提示中移除該檔案，再次呼叫模型，讓 Agent 能夠繼續工作。若 Agent 的 Workspace 有 Sandbox，檔案會上傳到其中，並將路徑提供給模型；否則，模型會收到替代檔案的佔位文字。
 
-Mastra 將此處理器添加到每個Agent的`errorProcessors` by default, after `PrefillErrorHandler` and before `StreamErrorRetryProcessor`。它不需要配置。環境`errorProcessorDefaults: false`將其與其他預設值一起關閉。
+Mastra 預設將此處理器加入每個 Agent 的 `errorProcessors`，順序位於 `PrefillErrorHandler` 之後、`StreamErrorRetryProcessor` 之前，無需額外配置。設置 `errorProcessorDefaults: false` 會將它與其他預設處理器一起停用。
 
-## 它是如何運作的 {/* #how-it-works */}
+## 運作方式 {/* #how-it-works */}
 
-1. 每個文件都不變地進入模型。模型讀取的檔案類型因提供者而異，並且會隨著時間的推移而變化，因此處理器不會預先猜測。
-2. 由於該文件，模型呼叫失敗，有兩種方式之一：
-   * 提供者 SDK 在請求發出之前拒絕該文件類型，並帶有`UnsupportedFunctionalityError` that names the media type. The OpenAI and Anthropic SDKs do, for example.
-   * 提供者在其 HTTP 回應中拒絕該請求。這個錯誤通常沒有說明有關文件的資訊：Gemini 用 a 回答某些文件類型`502`. Any API error counts, as long as the request holds a file that isn't an image, a PDF, or text. A status that asks to try again later, `408`, `409`, `429`, `503`, or `504`, doesn't count: [`StreamErrorRetryProcessor`](/reference/processors/stream-error-retry-processor)再次發送相同的請求，包括文件。
-3. 第一次拒絕呼叫時，處理器會從提示中取出被拒絕的文件，以及非圖像、PDF 或文字的所有其他文件。該呼叫僅重試一次，這涵蓋了模型在該一次嘗試中可能無法讀取的每個檔案。
-4. 它返回`{ retry: true }`, and the model is called again. If the call fails again, the error surfaces.
+1. 所有檔案最初都會原樣傳送給模型。模型支援的檔案類型因 Provider 而異，也會隨時間變化，因此處理器不會預先判斷。
+1. 檔案導致模型呼叫失敗，可能有兩種情況：
+   - Provider SDK 在送出請求前拒絕該檔案類型，並拋出包含媒體類型的 `UnsupportedFunctionalityError`。OpenAI 和 Anthropic 的 SDK 就會這樣處理。
+   - Provider 在 HTTP 回應中拒絕請求。錯誤訊息通常不會提到檔案：例如，Gemini 對某些檔案類型會回傳 `502`。只要請求包含非圖像、非 PDF、非文字的檔案，任何 API 錯誤都符合此條件，但表示稍後重試的狀態碼 `408`、`409`、`429`、`503` 或 `504` 除外：這些情況由 [`StreamErrorRetryProcessor`](/reference/processors/stream-error-retry-processor) 原樣重發請求，檔案也會一同傳送。
+1. 首次拒絕呼叫時，處理器會從提示中移除被拒絕的檔案，以及其他所有非圖像、非 PDF、非文字的檔案。呼叫只會重試一次，這樣便能在同一次重試中處理模型可能無法讀取的所有檔案。
+1. 處理器回傳 `{ retry: true }`，再次呼叫模型。若仍然失敗，錯誤會向外拋出。
 
-當Agent程式的工作空間有沙箱時，每個檔案的上傳方式[`FileUploadProcessor`](/reference/processors/file-upload-processor#upload-location) does it, and the model gets a note with the sandbox path, so the agent can work on the file with its tools:
+若 Agent 的 Workspace 有 Sandbox，每個檔案都會按 [`FileUploadProcessor`](/reference/processors/file-upload-processor#upload-location) 的方式上傳。模型會收到包含 Sandbox 路徑的說明，Agent 因而可以用自身的 Tool 處理該檔案：
 
 ```text
 [File uploaded to the sandbox]
@@ -30,62 +30,62 @@ type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
 size: 48213 bytes
 ```
 
-如果沒有沙箱，或者當上傳失敗時，模型會取得 Mastra 用於它無法使用的任何附件的佔位符，然後繼續進行。發送的沒有名稱的檔案會顯示其類型：
+若沒有 Sandbox，或上傳失敗，模型會收到 Mastra 用於不可用附件的佔位文字，本輪對話仍會繼續。沒有檔案名時，佔位文字會顯示檔案類型：
 
 ```text
 [Attachment unavailable: leads.xlsx]
 ```
 
-沙箱是此步驟的Workspace，是AgentTool使用的Workspace。超過 10 MB 的檔案不會上傳，並會收到包含原因的註解。
+這裏的 Sandbox 是目前步驟所用的 Workspace，也就是 Agent 的 Tool 使用的 Workspace。超過 10 MB 的檔案不會上傳，模型會收到說明原因的提示。
 
-僅發送到模型的提示會發生變化。儲存的消息保留該文件，因此線程、Studio 等客戶端以及讀取該類型的模型仍然擁有該文件。已經儲存了被拒絕檔案的線程在下一回合再次工作，因為文件在每一回合都以相同的方式處理。
+只有傳送給模型的提示會改變。已儲存的訊息仍保留檔案，因此執行緒、Studio 等客戶端以及支援該類型的模型仍可存取它。即使執行緒已存有被拒絕的檔案，下一輪仍可正常進行，因為每輪都會按相同方式處理該檔案。
 
-要選擇將哪些文件發送到沙箱，並在模型看到它們之前上傳它們，請添加`FileUploadProcessor` to `inputProcessors`.
+如要自行決定哪些檔案進入 Sandbox，並在模型看到檔案前完成上傳，可將 `FileUploadProcessor` 加入 `inputProcessors`。
 
-## 建構函數參數 {/* #constructor-parameters */}
+## 建構函式參數 {/* #constructor-parameters */}
 
-這`UnsupportedFileHandler` takes no constructor parameters.
+`UnsupportedFileHandler` 不接受建構函式參數。
 
-## 特性 {/* #properties */}
+## 屬性 {/* #properties */}
 
 <PropertiesTable
   content={[
-{
-  name: 'id',
-  type: "'unsupported-file-handler'",
-  description: 'Processor identifier.',
-  isOptional: false,
-},
-{
-  name: 'name',
-  type: "'Unsupported File Handler'",
-  description: 'Processor display name.',
-  isOptional: false,
-},
-{
-  name: 'processAPIError',
-  type: '(args: ProcessAPIErrorArgs) => Promise<ProcessAPIErrorResult | void>',
-  description:
-    'Signals a retry when the provider refused a file, in its SDK or in its HTTP response, and leaves errors that ask to try again later to `StreamErrorRetryProcessor`. Only triggers on the first retry attempt.',
-  isOptional: false,
-},
-{
-  name: 'processLLMRequest',
-  type: '(args: ProcessLLMRequestArgs) => Promise<ProcessLLMRequestResult>',
-  description:
-    'Once a call of the request was refused for a file, uploads the files the model may not read to the sandbox, or replaces them with a placeholder, in the prompt of every following call.',
-  isOptional: false,
-},
+  {
+    name: 'id',
+    type: "'unsupported-file-handler'",
+    description: '處理器識別碼。',
+    isOptional: false,
+  },
+  {
+    name: 'name',
+    type: "'Unsupported File Handler'",
+    description: '處理器顯示名稱。',
+    isOptional: false,
+  },
+  {
+    name: 'processAPIError',
+    type: '(args: ProcessAPIErrorArgs) => Promise<ProcessAPIErrorResult | void>',
+    description:
+      '當 Provider 在 SDK 或 HTTP 回應中拒絕檔案時，送出重試訊號；表示稍後重試的錯誤交由 `StreamErrorRetryProcessor` 處理。僅在第一次重試嘗試時觸發。',
+    isOptional: false,
+  },
+  {
+    name: 'processLLMRequest',
+    type: '(args: ProcessLLMRequestArgs) => Promise<ProcessLLMRequestResult>',
+    description:
+      '當請求中的一次呼叫因檔案被拒絕後，在後續每次呼叫的提示中，將模型可能無法讀取的檔案上傳到 Sandbox，或用佔位文字取代。',
+    isOptional: false,
+  },
 ]}
 />
 
 ## 限制 {/* #limitations */}
 
-* **跨線程共享的沙箱。**&#x6A94;案預設寫入Agent的沙箱，位於每個執行緒的一個目錄下，將它們分開但不保護它們。在其他執行緒或使用者共享的沙箱中，任何執行緒的命令Tool都可以讀取它們。當文件為私有時，解決[one sandbox per user or thread](/docs/sandbox/overview#sandboxes-per-user-or-thread).
-* **再一次嘗試。**&#x5982;果取出檔案後呼叫仍然失敗，則會出現錯誤。保存此類文件的請求上的 API 錯誤會在沒有該文件的情況下重試一次，即使該文件不是原因，除非其狀態要求稍後重試。對於沒有文件的請求，與文件無關的拒絕將被保留。
+- **跨執行緒共用的 Sandbox。** 檔案預設寫入 Agent 的 Sandbox，按執行緒分目錄存放；目錄只能分隔檔案，不能保護檔案。若其他執行緒或用戶共用該 Sandbox，任一執行緒的命令 Tool 都可以讀取這些檔案。處理私人檔案時，請使用[每位用戶或每個執行緒獨立的 Sandbox](/docs/sandbox/overview#sandboxes-per-user-or-thread)。
+- **僅再嘗試一次。** 移除檔案後若呼叫仍失敗，錯誤會向外拋出。只要請求中包含此類檔案，發生 API 錯誤時就會移除檔案並重試一次，即使錯誤並非由檔案引起；表示稍後重試的狀態碼除外。不含此類檔案的請求若因其他原因被拒絕，處理器不會介入。
 
-## 有關的 {/* #related */}
+## 相關內容 {/* #related */}
 
-* [處理器介面](/reference/processors/processor-interface)
-* [文件上傳處理器](/reference/processors/file-upload-processor)
-* [預填錯誤處理程序](/reference/processors/prefill-error-handler)
+- [Processor 介面](/reference/processors/processor-interface)
+- [FileUploadProcessor](/reference/processors/file-upload-processor)
+- [PrefillErrorHandler](/reference/processors/prefill-error-handler)

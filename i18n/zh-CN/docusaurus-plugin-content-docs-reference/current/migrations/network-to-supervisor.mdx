@@ -1,23 +1,23 @@
 ---
-title: "Migration: .network() to supervisor agents | Migration Guide"
-description: "Supervisor agents using Agent.stream() and Agent.generate() are the recommended approach for coordinating multiple agents, replacing the older .network() API."
+title: "从 .network() 迁移到监督 Agent | 迁移指南"
+description: "推荐使用通过 Agent.stream() 和 Agent.generate() 调用的监督 Agent 来协调多个 Agent，以替代旧版 .network() API。"
 ---
 
-# 迁移自`.network()`给主管Agent
+# 从 `.network()` 迁移到监督 Agent
 
-主管Agent使用`Agent.stream()` and `Agent.generate()`是协调多个Agent的推荐方法，取代旧的`.network()`API。本指南将引导您完成迁移的每个步骤。
+推荐使用通过 `Agent.stream()` 和 `Agent.generate()` 调用的监督 Agent 来协调多个 Agent，以替代旧版 `.network()` API。本指南将逐步介绍迁移过程。
 
-:::警告\[.network() 弃用]
+:::warning[.network() 已弃用]
 
-`.network()`已弃用并将在未来版本中删除。在此之前，现有代码将继续有效，但现在的开发重点是主管Agent。尽快迁移到主管Agent。
+`.network()` 已弃用，并将在未来版本中移除。在此之前，现有代码仍可运行，但后续开发重点已转向监督 Agent。请尽快迁移到监督 Agent。
 
 :::
 
-## 代替`.network()` with `.stream()` or `.generate()` {/* #replace-network-with-stream-or-generate */}
+## 使用 `.stream()` 或 `.generate()` 替代 `.network()` {/* #replace-network-with-stream-or-generate */}
 
-核心变化是替换`.network()` calls with `.stream()` (for streaming) or `.generate()` (for non-streaming). The agent configuration stays the same. You still define `agents`, `workflows`, `tools`， 和`memory`关于Agent。不同之处在于您如何称呼它以及如何处理结果。
+核心变化是将 `.network()` 调用替换为 `.stream()`（流式输出）或 `.generate()`（非流式输出）。Agent 的配置保持不变：仍需在 Agent 上定义 `agents`、`workflows`、`tools` 和 `memory`。变化的是调用方式和结果处理方式。
 
-和`.network()`, you iterated over custom event types like `network-execution-event-step-finish`. With `.stream()`, you use the standard `textStream` or `fullStream` iterators.
+使用 `.network()` 时，您需要遍历 `network-execution-event-step-finish` 等自定义事件类型。使用 `.stream()` 时，则通过标准的 `textStream` 或 `fullStream` 迭代器处理结果。
 
 **前：**
 
@@ -43,9 +43,9 @@ for await (const chunk of stream.textStream) {
 }
 ```
 
-这`maxSteps` option limits how many iterations the supervisor can take. This replaces the implicit iteration limit in `.network()`.
+`maxSteps` 选项限制监督 Agent 可执行的迭代次数，取代 `.network()` 中隐含的迭代次数限制。
 
-对于非流媒体用例，请使用`generate()` with the same options:
+对于非流式场景，请使用 `generate()`，并传入相同的选项：
 
 ```typescript
 const result = await supervisorAgent.generate('Research AI in education', {
@@ -55,11 +55,11 @@ const result = await supervisorAgent.generate('Research AI in education', {
 console.log(result.text)
 ```
 
-## 写下清晰的主管指示 {/* #write-clear-supervisor-instructions */}
+## 编写清晰的监督 Agent 指令 {/* #write-clear-supervisor-instructions */}
 
-和`.network()`, the routing agent relied on generic instructions and primitive descriptions to decide what to call. Supervisor agents work the same way, but clear and specific instructions improve delegation accuracy.
+使用 `.network()` 时，路由 Agent 根据通用指令和各资源的描述决定调用哪个资源。监督 Agent 的工作方式相同，但清晰、具体的指令有助于提高委派准确性。
 
-你的主管的`instructions` should identify the available resources and when to use each one. They should also explain how to coordinate those resources and recognize when the task is complete.
+监督 Agent 的 `instructions` 应列明可用资源及各自的使用时机，还应说明如何协调这些资源，以及如何判断任务已经完成。
 
 **前：**
 
@@ -97,9 +97,9 @@ Success criteria:
 })
 ```
 
-## 为子Agent添加描述 {/* #add-descriptions-to-subagents */}
+## 为子 Agent 添加描述 {/* #add-descriptions-to-subagents */}
 
-每个子Agent应该有一个`description` field that explains its purpose and return format. The description should also state when to use the subagent. The supervisor uses these descriptions to decide which agent to delegate to.
+每个子 Agent 都应设置 `description` 字段，说明其用途、返回内容的格式以及适用场景。监督 Agent 会根据这些描述决定将任务委派给哪个 Agent。
 
 ```typescript
 const researchAgent = new Agent({
@@ -119,24 +119,24 @@ const writingAgent = new Agent({
 
 ## 更新事件处理 {/* #update-event-handling */}
 
-如果您正在处理特定的`.network()` events, update them to use the standard stream chunk types:
+如果您的代码处理了特定的 `.network()` 事件，请改为处理标准的流式数据块类型：
 
-| `.network()` event | Supervisor agent chunk |
+| `.network()` 事件 | 监督 Agent 的数据块 |
 | - | - |
 | `routing-agent-start` | `step-start` |
 | `routing-agent-end` | `step-finish` |
-| `agent-execution-start` | `step-start` (when delegating) |
+| `agent-execution-start` | `step-start`（委派时） |
 | `agent-execution-event-text-delta` | `text-delta` |
 | `agent-execution-event-finish` | `step-finish` |
 | `network-execution-event-step-finish` | `step-finish` + `finishReason: 'stop'` |
-| `network-object` | `object-delta`（使用结构化输出）|
-|`network-object-result` | `object`（使用结构化输出）|
+| `network-object` | `object-delta`（使用 structuredOutput 时） |
+| `network-object-result` | `object`（使用 structuredOutput 时） |
 
-## 添加委托挂钩 {/* #add-delegation-hooks */}
+## 添加委派钩子 {/* #add-delegation-hooks */}
 
-主管Agent允许您连接到委派生命周期以监视、修改或拒绝委派。这些钩子可以在Agent中配置`defaultOptions` or passed per-call.
+监督 Agent 提供委派生命周期钩子，可用于监控、修改或拒绝委派。您可以在 Agent 的 `defaultOptions` 中配置这些钩子，也可以在每次调用时传入。
 
-`onDelegationStart`在主管委托给子Agent之前调用。您可以修改提示或限制子Agent的步骤。该钩子还可以完全拒绝委托：
+监督 Agent 将任务委派给子 Agent 之前，会调用 `onDelegationStart`。您可以在此修改提示词、限制子 Agent 的执行步数，或直接拒绝此次委派：
 
 ```typescript
 const stream = await supervisorAgent.stream('Research AI in education', {
@@ -166,7 +166,7 @@ const stream = await supervisorAgent.stream('Research AI in education', {
 })
 ```
 
-`onDelegationComplete`委托完成后调用。检查结果并调用`context.bail()` when the supervisor loop should stop. You can also return feedback that gets saved to the supervisor's memory:
+委派完成后，会调用 `onDelegationComplete`。您可以检查结果，并在需要停止监督 Agent 的循环时调用 `context.bail()`；也可以返回反馈，将其保存到监督 Agent 的记忆中：
 
 ```typescript
 const stream = await supervisorAgent.stream('Research AI in education', {
@@ -186,7 +186,7 @@ const stream = await supervisorAgent.stream('Research AI in education', {
 
 ## 添加消息过滤 {/* #add-message-filtering */}
 
-默认情况下，子Agent从主管接收完整的对话上下文。使用`messageFilter` to control what messages are shared. For example, remove sensitive data or limit the number of messages:
+默认情况下，子 Agent 会收到监督 Agent 的完整对话上下文。您可以使用 `messageFilter` 控制共享哪些消息，例如移除敏感数据或限制消息数量：
 
 ```typescript
 const stream = await supervisorAgent.stream('Research AI in education', {
@@ -205,9 +205,9 @@ const stream = await supervisorAgent.stream('Research AI in education', {
 })
 ```
 
-## 添加迭代监控 {/* #add-iteration-monitoring */}
+## 监控迭代过程 {/* #add-iteration-monitoring */}
 
-`onIterationComplete`在主管循环的每次迭代之后调用。使用它来记录进度或提供指导Agent的反馈。钩子也可以提前停止执行：
+监督 Agent 的循环每完成一次迭代，就会调用 `onIterationComplete`。您可以用它记录进度，或提供反馈以指导 Agent；该钩子也可以提前停止执行：
 
 ```typescript
 const stream = await supervisorAgent.stream('Research AI in education', {
@@ -231,9 +231,9 @@ const stream = await supervisorAgent.stream('Research AI in education', {
 })
 ```
 
-## 添加任务完成评分 {/* #add-task-completion-scoring */}
+## 添加任务完成度评分 {/* #add-task-completion-scoring */}
 
-任务完成评分器自动验证任务是否完成。如果验证失败，主管将继续迭代。失败记分员的反馈包含在对话上下文中，以便子Agent可以看到缺少的内容：
+任务完成度评分器会自动验证任务是否完成。如果验证未通过，监督 Agent 将继续迭代。未通过评分器的反馈会加入对话上下文，让子 Agent 了解仍缺少哪些内容：
 
 ```typescript
 import { createScorer } from '@mastra/core/evals'
@@ -260,11 +260,11 @@ const stream = await supervisorAgent.stream('Research AI in education', {
 })
 ```
 
-## 参见 {/* #see-also */}
+## 另请参阅 {/* #see-also */}
 
-* [主管Agent](/docs/subagents)
-* [Agent网络](/docs/agents/networks)
-* [Agent.stream() 参考](/reference/streaming/agents/stream)
-* [Agent.generate() 参考](/reference/agents/generate)
-* [Agent批准](/docs/agents/human-in-the-loop)
-* [指导：研究协调员](https://mastra.ai/blog/build-a-research-coordinator-with-supervisor-agents)
+* [监督 Agent](/docs/subagents)
+* [Agent 网络](/docs/agents/networks)
+* [Agent.stream() 参考文档](/reference/streaming/agents/stream)
+* [Agent.generate() 参考文档](/reference/agents/generate)
+* [Agent 审批](/docs/agents/human-in-the-loop)
+* [指南：构建研究协调 Agent](https://mastra.ai/blog/build-a-research-coordinator-with-supervisor-agents)

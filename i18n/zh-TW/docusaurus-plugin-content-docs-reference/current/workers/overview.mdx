@@ -1,52 +1,52 @@
 ---
-title: "Reference: Workers | Workers"
-description: "Use Mastra workers as background processing units for workflow orchestration, cron scheduling, durable execution, and asynchronous tasks."
+title: "參考：Workers | Workers"
+description: "Mastra Workers 是背景處理單元，可用於 Workflow 編排、cron 排程、持久執行及非同步工作。"
 packages:
   - "@mastra/core"
   - "@mastra/redis-streams"
   - "@mastra/google-cloud-pubsub"
 ---
 
-# 勞工
+# Workers
 
-:::測試版
+:::beta
 
-在 API 穩定之前，可能會在沒有重大版本更新的情況下發生重大變更。
+API 穩定之前，即使未升級主版本，也可能出現破壞性變更。
 
 :::
 
-有關使用模式和部署拓撲，請參閱[Workers](/docs/deployment/workers).
+關於使用方式與部署拓樸，請參閱 [Workers](/docs/deployment/workers)。
 
 ## 環境變數 {/* #environment-variables */}
 
 ### `MASTRA_WORKERS` {/* #mastra_workers */}
 
-控制哪些工作進程在目前進程中啟動。
+控制目前程序啟動哪些 Worker。
 
-|價值|行為 |
+| 值 | 行為 |
 | - | - |
-|*(not set)* | Default workers are auto-created based on configuration |
-| `"false"` | Disables worker event processing. The process serves HTTP requests and can still publish events to PubSub (e.g., workflow starts) without consuming them. |
-| `"orchestration"` | Only the orchestration worker starts |
-| `"scheduler"`|僅調度程序工作者啟動 |
-|`"backgroundTasks"`|僅後台任務worker啟動|
-|`"orchestration,scheduler"`|多個工人（逗號分隔）|
+| _（未設定）_ | 依設定自動建立預設 Worker |
+| `"false"` | 停用 Worker 事件處理。程序仍可處理 HTTP 請求，並向 PubSub 發布事件（例如啟動 Workflow），但不會消費事件。 |
+| `"orchestration"` | 僅啟動編排 Worker |
+| `"scheduler"` | 僅啟動排程 Worker |
+| `"backgroundTasks"` | 僅啟動背景工作 Worker |
+| `"orchestration,scheduler"` | 啟動多個 Worker，名稱以逗號分隔 |
 
-使用它可以在同一建置工件的不同容器中運行不同的工作程序類型。
+透過此變數，可以使用同一份建置成品，在不同容器中執行不同類型的 Worker。
 
-環境`MASTRA_WORKERS` to any value, including `"false"`, also makes `createWorkflow` build workflows that declare `schedule` on the evented engine. Set it on every process in a split deployment. See [Scheduled workflows](/docs/workflows/scheduled-workflows#execution-engine).
+將 `MASTRA_WORKERS` 設為任何值（包括 `"false"`）後，`createWorkflow` 也會使用事件驅動引擎建立宣告了 `schedule` 的 Workflow。分離部署時，每個程序都必須設定此變數。請參閱[排程 Workflow](/docs/workflows/scheduled-workflows#execution-engine)。
 
 ### `MASTRA_STEP_EXECUTION_URL` {/* #mastra_step_execution_url */}
 
-API 伺服器的基本 URL，供編排工作人員用來遠端執行Workflow步驟。當編排工作執行緒在與 API 不同的進程中執行時需要。
+API 伺服器的基底 URL，供編排 Worker 遠端執行 Workflow 步驟。若編排 Worker 與 API 在不同程序中執行，就必須設定。
 
 ```bash
 MASTRA_STEP_EXECUTION_URL=http://api:4111/api
 ```
 
-在生產中使用 HTTPS URL。看[Security recommendations](/docs/auth/workers#security-recommendations).
+正式環境請使用 HTTPS URL。請參閱[安全性建議](/docs/auth/workers#security-recommendations)。
 
-編排工作人員將步驟執行請求傳送至：
+編排 Worker 會將步驟執行請求傳送至：
 
 ```text
 ${MASTRA_STEP_EXECUTION_URL}/workflows/:workflowId/runs/:runId/steps/execute
@@ -54,49 +54,49 @@ ${MASTRA_STEP_EXECUTION_URL}/workflows/:workflowId/runs/:runId/steps/execute
 
 ### `MASTRA_WORKER_AUTH_TOKEN` {/* #mastra_worker_auth_token */}
 
-呼叫 API 的步驟執行端點時，編排工作執行緒發送的承載令牌。 API 的已設定身分驗證Provider必須識別此令牌。看[Worker authentication](/docs/auth/workers).
+編排 Worker 呼叫 API 的步驟執行端點時傳送的 Bearer token。API 設定的驗證 Provider 必須能辨識此 token。請參閱 [Worker 驗證](/docs/auth/workers)。
 
 ```bash
 MASTRA_WORKER_AUTH_TOKEN=sk-worker-secret-token
 ```
 
-## 工人類型 {/* #worker-types */}
+## Worker 類型 {/* #worker-types */}
 
-### 編排工作者 {/* #orchestrationworker */}
+### OrchestrationWorker {/* #orchestrationworker */}
 
-處理來自 PubSub 的Workflow事件`workflows` topic. Requires a pull-capable PubSub like `@mastra/redis-streams` or `@mastra/google-cloud-pubsub` configured with a pull subscription.
+處理 PubSub 的 `workflows` 主題中的 Workflow 事件。需要已設定拉取式訂閱的 PubSub，例如 `@mastra/redis-streams` 或 `@mastra/google-cloud-pubsub`。
 
-* **姓名**: `orchestration`
-* **發布訂閱主題**: `workflows`
-* **消費群**: `mastra-orchestration`
+- **名稱**: `orchestration`
+- **PubSub 主題**: `workflows`
+- **消費者群組**: `mastra-orchestration`
 
-### 調度工作者 {/* #schedulerworker */}
+### SchedulerWorker {/* #schedulerworker */}
 
-輪詢儲存以獲取到期的 cron 計劃並發布`workflow.start` event to the `workflows` topic for each fire. The orchestration worker runs default-engine workflows in-process and evented workflows step by step.
+輪詢儲存空間中已到期的 cron 排程，每次觸發時都會發布 `workflow.start` 事件至 `workflows` 主題。編排 Worker 在程序內執行預設引擎的 Workflow，並逐步執行事件驅動引擎的 Workflow。
 
-* **姓名**: `scheduler`
-* **僅單一實例**：僅運行一個實例以避免重複火災
+- **名稱**: `scheduler`
+- **僅能執行單一執行個體**：只執行一個，以免重複觸發
 
-### 後台任務工作者 {/* #backgroundtaskworker */}
+### BackgroundTaskWorker {/* #backgroundtaskworker */}
 
-執行Agent分派的後台Tool呼叫。
+執行 Agent 派送的背景 Tool 呼叫。
 
-* **姓名**: `backgroundTasks`
-* **發布訂閱主題**: `background-tasks`
-* **消費群**: `background-task-workers`
-* **支援多個副本**：實例共享消費組
+- **名稱**: `backgroundTasks`
+- **PubSub 主題**: `background-tasks`
+- **消費者群組**: `background-task-workers`
+- **支援多個複本**：各執行個體共用同一消費者群組
 
 ## 支援的儲存後端 {/* #supported-storage-backends */}
 
-運行所有工作執行緒類型的部署需要一個實現以下功能的儲存後端`workflows`, `backgroundTasks`, and `schedules` domains. The `schedules` domain is specifically required by the SchedulerWorker. If you don't use scheduled workflows, backends without it can still support orchestration and background tasks. The following backends support all three:
+若要部署所有 Worker 類型，儲存後端必須實作 `workflows`、`backgroundTasks` 和 `schedules` 領域。其中 `schedules` 是 SchedulerWorker 特別需要的；若未使用排程 Workflow，缺少此領域的後端仍可支援編排與背景工作。以下後端支援全部三個領域：
 
-|後端 |套餐 |
+| 後端 | 套件 |
 | - | - |
-| PostgreSQL |[`@mastra/pg`](/integrations/databases/postgresql) |
+| PostgreSQL | [`@mastra/pg`](/integrations/databases/postgresql) |
 | LibSQL | [`@mastra/libsql`](/integrations/databases/libsql) |
 | MySQL | `@mastra/mysql` |
 | MongoDB | [`@mastra/mongodb`](/integrations/databases/mongodb) |
 | Spanner | [`@mastra/spanner`](/integrations/databases/spanner) |
 | Convex | [`@mastra/convex`](/integrations/databases/convex) |
 
-其他儲存後端（Upstash、DynamoDB、Cloudflare D1、ClickHouse、Redis）支援Workflow和一些工作人員功能，但缺少`schedules` domain. They can still be used for orchestration and background task workers if you don't deploy the scheduler.
+其他儲存後端（Upstash、DynamoDB、Cloudflare D1、ClickHouse、Redis）支援 Workflow 及部分 Worker 功能，但缺少 `schedules` 領域。若不部署排程 Worker，仍可用於編排 Worker 和背景工作 Worker。

@@ -1,32 +1,32 @@
 ---
-title: 'Resumable streams | Agents'
-description: 'Publish agent runs on a stream topic so clients can reconnect, other readers can follow a run with observe(), and any reader can stop it.'
+title: '可續接串流 | Agents'
+description: '將 Agent 的執行事件發佈到串流主題，讓客戶端重新連線，其他讀取端可用 observe() 跟進執行，而任何讀取端均可停止執行。'
 packages:
   - '@mastra/core'
   - '@mastra/server'
 ---
 
-# 可恢復的串流
+# 可續接串流
 
-可恢復流將Agent程式運行的每個區塊發佈到 PubSub 主題，並保留這些事件的重播快取。斷開連接的客戶端可以重新連接並追上，另一個讀者可以遵循相同的運行`observe()`，任何讀者都可以阻止它。
+可續接串流會把 Agent 一次執行所產生的每個資料區塊發佈到 PubSub 主題，並快取這些事件供重播。客戶端斷線後可重新連線，補收遺漏的事件。其他讀取端可用 `observe()` 跟進同一次執行，任何讀取端均可停止執行。
 
-可恢復的流並不能使運作本身持久。重新連線不是崩潰復原：如果執行Agent程式的進程停止，則執行停止，觀察者會看到錯誤或僅看到其他內容。對於在進程重新啟動後仍然存在的運行，請使用[durable agents](/docs/harness/durable-agents), which publish through the same stream layer.
+可續接串流只處理連線，無法在程序故障後復原執行。執行 Agent 的程序一旦停止，本次執行亦會停止，觀察端會收到錯誤，或不再收到事件。如須在程序重新啟動後繼續執行，請使用[持久化 Agent](/docs/harness/durable-agents)，它會經同一串流層發佈事件。
 
-## 預設值 {/* #defaults */}
+## 預設行為 {/* #defaults */}
 
-|Agent|流 |
+| Agent | 串流 |
 | - | - |
-|註冊於`Mastra` instance | On |
-| Standalone (`new Agent()` without `Mastra`)|關閉 |
-|普通Agent與`durable: true`|開啟，包括獨立Agent |
-|普通Agent與`durable: false`|關閉，包括註冊Agent|
-|顯式的`createDurableAgent()`包裝|始終發布；經過`cache: false`到工廠禁用重播緩存，而不是傳輸歷史記錄|
+| 已在 `Mastra` 實例註冊 | 啟用 |
+| 獨立執行（用 `new Agent()` 建立，並無 `Mastra`） | 停用 |
+| 配置 `durable: true` 的一般 Agent | 啟用，包括獨立 Agent |
+| 配置 `durable: false` 的一般 Agent | 停用，包括已註冊的 Agent |
+| 明確經 `createDurableAgent()` 包裝 | 一律發佈。向工廠函數傳入 `cache: false` 只會停用重播快取，傳輸層歷史紀錄不受影響。 |
 
-註冊Agent，無論是否持久，都會在`mastra.pubsub` and caches events in `mastra.serverCache`, or an in-memory cache when the server has none. Every `Mastra` instance that shares that PubSub and cache can observe the run. An agent-level `pubsub` takes precedence, except on the evented engine, whose steps always publish on `mastra.pubsub`.
+已註冊的 Agent 無論是否持久化，都會經 `mastra.pubsub` 發佈事件，並將事件快取至 `mastra.serverCache`。如伺服器沒有快取，則使用記憶體快取。所有共用該 PubSub 和快取的 `Mastra` 實例均可觀察執行。Agent 層級的 `pubsub` 優先，但事件驅動引擎的步驟一律經 `mastra.pubsub` 發佈。
 
-## 配置流程 {/* #configure-streams */}
+## 配置串流 {/* #configure-streams */}
 
-放`durable` on the agent to turn streams on or off, or to pass your own PubSub and cache:
+可在 Agent 設定 `durable` 以啟用或停用串流，亦可傳入自己的 PubSub 和快取：
 
 ```typescript title="src/mastra/agents/support-agent.ts"
 import { Agent } from '@mastra/core/agent'
@@ -43,22 +43,22 @@ export const supportAgent = new Agent({
 })
 ```
 
-|選項|預設 |描述 |
+| 選項 | 預設值 | 說明 |
 | - | - | - |
-|`pubsub` | `mastra.pubsub` | Bus the run is published on. Use a shared bus to follow runs across processes. |
-| `cache` | `mastra.serverCache`, else an in-memory cache | Replay cache. Pass `false` to disable this cache. Transports such as Redis Streams can still replay retained history. |
-| `shouldCache` | Every topic | Return `false` for a topic to skip caching it. |
-| `cleanupTimeoutMs` | `30000` | How long after it finishes a run is cleared. `0`僅關閉此計時器。快取本身的過期和驅逐仍然適用。 |
+| `pubsub` | `mastra.pubsub` | 發佈執行事件所用的匯流排。使用共用匯流排可跨程序跟進執行。 |
+| `cache` | `mastra.serverCache`，如無則用記憶體快取 | 重播快取。傳入 `false` 可停用此快取。Redis Streams 等傳輸層仍可重播其保存的歷史紀錄。 |
+| `shouldCache` | 所有主題 | 對個別主題回傳 `false`，即可略過該主題的快取。 |
+| `cleanupTimeoutMs` | `30000` | 執行結束後多久才清除該次執行。`0` 只會停用此計時器，快取本身仍會按其規則到期或淘汰資料。 |
 
-`durable: true`使用這些預設值開啟流，包括獨立Agent。
+`durable: true` 會以這些預設值啟用串流，包括獨立 Agent。
 
-在平原上`Agent`, `durable` configures resumable streams only. For checkpoint-backed execution, wrap the agent explicitly with `createDurableAgent({ agent })`. To recover in-flight runs after a crash, also configure persistent workflow storage and `recovery: { durableAgents: 'auto' }`. For manual recovery instead, pass a `shouldPersistSnapshot` policy that includes `running` snapshots and call `recoverActiveRuns()` yourself. See [crash recovery](/docs/harness/durable-agents#crash-recovery) for setup and persistence policies.
+對一般 `Agent`，`durable` 只用於配置可續接串流。如要依靠檢查點執行，請明確以 `createDurableAgent({ agent })` 包裝 Agent。要在程序故障後復原尚未完成的執行，還須配置持久化 Workflow 儲存及 `recovery: { durableAgents: 'auto' }`。如要手動復原，請傳入涵蓋 `running` 快照的 `shouldPersistSnapshot` 政策，再自行呼叫 `recoverActiveRuns()`。設定方法及持久化政策請參閱[故障復原](/docs/harness/durable-agents#crash-recovery)。
 
-配置包裝器的串流緩存並通過工廠的傳輸`cache`, `pubsub`, `shouldCache`, and `cleanupTimeoutMs` options.
+透過工廠函數的 `cache`、`pubsub`、`shouldCache` 及 `cleanupTimeoutMs` 選項配置包裝後的串流快取和傳輸。
 
-## 關閉流 {/* #turn-streams-off */}
+## 停用串流 {/* #turn-streams-off */}
 
-流是有成本的。每個區塊都會發佈到 PubSub，並且在啟用快取的情況下，每個事件都會被存儲，直到運行被清理。記憶體中的快取就是進程記憶體。對於遠端 PubSub 或 Redis 等緩存，它是每個區塊的網路寫入。對於從不重新連接或觀察運行的大容量Agent，請關閉流：
+串流會消耗資源。每個資料區塊都會發佈到 PubSub，而且啟用快取後，事件會保存至該次執行獲清除為止。記憶體快取會佔用程序的記憶體，遠端 PubSub 或 Redis 等遠端快取則需要為每個資料區塊經網絡寫入一次。處理大量執行、又毋須重新連線或觀察執行的 Agent，可以停用串流：
 
 ```typescript title="src/mastra/agents/batch-agent.ts"
 import { Agent } from '@mastra/core/agent'
@@ -72,25 +72,25 @@ export const batchAgent = new Agent({
 })
 ```
 
-若要保持即時觀察但跳過重播緩存，請傳遞`durable: { cache: false }`.
+要保留即時觀察功能而停用重播快取，請傳入 `durable: { cache: false }`。
 
-### 運行時間可以保持多長時間 {/* #how-long-runs-stay-available */}
+### 執行紀錄的保留時間 {/* #how-long-runs-stay-available */}
 
-運行完成後，執行程序會安排清理其事件和所有權記錄`cleanupTimeoutMs`. The timer allows the process to exit before cleanup. Shared cache data then remains until expiry or eviction. Redis Streams retains its native topic data until `clearTopic()` succeeds or its idle TTL expires. The transport's default idle TTL is seven days. Configure `streamIdleTtlMs` to change it, or set it to `0` to disable transport expiry. A run parked on a tool approval or suspension isn't cleared by that timer, because resuming it continues on the same topic.
+執行結束後，負責執行的程序會排定在 `cleanupTimeoutMs` 後清除執行事件及歸屬紀錄。計時器容許程序在清除前結束，共用快取內的資料其後會保留至到期或被淘汰。Redis Streams 會保留原生主題資料，直至 `clearTopic()` 成功執行或閒置 TTL 到期。傳輸層預設的閒置 TTL 是七天，可設定 `streamIdleTtlMs` 更改，或設為 `0` 停用傳輸層的到期機制。等待工具核准或暫停的執行不會被此計時器清除，因為續行時仍使用同一主題。
 
-快取限制了其他一切：
+其餘保留限制視乎快取：
 
-* 運行日誌和所有權記錄向快取請求 24 小時 TTL。記憶體快取至少使用此 TTL 來儲存索引運行日誌，除非停用快取過期。快取條目限制可以更快地驅逐資料。
-* 記憶體快取預設保存 1,000 個條目。每次運行都使用多個條目（其事件日誌、計數器及其所有權記錄），因此大流量會更快地驅逐較舊的運行。
-* 當運行的所有權記錄被逐出或過期時，伺服器的觀察和中止路由傳回 404。無法重播已驅逐的運行事件。
+- 執行日誌和歸屬紀錄會向快取要求 24 小時的 TTL。除非停用快取到期機制，記憶體快取會為已建立索引的執行日誌採用至少 24 小時的 TTL。快取項目數目達到上限時，資料可能提早被淘汰。
+- 記憶體快取預設可容納 1,000 個項目。每次執行佔用數個項目，包括其事件日誌、計數器及歸屬紀錄，因此流量大時，較早的執行會較快被淘汰。
+- 執行的歸屬紀錄被淘汰或到期後，伺服器的觀察和中止路由會回傳 404。已淘汰的執行事件不可重播。
 
-當運行必須在伺服器之間保持可觀察性或需要長時間批准等待時，請使用根據您的流量調整大小的共用緩存，例如 Redis。
+如須跨伺服器觀察執行，或要長時間等候核准，請使用 Redis 等共用快取，並按流量設定容量。
 
-## 跟著跑步 {/* #follow-a-run */}
+## 跟進執行 {/* #follow-a-run */}
 
-共用 PubSub 總線的Agent程式之間的運行 ID 必須是唯一的。
+在共用同一 PubSub 匯流排的 Agent 之間，執行 ID 必須唯一。
 
-稱呼`observe()` with the run's ID to follow it from any agent instance that shares the bus. Without an offset, `observe()` replays the cached events and then delivers live ones. Replay needs the same replay cache too. An instance with its own cache receives only live events, unless the PubSub keeps history. When a run waits on a tool approval, the observation receives the approval request and stays open until the approved run finishes, errors or is aborted. Call `detach()` to stop following a parked run:
+可在共用匯流排的任何 Agent 實例上，以執行 ID 呼叫 `observe()` 跟進執行。沒有指定偏移量時，`observe()` 會先重播快取事件，再傳送即時事件。要重播也須共用同一重播快取。使用獨立快取的實例只會收到即時事件，除非 PubSub 保留歷史紀錄。執行正在等候工具核准時，觀察端會收到核准請求，並維持連線，直至獲核准的執行完成、出錯或被中止。若要停止跟進等待中的執行，請呼叫 `detach()`：
 
 ```typescript title="src/server/reconnect.ts"
 import { supportAgent } from '../mastra/agents/support-agent'
@@ -107,38 +107,38 @@ export async function followRun(runId: string, request: Request) {
 }
 ```
 
-每個區塊來自`observe()` carries its run-log position as `chunk.index`. To resume an observation after a dropped connection, pass `index + 1` of the last chunk that has an index as `offset`. Chunks from a plain agent's `stream()`, and chunks delivered without a replay cache, carry no `index`, so a client that lost one of those connections should observe without an `offset`. The [`observe()` reference](/reference/agents/durable-agent#observerunid-options) covers which chunks carry no index, structured output, and replay limits.
+`observe()` 回傳的資料區塊會以 `chunk.index` 標示其在執行日誌中的位置。斷線後要續接觀察，請取最後一個有索引的資料區塊，將其 `index + 1` 作為 `offset` 傳入。一般 Agent 的 `stream()` 產生的資料區塊，以及無重播快取時傳送的資料區塊，均沒有 `index`，因此這類連線中斷後，觀察時應省略 `offset`。無索引的資料區塊、結構化輸出及重播限制請參閱 [`observe()` 參考](/reference/agents/durable-agent#observerunid-options)。
 
-透過 HTTP，觀察無法恢復的運行會失敗，而不是返回空流。未知的運行，或其所有權記錄過期或被驅逐的運行，回答 404，並且客戶端以`MastraClientError` carrying that status rather than resolving to an empty, closed stream.
+經 HTTP 觀察不可續接的執行時，請求會失敗。如找不到執行，或其歸屬紀錄已到期或被淘汰，伺服器會回傳 404。客戶端的 Promise 會以帶有該狀態碼的 `MastraClientError` 拒絕，不會取得已關閉的空串流。
 
-`agent.hasResumableStreams()`報告該Agent是否發布其運行，以及是否與它們一起發布`observe()` and the server's observe and abort routes can reach them. It's `true` for a durable agent and for any agent with streams on.
+`agent.hasResumableStreams()` 表示 Agent 會否發佈執行事件，以及 `observe()` 和伺服器的觀察及中止路由能否存取這些執行。持久化 Agent 和所有已啟用串流的 Agent 均會回傳 `true`。
 
-### 直到空閒流 {/* #until-idle-streams */}
+### 持續至閒置的串流 {/* #until-idle-streams */}
 
-`streamUntilIdle()`和`resumeStreamUntilIdle()` combine the initial run and background-task continuations in their `fullStream`. Without an offset, `observe(returnedRunId)` replays only the initial segment and closes at its finish event. It doesn't reconnect to the combined until-idle stream or replay later background-task answers. Supplying an explicit run ID doesn't change this limit. The same limit applies to durable agents.
+`streamUntilIdle()` 和 `resumeStreamUntilIdle()` 會在各自的 `fullStream` 合併初始執行及背景工作的續行。未指定偏移量時，`observe(returnedRunId)` 只會重播初始片段，並在收到其完成事件時關閉。它不會續接這條持續至閒置的合併串流，亦不會重播後續背景工作的回應。即使明確指定執行 ID，這項限制依然適用，持久化 Agent 也一樣。
 
-## 停止跑步 {/* #stop-a-run */}
+## 停止執行 {/* #stop-a-run */}
 
-當流打開時，關閉的讀取器不會停止運作。當客戶端與伺服器的流路由斷開連接時，伺服器會分離該讀取器並且運行繼續進行：它不斷生成令牌、調用Tool並運行`onFinish`, so the client can reconnect. Stop it explicitly, or set `durable: false` on a plain agent whose runs should end with the request. A durable agent's run always continues after a disconnect. A detached run still ends when it finishes, when it's stopped, or when its step budget is spent. With neither `maxSteps` nor `stopWhen` set, each loop stops after five steps, excluding processor retries. The budget applies per loop invocation, with a fresh loop after an approval or background continuation.
+啟用串流後，關閉讀取端不會停止執行。客戶端與伺服器的串流路由斷線時，伺服器會分離讀取端，執行仍會繼續產生 token、呼叫工具和執行 `onFinish`，讓客戶端稍後重新連線。可明確停止執行，或為應隨請求結束的一般 Agent 設定 `durable: false`。持久化 Agent 在斷線後一律繼續執行。讀取端已分離的執行，仍會在完成、被停止或用盡步驟預算時結束。如未設定 `maxSteps` 或 `stopWhen`，每次迴圈會在五步後停止，處理器重試不計算在內。預算按每次呼叫迴圈計算，核准或背景續行後會開始新的迴圈。
 
-使用以下之一明確停止運作：
+可用以下方式明確停止執行：
 
-* `observe(runId)`返回一個`abort()` function that asks a running run to stop wherever it executes. The request is best effort. It doesn't wait for confirmation, and a failed publish is only logged. Use the abort route below when you need confirmation. A run parked on an approval no longer listens for it, so stop a parked run with the abort route below, or with `POST /agents/:agentId/threads/abort` for a run in a memory thread.
-* `agent.abortRunStream(runId)`停止此进程中的运行，并要求同一总线上的其他进程停止它。它返回`true` for a running run stopped in this process. A run parked on an approval outside a memory thread is cancelled here too, but the call returns `false`. A later approval in this process fails. The cancellation fence is process-local and leaves the shared snapshot intact. Another process can still approve that snapshot, so use the abort route below to stop a parked run in an app with more than one server. For a run elsewhere the request is best effort.
-* 伺服器的`POST /agents/:agentId/runs/:runId/abort` route stops a run on any server that shares the PubSub and cache, after checking the caller owns it. It returns `{ aborted: true }` once the process executing the run confirms it stopped. For a run of a durable agent (`DurableAgent` or `createDurableAgent`, including evented agents) parked on an approval, the route also records the cancellation in storage and returns `{ aborted: true }` after that write is saved. A later approval or resume of that run is then refused with `409 Conflict` (`AGENT_RESUME_ABORTED_RUN`) on every server that shares the storage. If a resume claims the run first, no cancellation is recorded, and the route stops the resumed run like any running run. On storage adapters without concurrent updates, such as Redis, Valkey and LanceDB, an abort and an approval that arrive at the same moment aren't serialized, so an approval that overlaps the abort can still run its tool even though the abort returns `{ aborted: true }`. Wait for that response before relying on the recorded cancellation, which Inngest agents don't write. The route returns `{ aborted: false }` for a finished run, and when nothing stopped the run and no process answers in time. Runs in a memory thread can also be stopped with `POST /agents/:agentId/threads/abort`, but that route doesn't record the cancellation in storage, so use the run abort route to stop a parked durable run in an app with more than one server.
+- `observe(runId)` 會回傳 `abort()` 函數，向仍在執行的工作發出停止請求，無論工作在哪裏執行。請求會盡力送達，毋須等待確認，發佈失敗時只會記錄日誌。需要確認時，可使用下述中止路由。等待核准的執行已不再接收此請求，請使用下述中止路由。如執行位於記憶對話串內，亦可使用 `POST /agents/:agentId/threads/abort`。
+- `agent.abortRunStream(runId)` 會停止本程序內的執行，並要求同一匯流排上的其他程序停止該次執行。如本程序停止了正在進行的執行，會回傳 `true`。在記憶對話串以外等待核准的執行，亦會在本程序取消，但函數回傳 `false`，其後在此程序核准會失敗。取消限制只在本程序生效，共用快照仍會保留，因此其他程序仍可核准該快照。如應用程式使用多部伺服器，請以以下中止路由停止等待核准的執行。至於在其他程序中的執行，請求只會盡力送達。
+- 伺服器的 `POST /agents/:agentId/runs/:runId/abort` 路由會先確認呼叫方擁有該次執行，然後可停止任何共用 PubSub 和快取的伺服器上的執行。負責執行的程序確認停止後，路由便會回傳 `{ aborted: true }`。如持久化 Agent（`DurableAgent` 或 `createDurableAgent`，包括事件驅動的 Agent）的執行正在等待核准，路由亦會將取消寫入儲存系統，並在寫入成功後回傳 `{ aborted: true }`。其後，如要核准或續行該次執行，所有共用該儲存系統的伺服器都會拒絕並回傳 `409 Conflict`（`AGENT_RESUME_ABORTED_RUN`）。如續行操作先取得該次執行，便不會保存取消紀錄，路由會如常停止已續行的執行。在 Redis、Valkey 和 LanceDB 等不支援並行更新的儲存配接器中，同時到達的中止和核准不會依序處理，因此即使中止回傳 `{ aborted: true }`，同時處理的核准仍可能執行工具。請先等候該回應，再依賴已保存的取消紀錄。Inngest Agent 不會寫入此紀錄。如執行已結束，或執行沒有停止且沒有程序及時回應，路由會回傳 `{ aborted: false }`。你也可用 `POST /agents/:agentId/threads/abort` 停止記憶對話串內的執行，但該路由不會將取消寫入儲存系統。因此，應用程式如使用多部伺服器，請用執行中止路由停止等待核准的持久化執行。
 
-和`durable: false` on a non-durable agent, closing the HTTP request aborts the run, as before.
+非持久化 Agent 如配置 `durable: false`，關閉 HTTP 請求時仍會像以往一樣中止執行。
 
-## 跨伺服器 {/* #across-servers */}
+## 跨伺服器運作 {/* #across-servers */}
 
-當多個伺服器共享 PubSub 和快取（例如 Redis）時，可以透過其中任何一個伺服器來觀察和停止在一台伺服器上啟動的運行：
+如多部伺服器共用 PubSub 和快取（例如 Redis），在其中一部伺服器啟動的執行，可經任何一部伺服器觀察或停止：
 
-* 每次運行都會在第一個事件之前將所有權記錄（Agent、運行、資源和執行緒）寫入快取。伺服器的觀察和中止路由會根據該記錄檢查呼叫者，因此每個伺服器上都會保留租用戶和執行緒檢查。
-* 未知、過期或被逐出的記錄回傳 404。如果無法讀取緩存，路由將返回 503，而不是跳過檢查。
-* 和`durable: { cache: false }` the record is kept in `mastra.serverCache`, so ownership still works across servers. Replay then depends on the PubSub: one that keeps history, like Redis Streams, replays it, and an in-process bus delivers only live events.
-* 使用預設的記憶體快取和 PubSub，不會共享任何內容，因此只有運行Agent程式的伺服器才能觀察或停止其運行。
+- 每次執行會在發佈首個事件之前，把歸屬紀錄（Agent、執行、資源及對話串）寫入快取。伺服器的觀察和中止路由會按該紀錄核對呼叫方，因此所有伺服器均會檢查租戶及對話串。
+- 找不到紀錄、紀錄已到期或被淘汰時，會回傳 404。如無法讀取快取，路由會回傳 503，不會略過檢查。
+- 設定 `durable: { cache: false }` 時，歸屬紀錄會保存在 `mastra.serverCache`，因此仍可跨伺服器核對歸屬。重播功能則視乎 PubSub，Redis Streams 等保留歷史紀錄的實作可重播，程序內的匯流排則只傳送即時事件。
+- 預設的記憶體快取和 PubSub 不共用資料，因此只有執行 Agent 的伺服器可觀察或停止其執行。
 
-## 有關的 {/* #related */}
+## 相關文件 {/* #related */}
 
-* [持久劑](/docs/harness/durable-agents)
-* [Agent參考](/reference/agents/agent)
+- [持久化 Agent](/docs/harness/durable-agents)
+- [Agent 參考](/reference/agents/agent)
