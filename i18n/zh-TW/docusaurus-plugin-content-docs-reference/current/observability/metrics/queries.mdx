@@ -1,0 +1,469 @@
+---
+title: "Reference: Metric queries | Observability"
+description: "Metric queries read raw and aggregated metric data from the observability storage domain. For exporter and storage setup, see the Metrics overview."
+packages:
+  - "@mastra/core"
+  - "@mastra/client-js"
+---
+
+# 指標查詢
+
+指標查詢從Observability儲存域讀取原始和聚合的指標資料。有關導出器和存儲設置，請參閱[Metrics overview](/docs/observability/metrics/overview)。有關自動指標名稱和標籤，請參閱[自動指標參考](/reference/observability/metrics/automatic-metrics).
+
+## 使用權 {/* #access */}
+
+### 可觀察性商店 {/* #observability-store */}
+
+使用儲存域進行進程內查詢：
+
+```typescript
+const observability = await mastra.getStorage()?.getStore('observability')
+
+if (!observability) {
+  throw new Error('Observability storage is not configured')
+}
+
+const result = await observability.getMetricAggregate({
+  name: ['mastra_agent_duration_ms'],
+  aggregation: 'avg',
+  filters: {
+    timestamp: { start: new Date(Date.now() - 60 * 60 * 1000) },
+  },
+})
+```
+
+`getStore('observability')`回報`undefined` when the storage configuration doesn't provide the observability domain.
+
+### 客戶端SDK {/* #client-sdk */}
+
+`@mastra/client-js`公開分析和指標發現方法`MastraClient`:
+
+```typescript
+import { MastraClient } from '@mastra/client-js'
+
+const client = new MastraClient({
+  baseUrl: 'http://localhost:4111',
+})
+
+const result = await client.getMetricAggregate({
+  name: ['mastra_agent_duration_ms'],
+  aggregation: 'avg',
+})
+```
+
+客戶端不公開原始數據`listMetrics()` method. Use the observability store or the `GET /api/observability/metrics` route to list raw metric records.
+
+## 共同的價值觀 {/* #shared-values */}
+
+### 聚合 {/* #aggregations */}
+
+聚合、細分和時間序列方法接受這些`aggregation` values:
+
+|價值|結果 |
+| - | - |
+|`sum` | Sum of metric values |
+| `avg` | Average metric value |
+| `min` | Minimum metric value |
+| `max` | Maximum metric value |
+| `count` | Number of matching metric records |
+| `count_distinct` | Approximate or exact number of distinct values in `distinctColumn`, depending on the storage backend |
+| `last`|最新匹配的指標值 |
+
+什麼時候`aggregation` is `count_distinct`, `distinctColumn` is required. Supported columns are:
+
+```text
+entityType
+entityName
+parentEntityType
+parentEntityName
+rootEntityType
+rootEntityName
+name
+provider
+model
+environment
+executionSource
+serviceName
+threadId
+resourceId
+```
+
+### 間隔 {/* #intervals */}
+
+時間序列和百分位數查詢接受`1m`, `5m`, `15m`, `1h`, or `1d`.
+
+### 過濾器 {/* #filters */}
+
+所有度量操作都接受相同的可選`filters` object. Raw list requests pass these fields as query parameters. Analytics methods pass them in the JSON request body.
+
+|領域 |類型 |描述 |
+| - | - | - |
+|`timestamp` | `{ start?: Date; end?: Date; startExclusive?: boolean; endExclusive?: boolean }` | Timestamp range. Boundaries are inclusive unless their corresponding exclusive flag is `true`. HTTP requests use ISO date strings. |
+| `traceId` | `string` | Exact trace ID |
+| `traceIds` | `string[]` | One to 1,000 trace IDs |
+| `spanId` | `string` | Exact span ID |
+| `entityType` | `EntityType` | Entity type |
+| `entityName` | `string`|實體名稱 |
+|`entityVersionId` | `string`|實體版本ID |
+|`parentEntityType` | `EntityType`|父實體類型 |
+|`parentEntityName` | `string`|父實體名稱 |
+|`parentEntityVersionId` | `string`|父實體版本 ID |
+|`rootEntityType` | `EntityType`|根實體類型 |
+|`rootEntityName` | `string`|根實體名稱 |
+|`rootEntityVersionId` | `string`|根實體版本 ID |
+|`userId` | `string`|用戶名 |
+|`organizationId` | `string`|組織 ID |
+|`experimentId` | `string`|實驗或評估運行 ID |
+|`experimentIds` | `string[]`| 1 到 1,000 個實驗 ID |
+|`serviceName` | `string`|服務名稱|
+|`environment` | `string`|環境名稱 |
+|`resourceId` | `string`|資源 ID |
+|`runId` | `string`|運行 ID |
+|`sessionId` | `string`|會話 ID |
+|`threadId` | `string`|線程 ID |
+|`requestId` | `string`|請求 ID |
+|`executionSource` | `string`|執行原始碼|
+|`tags` | `string[]`|記錄必須包含所有指定的標籤 |
+|`name` | `string[]`|一個或多個指標名稱 |
+|`provider` | `string`|模型Provider|
+|`model` | `string`|型號 ID |
+|`costUnit` | `string`|成本單位|
+|`labels` | `Record<string, string>`|所有指定指標標籤鍵值對的精確比對 |
+|`source` | `string`|已棄用。使用`executionSource`. |
+
+## 分析方法 {/* #analytics-methods */}
+
+### `getMetricAggregate(args)` {/* #getmetricaggregateargs */}
+
+傳回所有符合記錄中的一個值。Observability儲存和`MastraClient` expose this method.
+
+#### 論點 {/* #arguments */}
+
+|領域 |類型 |必填|說明 |
+| - | - | - | - |
+|`name` | `string[]` | Yes | One or more metric names |
+| `aggregation` | `AggregationType` | Yes | Aggregation to apply |
+| `distinctColumn` | `MetricDistinctColumn` | For `count_distinct` | Column whose distinct values are counted |
+| `filters` | `MetricsFilter` | No | Shared metric filters |
+| `comparePeriod` | `'previous_period' \| 'previous_day' \| 'previous_week'` | No | Adds comparison-period values. `previous_period` uses the duration of `filters.timestamp`. |
+
+#### 退貨 {/* #returns */}
+
+```typescript oxfmt:false
+{
+  value: number | null
+  previousValue?: number | null
+  changePercent?: number | null
+  estimatedCost?: number | null
+  costUnit?: string | null
+  previousEstimatedCost?: number | null
+  costChangePercent?: number | null
+}
+```
+
+`costUnit`是`null` when the matching records don't have one shared unit. Cost fields are optional and may be `null` when the records don't include cost context.
+
+```typescript
+const result = await observability.getMetricAggregate({
+  name: ['mastra_model_total_input_tokens', 'mastra_model_total_output_tokens'],
+  aggregation: 'sum',
+  filters: {
+    timestamp: {
+      start: new Date('2026-08-24T00:00:00Z'),
+      end: new Date('2026-08-25T00:00:00Z'),
+    },
+  },
+  comparePeriod: 'previous_period',
+})
+```
+
+**HTTP：** `POST /api/observability/metrics/aggregate`
+
+### `getMetricBreakdown(args)` {/* #getmetricbreakdownargs */}
+
+按一個或多個維度對匹配記錄進行分組並聚合每一組。Observability儲存和`MastraClient` expose this method.
+
+#### 論點 {/* #arguments-1 */}
+
+|領域 |類型 |必填|說明 |
+| - | - | - | - |
+|`name` | `string[]` | Yes | One or more metric names |
+| `groupBy` | `string[]` | Yes | One or more fields to group by |
+| `aggregation` | `AggregationType` | Yes | Aggregation for each group |
+| `distinctColumn` | `MetricDistinctColumn` | For `count_distinct` | Column whose distinct values are counted |
+| `filters` | `MetricsFilter` | No | Shared metric filters |
+| `limit` | `number` | No | Positive integer up to 1,000. Keeps only the top groups after sorting by `orderDirection`. When omitted, all groups are returned. Set it for high-cardinality groupings such as `threadId` to bound the response. When grouping by a label key, some stores, such as PostgreSQL, exclude rows where the label is missing or empty, so the groups might not add up to the overall total even without a `limit`. Use `getMetricAggregate()` for that total. |
+| `orderDirection` | `'ASC' \| 'DESC'` | No | Sort direction for the aggregated value. Storage implementations default to `DESC`. |
+
+#### 退貨 {/* #returns-1 */}
+
+```typescript
+{
+  groups: Array<{
+    dimensions: Record<string, string | null>
+    value: number
+    estimatedCost?: number | null
+    costUnit?: string | null
+  }>
+}
+```
+
+```typescript
+const result = await client.getMetricBreakdown({
+  name: ['mastra_model_total_input_tokens'],
+  groupBy: ['entityName'],
+  aggregation: 'sum',
+  limit: 10,
+  orderDirection: 'DESC',
+})
+```
+
+**HTTP：** `POST /api/observability/metrics/breakdown`
+
+### `getMetricTimeSeries(args)` {/* #getmetrictimeseriesargs */}
+
+按時間間隔儲存匹配值，並具有可選分組。Observability儲存和`MastraClient` expose this method.
+
+#### 論點 {/* #arguments-2 */}
+
+|領域 |類型 |必填|說明 |
+| - | - | - | - |
+|`name` | `string[]` | Yes | One or more metric names |
+| `interval` | `AggregationInterval` | Yes | Time bucket interval |
+| `aggregation` | `AggregationType` | Yes | Aggregation for each bucket |
+| `distinctColumn` | `MetricDistinctColumn` | For `count_distinct` | Column whose distinct values are counted |
+| `filters` | `MetricsFilter` | No | Shared metric filters |
+| `groupBy` | `string[]` | No | Fields used to split the result into series |
+
+#### 退貨 {/* #returns-2 */}
+
+```typescript
+{
+  series: Array<{
+    name: string
+    costUnit?: string | null
+    points: Array<{
+      timestamp: Date
+      value: number
+      estimatedCost?: number | null
+    }>
+  }>
+}
+```
+
+```typescript
+const result = await client.getMetricTimeSeries({
+  name: ['mastra_model_total_input_tokens'],
+  interval: '1h',
+  aggregation: 'sum',
+  filters: {
+    timestamp: { start: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+  },
+})
+```
+
+**HTTP：** `POST /api/observability/metrics/timeseries`
+
+### `getMetricPercentiles(args)` {/* #getmetricpercentilesargs */}
+
+計算時間段內的百分位值。Observability儲存和`MastraClient` expose this method.
+
+#### 論點 {/* #arguments-3 */}
+
+|領域 |類型 |必填|說明 |
+| - | - | - | - |
+|`name` | `string` | Yes | One metric name |
+| `percentiles` | `number[]` | Yes | One or more values from `0` through `1` |
+| `interval` | `AggregationInterval` | Yes | Time bucket interval |
+| `filters` | `MetricsFilter` | No | Shared metric filters |
+
+#### 退貨 {/* #returns-3 */}
+
+```typescript
+{
+  series: Array<{
+    percentile: number
+    points: Array<{
+      timestamp: Date
+      value: number
+    }>
+  }>
+}
+```
+
+```typescript
+const result = await client.getMetricPercentiles({
+  name: 'mastra_agent_duration_ms',
+  percentiles: [0.5, 0.95, 0.99],
+  interval: '1h',
+})
+```
+
+**HTTP：** `POST /api/observability/metrics/percentiles`
+
+## 原始指標記錄 {/* #raw-metric-records */}
+
+### `listMetrics(args)` {/* #listmetricsargs */}
+
+傳回儲存的度量觀察值而不聚合它們。此方法可在Observability商店中找到。 HTTP 路由接受與查詢參數相同的欄位。
+
+#### 論點 {/* #arguments-4 */}
+
+頁面模式是預設的：
+
+```typescript oxfmt:false
+{
+  mode?: 'page'
+  filters?: MetricsFilter
+  pagination?: {
+    page?: number // Default: 0
+    perPage?: number // Default: 10; maximum: 100
+  }
+  orderBy?: {
+    field?: 'timestamp' // Default: 'timestamp'
+    direction?: 'ASC' | 'DESC' // Default: 'DESC'
+  }
+}
+```
+
+Delta模式支援增量輪詢：
+
+```typescript oxfmt:false
+{
+  mode: 'delta'
+  filters?: MetricsFilter
+  after?: string
+  limit?: number // Default: 10; maximum: 100
+}
+```
+
+`pagination`和`orderBy` aren't allowed in delta mode. `after` and `limit` aren't allowed in page mode. A backend that doesn't support delta polling returns an unsupported-operation error.
+
+#### 退貨 {/* #returns-4 */}
+
+```typescript oxfmt:false
+{
+  metrics: MetricRecord[]
+  pagination?: {
+    total: number
+    page: number
+    perPage: number | false
+    hasMore: boolean
+  }
+  delta?: {
+    limit: number
+    hasMore: boolean
+  }
+  deltaCursor?: string
+}
+```
+
+一個`MetricRecord` has this shape:
+
+```typescript oxfmt:false
+{
+  metricId?: string | null
+  timestamp: Date
+  name: string
+  value: number
+  traceId?: string | null
+  spanId?: string | null
+  entityType?: EntityType | null
+  entityId?: string | null
+  entityName?: string | null
+  parentEntityType?: EntityType | null
+  parentEntityId?: string | null
+  parentEntityName?: string | null
+  rootEntityType?: EntityType | null
+  rootEntityId?: string | null
+  rootEntityName?: string | null
+  userId?: string | null
+  organizationId?: string | null
+  resourceId?: string | null
+  runId?: string | null
+  sessionId?: string | null
+  threadId?: string | null
+  requestId?: string | null
+  environment?: string | null
+  serviceName?: string | null
+  scope?: Record<string, unknown> | null
+  entityVersionId?: string | null
+  parentEntityVersionId?: string | null
+  rootEntityVersionId?: string | null
+  experimentId?: string | null
+  executionSource?: string | null
+  tags?: string[] | null
+  source?: string | null // Deprecated
+  provider?: string | null
+  model?: string | null
+  estimatedCost?: number | null
+  costUnit?: string | null
+  costMetadata?: Record<string, unknown> | null
+  labels: Record<string, string>
+  metadata?: Record<string, unknown> | null
+}
+```
+
+**HTTP：** `GET /api/observability/metrics`
+
+## 指標發現 {/* #metric-discovery */}
+
+Observability儲存和`MastraClient` expose the metric discovery methods. HTTP requests pass arguments as query parameters.
+
+|方法|論點|返回| HTTP 路由 |
+| - | - | - | - |
+|`getMetricNames(args?)` | `{ prefix?: string; limit?: number }` | `{ names: string[] }` | `GET /api/observability/discovery/metric-names` |
+| `getMetricLabelKeys(args)` | `{ metricName: string }` | `{ keys: string[] }` | `GET /api/observability/discovery/metric-label-keys` |
+| `getMetricLabelValues(args)` | `{ metricName: string; labelKey: string; prefix?: string; limit?: number }` | `{ values: string[] }` | `GET /api/observability/discovery/metric-label-values` |
+
+`limit`提供時必須是正整數。
+
+```typescript
+const { names } = await client.getMetricNames({ prefix: 'mastra_model_' })
+const { keys } = await client.getMetricLabelKeys({ metricName: names[0] })
+const { values } = await client.getMetricLabelValues({
+  metricName: names[0],
+  labelKey: keys[0],
+  limit: 20,
+})
+```
+
+可觀察性發現 API 也公開追蹤、日誌和指標使用的共享維度：
+
+|商店或客戶端方法 |論點| HTTP 路由 |
+| - | - | - |
+|`getEntityTypes()` | None in `MastraClient`; `{}` in the store | `GET /api/observability/discovery/entity-types` |
+| `getEntityNames(args?)` | `{ entityType?: EntityType }` | `GET /api/observability/discovery/entity-names` |
+| `getServiceNames()` | None in `MastraClient`; `{}` in the store | `GET /api/observability/discovery/service-names` |
+| `getEnvironments()` | None in `MastraClient`; `{}` in the store | `GET /api/observability/discovery/environments` |
+| `getTags(args?)` | `{ entityType?: EntityType }` | `GET /api/observability/discovery/tags` |
+
+## HTTP 路由 {/* #http-routes */}
+
+|方法|路線 |輸入 |
+| - | - | - |
+|`GET` | `/api/observability/metrics` | Query parameters |
+| `POST` | `/api/observability/metrics/aggregate` | JSON body |
+| `POST` | `/api/observability/metrics/breakdown` | JSON body |
+| `POST` | `/api/observability/metrics/timeseries` | JSON body |
+| `POST` | `/api/observability/metrics/percentiles` | JSON body |
+| `GET` | `/api/observability/discovery/metric-names` | Query parameters |
+| `GET` | `/api/observability/discovery/metric-label-keys` | Query parameters |
+| `GET` | `/api/observability/discovery/metric-label-values` | Query parameters |
+| `GET` | `/api/observability/discovery/entity-types` | None |
+| `GET` | `/api/observability/discovery/entity-names` | Query parameters |
+| `GET` | `/api/observability/discovery/service-names` | None |
+| `GET` | `/api/observability/discovery/environments` | None |
+| `GET` | `/api/observability/discovery/tags` | Query parameters |
+
+所有路由都需要配置可觀測域。聚合、細分、時間序列和百分位數路線需要`observability:read` permission when runtime authorization is enabled.
+
+## 不支援的後端 {/* #unsupported-backends */}
+
+基本Observability儲存實作拋出`*_NOT_IMPLEMENTED` errors for raw listing, analytics, and discovery methods. A configured observability domain can therefore exist while its backend doesn't implement metric queries.
+
+DuckDB、ClickHouse、Postgres v-next 可觀察性儲存和記憶體可觀察性儲存實現指標查詢。 Google Cloud Spanner 僅在以下情況下實施它們：`disableMetrics` is `false`. Metrics are disabled by default. Other storage adapters may support tracing without supporting metrics.
+
+## 命令列介面 {/* #cli */}
+
+這`mastra api metric` commands cover aggregate, breakdown, time-series, percentile, metric-name, label-key, and label-value queries. See the [`mastra api metric` CLI reference](/reference/cli/mastra#mastra-api-metric-aggregate) for commands, targeting, authentication, and schema inspection.

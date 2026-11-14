@@ -3,7 +3,6 @@ import { NavbarSecondaryMenuFiller, type NavbarSecondaryMenuComponent } from '@d
 import { useNavbarMobileSidebar } from '@docusaurus/theme-common/internal'
 import Link from '@docusaurus/Link'
 import { useLocation } from '@docusaurus/router'
-import useBaseUrl from '@docusaurus/useBaseUrl'
 import { cn } from '@site/src/lib/utils'
 import type { Lesson, LearnStorageV1, LessonStatus } from '../types'
 import { LearnProgressBar } from './LearnProgressBar'
@@ -30,7 +29,6 @@ function ProgressIcon({ storage, slug, status }: { storage: LearnStorageV1; slug
 
 const LearnMobileSidebarContent: NavbarSecondaryMenuComponent<LearnMobileSidebarProps> = ({ lessons, storage }) => {
   const location = useLocation()
-  const learnBasePath = useBaseUrl('/learn/')
   const mobileSidebar = useNavbarMobileSidebar()
   const publishedTotal = getPublishedCount(lessons)
   const watchedCount = lessons.filter(l => l.status === 'published' && storage.lessons[l.slug]?.watched).length
@@ -56,8 +54,8 @@ const LearnMobileSidebarContent: NavbarSecondaryMenuComponent<LearnMobileSidebar
             <h4 className="px-2 py-1 text-xs font-semibold text-(--mastra-text-tertiary)">{moduleName}</h4>
             <ul className="learn-sidebar menu__list">
               {moduleLessons.map(lesson => {
-                const lessonPath = `${learnBasePath}${lesson.slug}`
-                const isActive = location.pathname === lessonPath || location.pathname === `${lessonPath}/`
+                const isActive =
+                  location.pathname === `/learn/${lesson.slug}` || location.pathname === `/learn/${lesson.slug}/`
                 const isComingSoon = lesson.status === 'comingSoon'
 
                 if (isComingSoon) {

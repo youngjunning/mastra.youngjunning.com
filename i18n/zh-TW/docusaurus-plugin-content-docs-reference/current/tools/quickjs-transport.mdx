@@ -1,0 +1,108 @@
+---
+title: "Reference: QuickJsCodeModeTransport | Tools and MCP"
+description: "The QuickJsCodeModeTransport class runs Code mode programs in an in-process QuickJS runtime compiled to WebAssembly."
+packages:
+  - "@mastra/quickjs"
+---
+
+# QuickJsCodeMode傳輸
+
+這`QuickJsCodeModeTransport`班級跑步[編碼方式](/docs/agents/code-mode)[快速JS](https://bellard.org/quickjs/)運行時編譯為 WebAssembly。運行時是執行邊界，因此不需要Workspace沙箱：程式沒有檔案系統、網路、進程或模組存取權限。它唯一的能力是`external_*`函數，它回調主機上的真實Tool。
+
+不像[`IsolatedVmCodeModeTransport`](/reference/tools/isolated-vm-transport), this transport installs no native binaries and needs no Node.js flags, so it runs on serverless platforms that disallow both. The tradeoff is speed: see [Choosing a transport](#choosing-a-transport).
+
+## 安裝 {/* #installation */}
+
+```bash npm2yarn
+npm install @mastra/quickjs
+```
+
+該套件包含 WebAssembly 模組，因此安裝它會複製檔案並且不運行其他任何內容。
+
+## 用法 {/* #usage */}
+
+將傳輸作為第二個參數傳遞給`createCodeMode()`. No `sandbox` is needed:
+
+```typescript
+import { createCodeMode } from '@mastra/core/tools'
+import { QuickJsCodeModeTransport } from '@mastra/quickjs'
+
+const { tool, instructions } = createCodeMode(
+  { tools: { getTopProducts, getProductRatings } },
+  new QuickJsCodeModeTransport({ memoryLimitMb: 128 }),
+)
+```
+
+## 建構函數參數 {/* #constructor-parameters */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'options',
+  type: 'QuickJsCodeModeTransportOptions',
+  description: 'Configuration for the QuickJS runtime.',
+  isOptional: true,
+  properties: [
+    {
+      type: 'QuickJsCodeModeTransportOptions',
+      parameters: [
+        {
+          name: 'memoryLimitMb',
+          type: 'number',
+          description:
+            'Runtime heap limit in MiB. A program that exceeds the limit is terminated and the tool returns an error result.',
+          isOptional: true,
+          defaultValue: '128',
+        },
+        {
+          name: 'maxStackSizeBytes',
+          type: 'number',
+          description:
+            'Runtime stack limit in bytes. A program that exceeds the limit, usually through runaway recursion, is terminated and the tool returns an error result.',
+          isOptional: true,
+          defaultValue: '1048576',
+        },
+        {
+          name: 'module',
+          type: 'QuickJSWASMModule',
+          description:
+            'A preloaded QuickJS WebAssembly module. Supply one to control when the module is loaded, or to share a single module across transports. Loaded on first run when omitted.',
+          isOptional: true,
+        },
+      ],
+    },
+  ],
+},
+]}
+/>
+
+## 選擇交通Tool {/* #choosing-a-transport */}
+
+所有三種傳輸在主機上強制執行相同的允許清單、Tool驗證和追蹤。它們的不同之處在於程式本身可以達到的範圍以及主機必須提供的範圍。
+
+| | `StdioCodeModeTransport` | `IsolatedVmCodeModeTransport` | `QuickJsCodeModeTransport` |
+| - | - | - | - |
+| Isolation boundary | Workspace sandbox | V8 isolate | QuickJS WebAssembly runtime |
+| Requires a sandbox | Yes | No | No |
+| Native binary | Node.js runtime in the sandbox | Yes | No |
+| Node.js flags | None | `--no-node-snapshot` on Node.js 20 and later | None |
+| Runs in the browser | No | No | Yes |
+| Execution speed | Fastest | Fast | Slowest |
+
+選擇`QuickJsCodeModeTransport` when the host can't install native addons or set Node.js flags, which is common on serverless platforms. Choose `IsolatedVmCodeModeTransport` when the host allows both and programs do heavy computation.
+
+速度差異在於程式主體，而不是Tool呼叫。 QuickJS 進行解釋而不是 JIT 編譯，因此計算量大的循環的運行速度可能比 V8 隔離慢數十倍，而主要等待的程序`external_*` calls performs about the same because the time goes to the tools. Code Mode programs are usually the second kind.
+
+## 它是如何運作的 {/* #how-it-works */}
+
+每次運行都會建立一個具有自己的堆疊的新 QuickJS 運行時。 TypeScript 在主機上被剝離[ts-blank-space](https://github.com/bloomberg/ts-blank-space), which erases type annotations without a native compiler, then the program is evaluated inside the runtime. Every `external_*` call crosses the boundary as JSON strings in both directions, so no host object references leak into model-authored code.
+
+一個`external_*` call returns a pending promise to the program and hands control straight back to the host, so many calls can be in flight at once and `Promise.all` behaves as expected.
+
+這`timeout` configured on `createCodeMode()` applies to both asynchronous hangs and synchronous infinite loops, and the runtime is disposed after every run.
+
+## 有關的 {/* #related */}
+
+* [編碼方式](/docs/agents/code-mode)
+* [createCodeMode() 參考](/reference/tools/create-code-mode)
+* [isolatedVmCodeModeTransport 參考](/reference/tools/isolated-vm-transport)

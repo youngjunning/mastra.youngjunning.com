@@ -1,0 +1,160 @@
+---
+title: "Mastra class | v1 Migration Guide"
+description: "The Mastra class has been restructured to restrict top-level imports and replace direct property access with getter methods."
+---
+
+# 马斯特拉级
+
+Mastra 类已经过重组，以限制顶级导入并用 getter 方法替换直接属性访问。
+
+## 改变了 {/* #changed */}
+
+### 顶级导入到子路径导入 {/* #top-level-imports-to-subpath-imports */}
+
+主要`@mastra/core` index file now only exports `Mastra` and `Config`。所有其他导出已移至子路径导入。此更改允许捆绑程序消除未使用的代码，从而改进了树摇动并减少了捆绑包的大小。
+
+要迁移，请更新所有导入`@mastra/core` to use the appropriate subpath.
+
+```diff
+- import { Mastra, Agent, Workflow, createTool } from '@mastra/core';
++ import { Mastra, type Config } from '@mastra/core';
++ import { Agent } from '@mastra/core/agent';
++ import { Workflow } from '@mastra/core/workflows';
++ import { createTool } from '@mastra/core/tools';
+```
+
+:::提示\[代码修改]
+
+您可以使用 Mastra 的 codemod CLI 自动更新您的代码：
+
+```bash
+npx @mastra/codemod@latest v1/mastra-core-imports .
+```
+
+:::
+
+### `experimental_auth`到`auth` {/* #experimental_auth-to-auth */}
+
+实验性身份验证配置已升级为稳定版。这一变化反映了 auth API 现在已经稳定并且可以投入生产。
+
+要迁移，请重命名`experimental_auth` key to `auth` in your Mastra configuration.
+
+```diff
+  const mastra = new Mastra({
+-   experimental_auth: {
++   auth: {
+      provider: workos,
+    },
+  });
+```
+
+:::提示\[代码修改]
+
+您可以使用 Mastra 的 codemod CLI 自动更新您的代码：
+
+```bash
+npx @mastra/codemod@latest v1/experimental-auth .
+```
+
+:::
+
+### 必需的`id` parameter for all mastra primitives {/* #required-id-parameter-for-all-mastra-primitives */}
+
+所有存储、矢量存储、Agent、Workflow程、mcpServer、处理器、记分器和Tool现在都需要`id` parameter during initialization. Required IDs standardize the Mastra API and prevent ID conflicts.
+
+所有这些原语现在也有`get`, `list`, and `add` functions.
+
+要迁移，请添加`id` parameter to all storage and vector store instantiations. When using the same storage/vector class multiple times, ensure each instance has a unique ID.
+
+```diff
+- const storage = new LibSQLStore({
+-   url: ':memory:',
+- });
++ const storage = new LibSQLStore({
++   id: 'my-app-storage',
++   url: ':memory:',
++ });
+
+- const vector = new PgVector({
+-   connectionString: process.env.DATABASE_URL,
+- });
++ const vector = new PgVector({
++   id: 'my-app-vector',
++   connectionString: process.env.DATABASE_URL,
++ });
+```
+
+当将单独的实例用于不同目的时，请使用描述性的唯一 ID：
+
+```diff
+  const agentMemory = new Memory({
+    storage: new LibSQLStore({
+-     url: 'file:./agent.db',
++     id: 'weather-agent-memory-storage',
++     url: 'file:./agent.db',
+    }),
+  });
+
+  const mastra = new Mastra({
+    storage: new LibSQLStore({
++     id: 'mastra-storage',
+      url: ':memory:',
+    }),
+  });
+```
+
+### 原始复数 API 更改为`get<primitives>` to `list<primitive>` {/* #primitive-plural-apis-changes-from-getprimitives-to-listprimitive */}
+
+`get*`返回原语所有实例的函数已重命名为`list*` to better reflect their purpose.
+
+```diff
+- const agents = mastra.getAgents();
++ const agents = mastra.listAgents();
+- const vectors = mastra.getVectors();
++ const vectors = mastra.listVectors();
+- const workflows = mastra.getWorkflows();
++ const workflows = mastra.listWorkflows();
+- const scorers = mastra.getScorers();
++ const scorers = mastra.listScorers();
+- const mcpServers = mastra.getMCPServers();
++ const mcpServers = mastra.listMCPServers();
+- const logsByRunId = await mastra.getLogsByRunId({ runId: 'id', transportId: 'id' });
++ const logsByRunId = await mastra.listLogsByRunId({ runId: 'id', transportId: 'id' });
+- const logs = await mastra.getLogs('transportId');
++ const logs = await mastra.listLogs('transportId');
+```
+
+:::提示\[代码修改]
+
+您可以使用 Mastra 的 codemod CLI 自动更新您的代码：
+
+```bash
+npx @mastra/codemod@latest v1/mastra-plural-apis .
+```
+
+:::
+
+### 每个原语都有一个`getById` and a `get` function {/* #each-primitive-has-a-getbyid-and-a-get-function */}
+
+```typescript
+mastra.getMCPServer('myServer') // Works (registry key)
+mastra.getMCPServerById('my-mcp-server') // Works (intrinsic ID)
+```
+
+### Tool注册现在使用固有 ID {/* #tool-registration-now-uses-intrinsic-ids */}
+
+当Tool从Agent或 MCP 服务器自动注册到 Mastra 实例时，它们现在使用该Tool的固有特性`id` instead of the configuration object key. This prevents collisions when multiple agents/MCP servers have tools with the same configuration key.
+
+要进行迁移，请更新通过配置键引用Tool的所有代码，以改用该Tool的固有 ID。
+
+```diff
+  const agent = new Agent({
+    id: 'agent1',
+    tools: {
+      searchTool: weatherSearchTool,
+    },
+  });
+
+- mastra.getTool('searchTool');
++ mastra.getTool(weatherSearchTool.id);
+```

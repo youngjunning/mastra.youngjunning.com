@@ -1,6 +1,6 @@
 ---
-title: "中间件 | 服务器"
-description: "应用自定义中间件函数来拦截请求。"
+title: "Middleware | Server"
+description: "Add Mastra server middleware for authentication, authorization, CORS, request logging, route blocking, and request-specific context injection."
 packages:
   - "@mastra/core"
   - "@mastra/server"
@@ -8,9 +8,26 @@ packages:
 
 # 中间件
 
-Mastra 服务器可以在调用 API 路由 handler 之前或之后执行自定义中间件函数。这适用于身份验证、日志记录、注入请求特定的上下文或添加 CORS 标头等场景。
+Mastra 服务器可以在 API 之前或之后执行自定义中间件功能
+调用路由处理程序。这对于诸如身份验证之类的事情很有用，
+记录、注入特定于请求的上下文或添加 CORS 标头。
 
-中间件接收 [Hono](https://hono.dev) `Context`（`c`）和 `next` 函数。如果返回 `Response`，请求将短路。调用 `next()` 会继续处理下一个中间件或路由 handler。
+中间件接收[Hono](https://hono.dev) `Context` (`c`）和一个`next`功能。如果它返回一个`Response`请求被短路。呼唤`next()`继续处理下一个中间件或路由处理程序。
+
+：：：笔记
+
+中间件处理程序使用 Hono 的签名，因此它们在基于 Hono 的服务上运行
+路径：`mastra dev` and `mastra build`, the
+[Hono adapter](/reference/server/hono-adapter), and adapters built on it such as
+`@mastra/next` and `@mastra/tanstack-start`. Adapters for other frameworks
+(Elysia, Express, Fastify, Koa, NestJS) can't run Hono handlers and log a
+warning at startup when middleware is configured. Register middleware through
+the framework's own API there instead.
+
+用户中间件永远不会在声明为公共的路由上运行`requiresAuth: false`, so it can't block endpoints the framework needs to keep
+reachable, such as the Studio sign-in routes.
+
+:::
 
 ```typescript
 import { Mastra } from '@mastra/core'
@@ -40,7 +57,8 @@ export const mastra = new Mastra({
 })
 ```
 
-要将中间件附加到单个路由，请向 `registerApiRoute` 传递 `middleware` 选项：
+要将中间件附加到单个路由，请通过`middleware` option to
+`registerApiRoute`:
 
 ```typescript
 registerApiRoute('/my-custom-route', {
@@ -60,9 +78,39 @@ registerApiRoute('/my-custom-route', {
 
 ## 常见示例 {/* #common-examples */}
 
-### 使用 `RequestContext` {/* #using-requestcontext */}
+### 阻止内置路由组 {/* #block-built-in-route-groups */}
 
-可以通过从请求中提取信息，在运行时服务器中间件中填充 `RequestContext`。本示例根据 Cloudflare `CF-IPCountry` 标头设置 `temperature-unit`，以确保响应与用户的区域设置匹配。
+Mastra 不提供用于删除或将内置路由列入白名单的配置选项。在基于 Hono 的服务路径上，您可以通过返回响应而不调用来使所选路由组不可用`next()`:
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+
+const notFound = async () => new Response('Not Found', { status: 404 })
+
+export const mastra = new Mastra({
+  server: {
+    middleware: [
+      { path: '/api/memory/*', handler: notFound },
+      { path: '/api/logs/*', handler: notFound },
+      { path: '/api/observability/*', handler: notFound },
+    ],
+  },
+})
+```
+
+每个通配符模式都会阻止路由组本身及其嵌套路由。例如，`/api/logs/*` blocks `/api/logs` and `/api/logs/transports`. Other route groups remain available.
+
+生成的服务器通行证`server.apiPrefix` to the Hono adapter's [`prefix` constructor option](/reference/server/hono-adapter#constructor-parameters), which prefixes built-in routes. Middleware paths are registered unchanged, so they must explicitly include the configured prefix. For example, with `apiPrefix: '/api/v2'`, use `/api/v2/memory/*`. Custom API routes must live outside the configured API prefix and aren't blocked by these patterns.
+
+此方法无法阻止公开的路由`requiresAuth: false`, because Mastra skips user middleware for those routes. With a non-Hono server adapter, register equivalent middleware through the server framework instead.
+
+期间`mastra dev`, inspect the full built-in route list, including MCP routes, in the [OpenAPI specification](http://localhost:4111/api/openapi.json). See the [server overview](/docs/server/overview#rest-api) for API exploration and production settings.
+
+如果您使用中间件进行身份验证而不使用`server.auth`, prefer default-deny middleware that authenticates requests before allowing access, rather than enumerating protected paths. Include the full API prefix so REST routes alongside MCP transports are covered.
+
+### 使用`RequestContext` {/* #using-requestcontext */}
+
+您可以填充`RequestContext` in a runtime server middleware by extracting information from the request. In this example, the `temperature-unit` is set based on the Cloudflare `CF-IPCountry` header to ensure responses match the user's locale.
 
 ```typescript title="src/mastra/index.ts"
 import { Mastra } from '@mastra/core'
@@ -86,9 +134,9 @@ export const mastra = new Mastra({
 })
 ```
 
-### 身份验证 {/* #authentication */}
+### 验证 {/* #authentication */}
 
-```typescript prettier:false
+```typescript oxfmt:false
 {
   handler: async (c, next) => {
     const authHeader = c.req.header('Authorization');
@@ -105,9 +153,13 @@ export const mastra = new Mastra({
 
 ### 授权（用户隔离） {/* #authorization-user-isolation */}
 
-身份验证用于验证用户身份，授权则控制用户可以访问的内容。如果没有资源 ID 作用域，已认证用户可能通过猜测 ID 或操纵 `resourceId` 参数来访问其他用户的 Thread。
+身份验证验证用户是谁，而授权控制他们可以访问的内容。
 
-将内存和 Thread 限定到已认证用户的最简单方法，是使用身份验证配置中的 `mapUserToResourceId` 回调：
+如果没有服务器强制的资源范围或其他授权策略，经过身份验证的调用者可以跨资源列出线程并访问其消息和工作内存。调用者不需要猜测线程 ID：无范围列表可以公开它们。对于每用户或每租户的私有内存，配置`mapUserToResourceId` or set a trusted resource ID in middleware.
+
+在共享应用程序中，跨资源访问可能是有意的。资源 ID 可以标识用户、租户、项目或其他分组。选择与谁可以访问这些资源相匹配的授权策略。
+
+将内存和线程范围限定给经过身份验证的用户的最简单方法是`mapUserToResourceId` callback in the auth config:
 
 ```typescript
 import { Mastra } from '@mastra/core'
@@ -124,12 +176,18 @@ export const mastra = new Mastra({
 })
 ```
 
-身份验证成功后，会使用已认证用户对象调用 `mapUserToResourceId`。返回值会在请求上下文中设置为 `MASTRA_RESOURCE_ID_KEY`，且适用于所有服务器 Adapter（Hono、Express、Next.js 等）。
+认证成功后，`mapUserToResourceId` is called with the authenticated user object. The returned value is set as `MASTRA_RESOURCE_ID_KEY` on the request context, which works across all server adapters (Hono, Express, Next.js, etc.).
 
-资源 ID 不必是 `user.id`。常见模式包括：
+配置后，回调必须返回非空字符串。如果它抛出或返回`null`, `undefined`, an empty or whitespace-only string, or a non-string value, authentication middleware rejects the request with a 500 error before the route runs. This applies to all requests that run authentication, including non-memory routes. A client-provided resource ID can't override a failed mapping.
+
+和`CompositeAuth`, this requirement applies to the provider that authenticated the request. A provider without a mapper keeps its existing behavior, even if another provider in the composite has one. The same validation applies to configured Studio auth mappers.
+
+如果没有映射器，身份验证将无法实现用户隔离：您负责在中间件中设置可信资源 ID 或以其他方式强制执行授权。
+
+资源 ID 不必是`user.id`. Common patterns:
 
 ```typescript
-// Org-scoped
+// Per-user within an organization
 mapUserToResourceId: user => `${user.orgId}:${user.id}`
 
 // From a JWT claim
@@ -141,16 +199,16 @@ mapUserToResourceId: user => `${user.workspaceId}:${user.projectId}:${user.id}`
 
 设置资源 ID 后，服务器会自动：
 
-- **筛选 Thread 列表**，仅返回用户拥有的 Thread
-- **验证 Thread 访问**，访问其他用户的 Thread 时返回 403
-- **强制创建 Thread** 时使用已认证用户的 ID
-- **验证消息操作**（包括删除），确保消息属于用户拥有的 Thread
+* **过滤线程列表**仅返回配置的资源范围内的线程
+* **验证线程访问**如果访问属于不同资源的线程，则返回 403
+* **强制创建线程**使用配置的资源 ID
+* **验证消息操作**包括删除，确保消息属于配置的资源范围内的线程
 
-即使客户端传递 `?resourceId=other-user-id`，由身份验证设置的值也优先。尝试访问其他用户拥有的 Thread 或消息会返回 403 错误。
+即使客户通过了`?resourceId=other-resource-id`, the server-set value takes precedence. Attempts to access threads or messages belonging to a different resource return a 403 error. Users mapped to the same resource ID share that resource scope.
 
-#### 高级：在中间件中设置资源 ID {/* #advanced-setting-resource-id-in-middleware */}
+#### 高级：在中间件中设置资源ID {/* #advanced-setting-resource-id-in-middleware */}
 
-对于更复杂的场景（例如从数据库查询资源 ID），可以直接在中间件中设置 `MASTRA_RESOURCE_ID_KEY`：
+对于更复杂的场景（例如，从数据库查找资源ID），您可以设置`MASTRA_RESOURCE_ID_KEY` directly in middleware:
 
 ```typescript
 import { Mastra } from '@mastra/core'
@@ -191,11 +249,11 @@ export const mastra = new Mastra({
 })
 ```
 
-`server.middleware` 在 Mastra 的单路由身份验证检查之前运行。当中间件需要已认证用户时，请调用 `getAuthenticatedUser()` 从配置的身份验证 Provider 中解析用户，而不更改默认路由身份验证流程。
+`server.middleware`在 Mastra 的每条路由身份验证检查之前运行。当中间件需要经过身份验证的用户时，调用`getAuthenticatedUser()` to resolve it from the configured auth provider without changing the default route auth flow.
 
-#### 使用 `MASTRA_THREAD_ID_KEY` {/* #using-mastra_thread_id_key */}
+#### 使用`MASTRA_THREAD_ID_KEY` {/* #using-mastra_thread_id_key */}
 
-也可以设置 `MASTRA_THREAD_ID_KEY`，以覆盖客户端提供的 Thread ID：
+您还可以设置`MASTRA_THREAD_ID_KEY` to override the client-provided thread ID:
 
 ```typescript
 import { MASTRA_RESOURCE_ID_KEY, MASTRA_THREAD_ID_KEY } from '@mastra/core/request-context'
@@ -204,11 +262,11 @@ import { MASTRA_RESOURCE_ID_KEY, MASTRA_THREAD_ID_KEY } from '@mastra/core/reque
 requestContext.set(MASTRA_THREAD_ID_KEY, validatedThreadId)
 ```
 
-当需要将操作限制为已通过其他方式验证的特定 Thread 时，此功能很有用。
+当您想要将操作限制到已通过其他方式验证的特定线程时，这非常有用。
 
 ### CORS 支持 {/* #cors-support */}
 
-```typescript prettier:false
+```typescript oxfmt:false
 {
   handler: async (c, next) => {
     c.header('Access-Control-Allow-Origin', '*');
@@ -230,9 +288,9 @@ requestContext.set(MASTRA_THREAD_ID_KEY, validatedThreadId)
 }
 ```
 
-### 请求日志记录 {/* #request-logging */}
+### 请求记录 {/* #request-logging */}
 
-```typescript prettier:false
+```typescript oxfmt:false
 {
   handler: async (c, next) => {
     const start = Date.now();
@@ -243,7 +301,7 @@ requestContext.set(MASTRA_THREAD_ID_KEY, validatedThreadId)
 }
 ```
 
-# 相关内容
+## 有关的 {/* #related */}
 
-- [请求上下文](/docs/server/request-context)
-- [保留键](/docs/server/request-context#reserved-keys)
+* [请求上下文](/docs/server/request-context)
+* [保留键](/docs/server/request-context#reserved-keys)

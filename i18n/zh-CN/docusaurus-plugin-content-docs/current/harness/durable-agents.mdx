@@ -1,0 +1,533 @@
+---
+title: 'Durable agents | Long-running agents'
+description: 'Wrap Mastra agents in durable execution so streams and long-running turns survive client disconnects and process restarts across supported runtimes.'
+packages:
+  - '@mastra/core'
+  - '@mastra/inngest'
+---
+
+# 持久剂
+
+**添加于：** `@mastra/core@1.45.0`
+
+:::测试版
+
+在 API 稳定之前，可能会在没有重大版本更新的情况下发生重大更改。
+
+:::
+
+耐用剂包裹常规[`Agent`](/docs/agents/overview) so the agentic loop runs inside a workflow. Events flow through [PubSub](/docs/server/pubsub), which means a client can disconnect and reconnect without missing chunks. The run state is persisted, so it survives process restarts.
+
+## 何时使用持久剂 {/* #when-to-use-durable-agents */}
+
+当出现以下任何情况时，请使用耐用剂：
+
+* 客户端可能会在中途断开并重新连接（移动、不稳定的网络、长时间运行的呼叫）。
+* Agent循环可能比单个 HTTP 请求的寿命更长（背景研究、多步骤Tool的使用）。
+* 您需要一个观察/重新连接 API，其中第二个客户端可以获取第一个客户端启动的流。
+* 你想要[Inngest-powered execution](/integrations/deploy/inngest) with step memoization, retries, and monitoring.
+
+对于客户端保持连接的短期、请求范围的调用，常规`Agent` with `stream()` or `generate()` is simpler.
+
+## 快速入门 {/* #quickstart */}
+
+包装现有的Agent`createDurableAgent()` from `@mastra/core/agent/durable`:
+
+```typescript title="src/mastra/agents/researcher.ts"
+import { Agent } from '@mastra/core/agent'
+import { createDurableAgent } from '@mastra/core/agent/durable'
+
+const agent = new Agent({
+  id: 'researcher',
+  name: 'Researcher',
+  instructions: 'You research topics thoroughly.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+})
+
+export const durableResearcher = createDurableAgent({ agent })
+```
+
+向 Mastra 注册持久Agent并致电`stream()`:
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { durableResearcher } from './agents/researcher'
+
+const mastra = new Mastra({
+  agents: { durableResearcher },
+})
+
+const { output, runId, cleanup } = await durableResearcher.stream(
+  'Research quantum computing advances in 2025',
+)
+
+for await (const chunk of output.fullStream) {
+  // Process each chunk as it arrives
+}
+
+// Release PubSub subscriptions and clear the run from the registry.
+// If you skip this, an automatic cleanup timer fires after the stream ends.
+cleanup()
+```
+
+返回的`runId` identifies the execution. Pass it to `observe()` to reconnect from a different client. Visit the [DurableAgent reference](/reference/agents/durable-agent) for the full configuration and method API.
+
+## 它是如何运作的 {/* #how-it-works */}
+
+耐用剂在常规剂的基础上添加了三层：
+
+1. **Workflow程执行**: `stream()` serializes the messages and options into a workflow input, then triggers the agentic loop inside a durable workflow. The workflow runs the same loop as `Agent.stream()` but each step can be memoized and replayed.
+
+2. **发布订阅流媒体**：循环将块发布到由运行 ID 键入的 PubSub 主题。调用者订阅该主题并将块传输到`ReadableStream`, while the cache replays any chunks missed during a disconnect.
+
+3. **缓存层**：可选的缓存（默认情况下在内存中，Redis 或生产中的其他后端）存储已发布的事件，以便迟到的订阅者可以赶上。
+
+## 执行变体 {/* #execution-variants */}
+
+Mastra 提供了三种生产持久剂的工厂功能。它们的不同之处在于Workflow程的执行方式：
+
+|工厂|套餐 |最适合 |
+| - | - | - |
+|`createDurableAgent()` | `@mastra/core` | Local development and single-process servers. You get a stream you can await directly. |
+| `createEventedAgent()` | `@mastra/core` | Background execution. The workflow starts without blocking, and you consume chunks through PubSub. |
+| `createInngestAgent()` | `@mastra/inngest` | Production deployments. Inngest adds step memoization, retries, and a monitoring dashboard. |
+
+所有三个都返回您注册的对象`Mastra` the same way as a regular agent. `createDurableAgent()` and `createEventedAgent()` return class instances that extend `Agent`. `createInngestAgent()` returns a Proxy-backed object that forwards `Agent` methods to the underlying agent. When a signal wakes an idle thread, all three start that run with the durable `stream()`. `sendSignal()` and `sendNotificationSignal()` both work this way.
+
+### 进程中与`createDurableAgent()` {/* #in-process-with-createdurableagent */}
+
+包裹你的Agent并致电`stream()`. You get a `DurableAgentStreamResult` back in the same process. No external infrastructure is required, so this is the fastest way to get started:
+
+```typescript title="src/mastra/agents/durable.ts"
+import { Agent } from '@mastra/core/agent'
+import { createDurableAgent } from '@mastra/core/agent/durable'
+
+const agent = new Agent({
+  id: 'helper',
+  instructions: 'You are a helpful assistant.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+})
+
+export const durableHelper = createDurableAgent({ agent })
+```
+
+### 一劳永逸`createEventedAgent()` {/* #fire-and-forget-with-createeventedagent */}
+
+Workflow程在后台启动，不会阻塞调用者。您仍然通过 PubSub 接收块，所以`stream()` returns a result you can consume. The HTTP handler that triggered the run doesn't need to wait for the workflow to finish:
+
+```typescript title="src/mastra/agents/evented.ts"
+import { Agent } from '@mastra/core/agent'
+import { createEventedAgent } from '@mastra/core/agent/durable'
+
+const agent = new Agent({
+  id: 'writer',
+  instructions: 'You write articles.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+})
+
+export const eventedWriter = createEventedAgent({ agent })
+```
+
+### 存储Agent的可恢复流 {/* #resumable-streams-for-stored-agents */}
+
+创建的Agent[`createStoredAgent()`](/reference/client-js/agents#createstoredagent) use the `durable` field to configure resumable streams only. The server hydrates a plain `Agent` with stream publishing and replay enabled:
+
+```typescript
+await mastraClient.createStoredAgent({
+  id: 'helper',
+  name: 'Helper',
+  instructions: 'You are a helpful assistant.',
+  model: { provider: 'openai', name: '__AI_SDK_OPENAI_MODEL_BASE__' },
+  durable: true,
+})
+```
+
+`durable`也接受`{ cleanupTimeoutMs }`. Cache and pubsub are inherited from the server's `Mastra` instance. Existing stored agents with `durable: true` now load with resumable streams but without durable execution or checkpoint recovery. To retain durable execution, define a code agent wrapped with `createDurableAgent({ agent })` and pass `maxSteps` and snapshot persistence options to the factory.
+
+### Ingest 提供动力`createInngestAgent()` {/* #inngest-powered-with-createinngestagent */}
+
+在上运行Workflow程[Inngest](https://www.inngest.com/docs) platform. Each tool call becomes a memoized step that Inngest can retry independently, and you get a dashboard for monitoring runs:
+
+```typescript title="src/mastra/agents/inngest.ts"
+import { Agent } from '@mastra/core/agent'
+import { createInngestAgent } from '@mastra/inngest'
+import { Inngest } from 'inngest'
+
+const inngest = new Inngest({ id: 'my-app' })
+
+const agent = new Agent({
+  id: 'analyst',
+  instructions: 'You analyze data.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+})
+
+export const inngestAnalyst = createInngestAgent({ agent, inngest })
+```
+
+参观[`createInngestAgent()` reference](/reference/agents/inngest-agent) for the full API, including Inngest-specific options like PubSub and cache configuration.
+
+## 可恢复的流 {/* #resumable-streams */}
+
+持久Agent通过 PubSub 和事件缓存支持可恢复流。当客户端在中途断开连接时，缓存会继续存储事件。同一个客户端可以通过调用重新连接`observe()` with the `runId`:
+
+```typescript title="src/server/reconnect.ts"
+const { output } = await durableResearcher.observe(runId)
+
+for await (const chunk of output.fullStream) {
+  // Chunks from the run, including any missed while disconnected
+}
+```
+
+呼唤`observe(runId)` without an offset is the supported general reconnect flow. It replays all available cached events before delivering live events. For a completed run, observation replays the retained events and closes. If the run is unknown or its history has been cleared and no live run remains, observation closes without events. The HTTP observe endpoint returns 404 in this case, because it can't check that the caller owns the run.
+
+可选的`offset` is a run-log position, which chunks report as `chunk.index`. To resume after a dropped connection, pass `index + 1` of the last chunk that has an `index`, or omit `offset` if nothing arrived. This works the same with `stream()` and `observe()`, over HTTP, and in `@mastra/client-js`. See [`observe(runId, options?)`](/reference/agents/durable-agent#observerunid-options) for which chunks carry no index, structured output, and transport limits.
+
+重播不是永久的执行存档。活动仅持续到[cleanup](#cleanup) clears them or the cache removes them. A workflow snapshot can't reconstruct cleared stream events, and disabling caching prevents historical replay.
+
+观察并不代表跑步。当循环结束时，或者你提前离开它`break`, `return`, or an error, the observer unsubscribes and the run keeps going for anyone else watching it. To stop observing from outside the loop, for example when the client disconnects, call `detach()`:
+
+```typescript title="src/server/reconnect.ts"
+const { output, detach } = await durableResearcher.observe(runId)
+
+request.signal.addEventListener('abort', detach, { once: true })
+
+if (request.signal.aborted) detach()
+
+for await (const chunk of output.fullStream) {
+  // Stops when the run finishes or the client disconnects
+}
+```
+
+如果你通过了`idleTimeoutMs` and no chunks arrive for that long, Mastra checks `isAlive` when you provide it. If `isAlive` returns `true` or throws, the timer restarts and the stream stays open. Otherwise the stream ends with an error chunk and detaches the observer. The run itself is only cleaned up when `isAlive` returns `false`.
+
+`createDurableAgent()`和`createEventedAgent()` use an in-memory cache by default, which means resumable streams work within a single process. For reconnects across processes or replicas, share the replay cache, PubSub transport, and run storage between the producer and observer. A shared transport delivers live events but can't recover events held only in another process's cache. Configure a persistent cache backend (for example, Redis) so retained events survive process restarts:
+
+```typescript title="src/mastra/agents/durable-with-cache.ts" {2,3,5,9}
+import { createDurableAgent } from '@mastra/core/agent/durable'
+import { RedisServerCache } from '@mastra/redis'
+import Redis from 'ioredis'
+
+const cache = new RedisServerCache({ client: new Redis('redis://localhost:6379') })
+
+export const durableAgent = createDurableAgent({
+  agent,
+  cache,
+})
+```
+
+`createInngestAgent()`默认情况下不启用缓存。通过一个`cache` option or register the agent with a `Mastra` instance that has a `serverCache` configured to enable resumable streams.
+
+对于缓存主题，每个发布的事件在实时交付之前都会记录在缓存中，因此发布延迟受到到缓存的往返时间的限制。如果缓存写入失败，事件仍会实时传送，但无法重播。`@mastra/redis` and `@mastra/valkey` record each event in a single round-trip using a Lua script. `@mastra/redis` falls back to separate commands when the client has no `evalScript` or when Redis Cluster rejects the multi-key script. Per-run workflow watch events (`workflow.events.v2.*`) are never cached. If the cache is remote (for example, in another region) and you don't need to resume a topic, use `shouldCache` to publish that topic straight through:
+
+```typescript title="src/mastra/agents/durable-hot-topics.ts" {5}
+export const durableAgent = createDurableAgent({
+  agent,
+  cache,
+  // Skip the replay cache for the per-chunk stream topic; other topics stay resumable.
+  shouldCache: topic => !topic.startsWith('agent.stream.'),
+})
+```
+
+## 使用后台任务进行流式传输 {/* #streaming-with-background-tasks */}
+
+持久Agent支持同[`untilIdle`](/reference/streaming/agents/stream) option as regular agents. When `untilIdle` is set, `stream()` keeps the connection open across background-task continuations until the agent is idle:
+
+```typescript title="src/mastra/run.ts"
+const { output, cleanup } = await durableAgent.stream('Research and summarize the topic', {
+  untilIdle: true,
+  memory: { thread: 'thread-1', resource: 'user-1' },
+})
+
+for await (const chunk of output.fullStream) {
+  // Chunks from the initial turn AND any follow-up turns triggered by
+  // background task completions
+}
+
+cleanup()
+```
+
+经过`{ maxIdleMs }` to customize the idle timeout (defaults to 5 minutes):
+
+```typescript
+await durableAgent.stream('Research topic', {
+  untilIdle: { maxIdleMs: 30_000 },
+  memory: { thread: 'thread-1', resource: 'user-1' },
+})
+```
+
+访问[Background tasks](/docs/harness/background-tasks) for the full background task guide, including configuration, subagents, and suspend/resume.
+
+## 清理 {/* #cleanup */}
+
+每一个`stream()` and `observe()` call returns a `cleanup` function that tears the run down: it unsubscribes from PubSub, removes the run from the internal registry, and deletes the run's cached events so nobody can replay it afterward.
+
+当你不打电话的时候`cleanup()` yourself, Mastra calls it `cleanupTimeoutMs` after the run finishes, errors, or is aborted. The default is 30 seconds, so completed-run replay is limited to that window unless you configure a different value or call `cleanup()` sooner. Detaching an observer or reaching a plain `idleTimeoutMs` doesn't start this timer. Set `cleanupTimeoutMs: 0` to turn the timer off. The cache's own TTL and eviction still apply.
+
+称呼`cleanup()` from the process that started the run. To stop watching a run from `observe()`, use `detach()` or leave the loop instead.
+
+## Tool审批 {/* #tool-approval */}
+
+持久Agent支持Tool批准（人在环）。当Tool调用需要批准时，Workflow程会暂停，并发出`onSuspended` callback, and waits for the caller to resume with `resume()`:
+
+```typescript title="src/mastra/run.ts" {4}
+const { output, runId, cleanup } = await durableAgent.stream('Delete the old records', {
+  requireToolApproval: true,
+  onSuspended: ({ toolCallId, toolName, args }) => {
+    // Notify the user and ask for approval
+  },
+})
+```
+
+批准后恢复暂停运行：
+
+```typescript
+await durableAgent.resume(runId, { approved: true })
+```
+
+## 崩溃恢复 {/* #crash-recovery */}
+
+持久Agent可以在执行时将每次运行的状态检查点到存储。如果服务器进程在运行中崩溃，则运行仍将继续`running` status in storage with no automatic retry, and on the next server start you can re-drive these orphaned runs so they pick up where they left off. For orderly shutdowns such as rolling deploys, the generated server can also drain in-flight turns before exiting. See [graceful shutdown and rolling deploys](/docs/deployment/mastra-server#graceful-shutdown-and-rolling-deploys).
+
+在默认的持久化策略下，这些`running` checkpoints are written when crash recovery is enabled. With `recovery.durableAgents: 'off'` (the default), durable agents persist snapshots for `pending`, `paused`, and `suspended` runs (the artifacts human-in-the-loop resume depends on) and skip the per-step `running` writes until `mastra.shutdown()` starts. A custom `shouldPersistSnapshot` predicate replaces the default policy: one that includes `running` writes those checkpoints at every step, and one that excludes `running` writes none, including during shutdown. See [snapshot persistence](#snapshot-persistence) for the full policy and how to override it.
+
+持久Agent运行被排除在活动Workflow运行的通用启动时重新启动之外。持久Agent运行的唯一自动恢复路径是`recovery.durableAgents: 'auto'`, which claims each orphaned run and registers its thread runtimes before re-driving it. See [run ownership](#run-ownership).
+
+：：：警告
+
+自动和手动恢复从最后一个持久快照继续运行。结果不在该快照中的任何Tool调用都会再次运行。任何未保存的模型响应都会被再次请求，并且模型Provider会再次计费。在依赖恢复之前使Tool具有幂等性。看[make tools safe to repeat](#make-tools-safe-to-repeat).
+
+:::
+
+每次调用传递的委托钩子都是闭包，无法在新进程中恢复。恢复运行后会恢复到默认委派行为。在主管上配置的挂钩`defaultOptions.delegation` are merged back in when recovery rebuilds the delegation tools. Put hooks that must survive a restart there instead of passing them to `stream()` or `generate()`.
+
+### 快照持久化 {/* #snapshot-persistence */}
+
+这`shouldPersistSnapshot` option on `createDurableAgent()` (also accepted in the agent-level `durable` config) controls which workflow snapshots a durable agent writes. The default policy:
+
+* 始终坚持`pending`, `paused`, and `suspended` snapshots. These are what `resume()` and tool approval read, so human-in-the-loop flows work without configuration.
+* 坚持`running` checkpoints at every step when `recovery.durableAgents` is `'auto'`. These per-step writes exist solely to make in-flight runs recoverable after a crash, so with recovery off they're skipped until shutdown.
+* 坚持一个`running` checkpoint at each step boundary a run reaches after `mastra.shutdown()` starts, even with recovery off. A run that reaches a step boundary before the drain window ends can then be resumed later with `recover()` or `recoverActiveRuns()`. A run blocked in a single LLM or tool call for the whole drain gets no shutdown checkpoint.
+
+当Agent配置有固定内存实例时（`memory: new Memory(...)`), a `running` checkpoint doesn't repeat messages memory already stores. Messages recalled from memory and messages the run saved itself (for example with `savePerStep: true`) are stored as small references to their memory rows instead of their full contents, as long as they still match the stored row (a message changed after saving stays inline). This applies to every copy of the conversation a checkpoint holds, including the run input and step results. A long run's checkpoints grow much more slowly as a result. Agents that resolve memory with a function keep the full transcript in each checkpoint, because the memory a resumed run resolves may differ.
+
+保留崩溃恢复检查点而不启用自动恢复（例如，当您调用`recoverActiveRuns()` yourself behind a leader election), pass a predicate that includes `running`:
+
+```typescript title="src/mastra/agents/durable.ts"
+export const durableResearcher = createDurableAgent({
+  agent,
+  shouldPersistSnapshot: ({ workflowStatus }) =>
+    ['pending', 'paused', 'suspended', 'running'].includes(workflowStatus),
+})
+```
+
+当自定义谓词排除时，Mastra 会记录警告`suspended` or `paused`, which breaks human-in-the-loop resume, or excludes `running` while `recovery.durableAgents` is `'auto'`, which makes the agent invisible to automatic recovery.
+
+事件Agent始终保留完整的快照集：事件引擎通过存储协调工作人员，因此`running` row is part of its execution model. Inngest agents always persist only `suspended` snapshots, because Inngest's own replay provides durability. Both accept `shouldPersistSnapshot` for API symmetry but log a warning and ignore it.
+
+### 自动恢复 {/* #automatic-recovery */}
+
+放`recovery.durableAgents` to `'auto'` in the Mastra config. The deployer calls `recoverAllDurableAgents()` on boot, alongside the workflow run restarts (the two run concurrently):
+
+```typescript title="src/mastra/index.ts" {7}
+import { Mastra } from '@mastra/core'
+import { PostgresStore } from '@mastra/pg'
+
+export const mastra = new Mastra({
+  agents: { myAgent: durableAgent },
+  storage: new PostgresStore({ connectionString: process.env.DATABASE_URL! }),
+  recovery: { durableAgents: 'auto' },
+})
+```
+
+启动时，这会发现每个已注册的持久Agent，其运行陷入困境`running` status and re-drives them from the last persisted snapshot.
+
+恢复同时处理最多五个Agent，每个Agent最多有五个运行等待。每次等待都涵盖`recover()` setup and settlement of the whole recovered workflow and lasts at most 30 seconds. If it expires, the attempt continues in the background and frees a slot for another run. These limits bound waiting, not the number of live executions. Discovery and overridden custom recovery methods aren't bounded by this budget.
+
+超时运行进位`retryAt` and are checked again automatically. Re-checks defer until the original attempt settles, so they don't start duplicate executions. After it settles, recovery checks the persisted snapshot and ownership before retrying. Finished or suspended runs aren't restarted.
+
+当关闭开始时，恢复会停止分派新的运行和Agent，并取消挂起的重新检查。原始尝试（包括那些等待超时的尝试）仍会被跟踪以查找 Mastra 的共享关闭消耗。恢复超时不会取消执行或添加单独的排出窗口。
+
+恢复不会接管另一个执行仍在驱动的运行。一旦执行声明可能失效，它就会跳过运行并再次检查它。进程在重新启动前不久崩溃的运行仍可恢复，无需再次调用。
+
+### 手动恢复 {/* #manual-recovery */}
+
+如果您需要更精细的控制，例如按计划运行恢复，请直接调用方法：
+
+```typescript
+// Recover all durable agents
+const result = await mastra.recoverAllDurableAgents()
+console.log(
+  `Recovered ${result.recovered} runs (${result.succeeded} ok, ${result.failed} failed, ${result.skipped} skipped)`,
+)
+
+// Recover a specific agent
+const { recovered } = await durableAgent.recoverActiveRuns()
+for (const run of recovered) {
+  if (run.status === 'skipped') console.log(`${run.runId} was skipped: ${run.reason}`)
+}
+
+// Recover a single known run
+await durableAgent.recoverActiveRuns({ runId: 'run-abc-123' })
+```
+
+`recoverAllDurableAgents()`返回计数并安排合格的所有权重新检查。`recoverActiveRuns()` returns each run's outcome as `success`, `failed`, or `skipped`, and doesn't re-check skipped runs. A run skipped because another process drives it carries `retryAt`, the time after which its claim lapses unless renewed. A timed-out attempt instead returns `status: 'skipped'` with `reason: 'recovery-timeout'` and no `retryAt`, so Mastra doesn't automatically retry it. Only the `skipped` count includes this attempt; the `recovered`, `succeeded`, and `failed` counts exclude it even if it settles later.
+
+手动恢复读取相同`running` checkpoints as automatic recovery. For a `DurableAgent` using the default snapshot policy with `recovery.durableAgents` set to `'off'`, in-flight runs are only checkpointed at step boundaries reached after `mastra.shutdown()` starts. A run that crashes before then, or doesn't reach a step boundary during the drain, has no checkpoint, so `listActiveRuns()` and `recoverActiveRuns()` don't find it. See [snapshot persistence](#snapshot-persistence).
+
+要接管仍处于活动状态的运行，例如由挂起执行保持的运行，请调用`recover()` with `force: true`:
+
+```typescript
+const { output } = await durableAgent.recover('run-abc-123', { force: true })
+```
+
+维持运行的执行者失去了其主张。当执行检测到丢失时，Mastra 请求取消。忽略取消的工作可以继续。通过存储支持的声明，流会删除旧声明生成的事件。看[stop work after ownership loss](#stop-work-after-ownership-loss) for cancellation limits. Without `force`, `recover()` throws `DURABLE_AGENT_RUN_ACTIVE` for a live run. Even with `force`, `recover()` refuses a run that the same process is executing.
+
+### 经营所有权 {/* #run-ownership */}
+
+每一个`stream()`, `generate()`, `resume()`, and `recover()` call claims the run before it executes and renews the claim every 5 seconds. A claim lapses 15 seconds after its last renewal, so a run whose process crashed becomes recoverable within 15 seconds. Until then, recovery treats the run as live, and a `stream()` or `resume()` call for that run waits up to 5 seconds for the claim, then throws `DURABLE_AGENT_EXECUTION_CONFLICT`. `mastra.shutdown()` stops the runs still executing after its drain window without further writes and releases their claims. The next boot then recovers them without waiting for the claims to lapse. Set `MASTRA_AGENT_THREAD_LEASE_TTL_MS` to change the lapse time. Renewal happens every third of it unless `MASTRA_AGENT_THREAD_LEASE_RENEW_INTERVAL_MS` sets an interval shorter than the TTL.
+
+声明的执行取决于Workflow程存储。当存储支持运行防护时，声明是该存储中的一条记录，并且在同一操作中根据声明检查每次写入。一旦另一个执行声明了该运行，则丢失该运行的执行的写入将被拒绝。仅当内存存储也支持运行防护时，该执行的消息、线程和工作内存写入才会被拒绝，因此当Agent执行`Memory` uses a storage adapter without it. These storage adapters support run fencing:
+
+* `InMemoryStore`从`@mastra/core/storage`
+* `@mastra/pg`
+* `@mastra/libsql`和`@mastra/turso`
+* `@mastra/mysql`
+* `@mastra/mssql`
+* `@mastra/oracledb`
+* `@mastra/spanner`
+* `@mastra/dsql`
+* `@mastra/cloudflare-d1`
+* `@mastra/cloudflare`， 和`CloudflareDOStorage`
+* `@mastra/convex`
+* `@mastra/mongodb`，在副本集或分片集群上
+* `@mastra/dynamodb`
+* `@mastra/redis`
+* `@mastra/upstash`
+* `@mastra/valkey`
+
+在 Convex 上，在您部署的 Mastra 服务器功能中运行防护运行。升级后重新部署您的凸函数`@mastra/convex`. Until you do, durable agent runs fail with an error asking you to redeploy, while other writes keep working.
+
+支持运行围栏的存储每次运行都会保留一份声明记录，并且每次运行都会使用内存保留一份内存围栏记录。具有保留支持的商店会通过以下方式修剪它们`workflows.runOwnership` and `memory.runFences` [retention keys](/reference/storage/retention#retention-eligible-tables). Redis, Upstash, and Valkey expire them on their own instead: a claim 7 days after its last claim, renewal, or release, and a fence 7 days after it's retired. A run's first generation comes from the store's clock, so a run that reuses a `runId` after its records were pruned still outranks the fences and stream events of its earlier executions.
+
+对于任何其他Workflow程商店，声明是对[PubSub](/docs/server/pubsub) backend. The lease keeps two executions from claiming the run at once, but writes from an execution that lost the run aren't rejected. A run taken over while its previous execution was still live can end with that execution's output. When an execution loses its lease and no other execution has taken the run, the run stays held for up to 15 more seconds. Until then, `recover()` without `force` throws `DURABLE_AGENT_RUN_ACTIVE` with `retryAt` set to when the hold is sure to have ended. Mastra logs a warning when it recovers runs against a workflows or memory store without run fencing.
+
+租约仅协调共享它的进程。`EventEmitterPubSub`, the default, covers one process. `UnixSocketPubSub` covers the processes on one host. `RedisStreamsPubSub` and `ValkeyStreamsPubSub` cover every instance connected to the same server. `GoogleCloudPubSub` doesn't provide leases, so with a store that lacks run fencing every claim succeeds, and recovery can take over a run that's still live.
+
+### 失去所有权后停止工作 {/* #stop-work-after-ownership-loss */}
+
+当持久Agent和事件Agent的步骤检测到它不再拥有运行时，请求取消运行中的Tool和模型调用。另一个进程中的事件工作人员按声明更新间隔检查所有权，而不更新原始执行的声明。默认情况下，每 5 秒一次，即三分之一`MASTRA_AGENT_THREAD_LEASE_TTL_MS`. Detection depends on backend response time. A step in the process that holds the claim stops when an ownership check fails, or when the claim can't be renewed before it expires. A step that only observes another process's claim also stops when no check succeeds within one lease TTL (15 seconds by default).
+
+取消是合作的。使用Tool执行上下文`abortSignal` for cancellable operations, and check it before starting another side effect. A tool that ignores the signal can keep running. Work already completed outside Mastra isn't rolled back.
+
+恢复可以在上一次执行检测到所有权丢失之前启动相同的Tool调用，因此取消可以减少重叠工作，但不会阻止Tool运行两次。看[make tools safe to repeat](#make-tools-safe-to-repeat).
+
+### 多实例部署 {/* #multi-instance-deployments */}
+
+每个副本都可以从`recovery.durableAgents: 'auto'`. Replicas that boot together race to recover the same orphaned runs, but only one claim succeeds per run and the other replicas skip it. This requires a claim that every replica shares: a workflows store that supports run fencing, or a PubSub backend whose lease every replica shares. Without either, gate recovery behind your own leader election or run it from a single replica.
+
+## 数据库负载 {/* #database-load */}
+
+Mastra 没有发布持久Agent的基准硬件参考，因此请根据您自己的工作负载调整数据库的大小。本节介绍驱动负载的因素以及需要关注的内容。
+
+每个检查点都会将运行的完整快照更新为 JSONB`mastra_workflow_snapshot`, with one row for the agent workflow and one for its nested execution workflow. The snapshot holds the conversation and every tool result so far, so it grows during a run, and the total bytes a run writes grow faster than its step count. Write load depends on:
+
+* **检查点频率**: 一个`createDurableAgent()` agent with `recovery.durableAgents` set to `'off'` (the default) writes few checkpoints. With `'auto'`, it writes a `running` checkpoint at every step. A `createEventedAgent()` agent always writes at every step. See [snapshot persistence](#snapshot-persistence).
+* **每次运行的步数和有效负载大小**：Tool返回的每个字节都会在运行的每个后续检查点中再次写入。
+* **并发运行**：负载随着正在进行的运行次数而增加。
+
+为了减少写入并保持崩溃恢复：
+
+* 为Agent提供固定的内存实例，因此检查点存储对已保存消息的引用而不是完整副本。
+* 返回小型Tool结果，例如 ID 或 URL，而不是大型文档。
+* 将长任务分成较短的运行。
+
+每个`PostgresStore` opens up to `max` connections, 20 by default, per process. A `pool`, `writePool`, or separate `readPool` you pass in uses its own limit. Add up the limits of every pool that connects to the server, across all replicas and processes, and keep the total below the server's `max_connections` with room for other clients. If you put a transaction-mode pooler such as PgBouncer in front, budget its server-side connections the same way. See [PostgreSQL](/integrations/databases/postgresql).
+
+每个检查点更新插入都会留下一个死行版本，Mastra 会删除已完成运行的行，因此`mastra_workflow_snapshot` collects dead rows fast. Suspended runs keep their rows. If deletion fails, Mastra logs a `Failed to delete workflow snapshot rows` warning and the rows stay until you delete or [prune](/reference/storage/retention) them. The exception is a `createEventedAgent()` agent on a shared pub/sub transport with storage-backed fencing: it logs `durable execution delivery failed` and retries the delete with the event. Pruning removes snapshots by inactivity, including suspended runs and running runs whose step hasn't written a checkpoint recently. Set `workflowSnapshot.maxAge` longer than your longest expected suspension and your longest step, or leave snapshot pruning off if you can't bound them. Make autovacuum more aggressive for this table. Replace `public` with your `schemaName` if you set one:
+
+```sql
+ALTER TABLE public.mastra_workflow_snapshot SET (
+  autovacuum_vacuum_scale_factor = 0.01,
+  toast.autovacuum_vacuum_scale_factor = 0.01
+);
+```
+
+要决定是否增加容量或调整工作负载，请观看：
+
+* `n_dead_tup`和`last_autovacuum` for `mastra_workflow_snapshot` in `pg_stat_user_tables`, and for its TOAST table in `pg_stat_all_tables`, where large snapshots are stored
+* 快照更新插入的份额`total_exec_time` and `wal_bytes` in `pg_stat_statements`. This requires `pg_stat_statements` in `shared_preload_libraries` (a server restart) and `CREATE EXTENSION pg_stat_statements`
+* 每秒 WAL 字节数 (`pg_stat_wal`)
+* 活动连接数与池中的连接数比较`max`
+
+如果快照更新插入主导写入，请首先减少检查点大小或频率。如果许多不相关的查询速度很慢，请增加容量。
+
+## 让Tool可以安全地重复使用 {/* #make-tools-safe-to-repeat */}
+
+持久Agent或事件Agent可以多次运行同一Tool调用。Tool调用是模型运行Tool的一个请求。在这些情况下会发生重复：
+
+* 该过程在Tool运行时停止，或者在Tool返回之后但在 Mastra 保存其结果之前停止。当跑步是[recovered](#crash-recovery), the tool runs again.
+* 使用 Postgres 存储和 Redis Streams PubSub，事件工作线程会在发布Tool结果之前停止。另一名工人[reclaims the step](/reference/pubsub/redis-streams#evented-agent-worker-takeover) and runs the tool again.
+* 当先前的执行仍在运行该Tool时，恢复接管运行，例如[`recover()` and `force: true`](#manual-recovery). Both executions can run the tool concurrently. See [stop work after ownership loss](#stop-work-after-ownership-loss).
+
+[摄取Agent](#inngest-powered-with-createinngestagent)配置有`retries` also run an interrupted tool step again.
+
+Mastra 无法撤销Tool已经在另一个系统中完成的工作。发送电子邮件、向卡收费或删除记录的Tool可以执行两次。使这些Tool具有幂等性。幂等Tool在同一调用第二次运行时不会产生额外效果。
+
+### 使用Tool调用 ID 作为幂等键 {/* #use-the-tool-call-id-as-an-idempotency-key */}
+
+当Agent运行Tool时，`context.agent.toolCallId` identifies the tool call. Mastra saves the model's response before it runs any tool in that response, so a tool that runs again for the same call receives the same `toolCallId`.
+
+将 ID 传递给接受幂等性密钥的服务。该Tool退还 Stripe 付款并将Tool调用 ID 作为 Stripe 的[idempotency key](https://docs.stripe.com/api/idempotent_requests). When the tool runs again for the same call, Stripe returns the first refund instead of creating a second one:
+
+```typescript title="src/mastra/tools/refund-payment.ts"
+import { createTool } from '@mastra/core/tools'
+import Stripe from 'stripe'
+import { z } from 'zod'
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!)
+
+export const refundPayment = createTool({
+  id: 'refund-payment',
+  description: 'Refunds a customer payment',
+  inputSchema: z.object({
+    paymentIntentId: z.string(),
+  }),
+  outputSchema: z.object({
+    refundId: z.string(),
+    status: z.string().nullable(),
+  }),
+  execute: async ({ paymentIntentId }, context) => {
+    const toolCallId = context.agent?.toolCallId
+    if (!toolCallId) throw new Error('refund-payment must be called by an agent')
+
+    const refund = await stripe.refunds.create(
+      { payment_intent: paymentIntentId },
+      { idempotencyKey: `refund-payment:${paymentIntentId}:${toolCallId}` },
+    )
+
+    return { refundId: refund.id, status: refund.status }
+  },
+})
+```
+
+`context.agent`仅当Agent运行该Tool时才设置，这就是示例检查它的原因。Tool调用 ID 来自模型提供者，某些提供者在响应中重复使用 ID。添加付款 ID 可防止两次不同的退款共享密钥。 Stripe 可以在幂等密钥过期 24 小时后将其删除，因此在此之后恢复的运行可以创建第二次退款。
+
+如果服务不接受幂等密钥，请以相同的方式构建密钥并将其与更改一起记录：
+
+* 在数据库中，将键写入与更改相同的事务中具有唯一约束的列，并在键已存在时跳过更改，例如`INSERT ... ON CONFLICT DO NOTHING` in Postgres. Store the tool's result with the key so a repeated call can return the same result to the model.
+* 对于其他服务，请将密钥附加到请求并在执行操作之前检查它，例如通过搜索标头中包含密钥的电子邮件。当执行重叠时，每个执行都可以在另一个发送请求之前通过此检查。
+
+### 保护子Agent内的Tool {/* #protect-tools-inside-subagents */}
+
+一个[subagent](/docs/subagents) delegation is one `agent-<name>` tool call. Recovery doesn't save the model and tool calls inside it, so when the delegation runs again, the subagent starts over and its tools receive new `toolCallId` values. A key built from the tool call ID doesn't detect these repeats.
+
+对于子Agent使用的Tool，根据识别预期效果的数据构建密钥。对于退款，这可以是付款 ID 与Tool输入中的订单行 ID 的组合。避免使用也会阻止合法第二个操作的密钥，例如在允许部分退款时仅根据付款 ID 构建的密钥。
+
+## 有关的 {/* #related */}
+
+* [DurableAgent 参考](/reference/agents/durable-agent)
+* [`createInngestAgent()`参考](/reference/agents/inngest-agent)
+* [后台任务](/docs/harness/background-tasks)
+* [Ingest部署指南](/integrations/deploy/inngest)
+* [Agent概览](/docs/agents/overview)
+* [工人概览](/docs/deployment/workers)

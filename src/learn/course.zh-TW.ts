@@ -130,7 +130,7 @@ AI Agent 正在帶來下一波平台變革。了解如何建立 AI Agent，如�
       module: 'Tool',
       preview: {
         intro:
-          '補充說明：如果你使用 Cursor、Windsurf、Claude Code、VS Code、Codex，或任何支援 MCP 的工具，值得啟用 Mastra MCP Docs Server。',
+          '補充說明：如果你使用 Cursor、Windsurf、Claude Code、VS Code、Codex，或任何支援 MCP 的Tool，值得啟用 Mastra MCP Docs Server。',
         bullets: ['什麼是 Mastra MCP Docs Server', '如何在編輯器中啟用', '在撰寫程式碼時取得相關的 Mastra 文件'],
       },
     },

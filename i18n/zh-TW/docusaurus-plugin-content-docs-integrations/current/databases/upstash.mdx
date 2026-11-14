@@ -1,0 +1,174 @@
+---
+title: "Upstash | Database"
+description: "Use Upstash Redis as serverless Mastra storage with REST credentials, namespaced keys, durable persistence, and deployment-friendly connections."
+packages:
+  - "@mastra/memory"
+  - "@mastra/upstash"
+---
+
+# 烏普斯塔什
+
+Upstash 儲存實作使用 Upstash 的 Redis 相容鍵值儲存提供無伺服器友善的儲存解決方案。
+
+:::警告\[定價]
+
+當 Mastra 與 Upstash 結合使用時，即用即付模式可能會因為Agent對話期間產生大量 Redis 指令而導致意外的高成本。我們強烈建議使用**fixed pricing plan** for predictable costs. See [Upstash pricing](https://upstash.com/pricing/redis)欲了解詳情和[GitHub 問題 #5850](https://github.com/mastra-ai/mastra/issues/5850)用於上下文。
+
+:::
+
+:::警告\[不支援可觀察性]
+
+Upstash存儲**doesn't support the observability domain**. Traces from the `MastraStorageExporter` can't be persisted to Upstash, and [Studio's](/docs/studio/overview) observability features won't work with Upstash as your only storage provider. To enable observability, use [composite storage](/reference/storage/composite#specialized-storage-for-observability) to route observability data to a supported provider like ClickHouse.
+
+:::
+
+## 安裝 {/* #installation */}
+
+```bash npm2yarn
+npm install @mastra/upstash@latest
+```
+
+## 用法 {/* #usage */}
+
+```typescript
+import { UpstashStore } from '@mastra/upstash'
+
+const storage = new UpstashStore({
+  id: 'upstash-storage',
+  url: process.env.UPSTASH_URL,
+  token: process.env.UPSTASH_TOKEN,
+})
+```
+
+## 參數 {/* #parameters */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'url',
+  type: 'string',
+  description: 'Upstash Redis URL',
+  isOptional: false,
+},
+{
+  name: 'token',
+  type: 'string',
+  description: 'Upstash Redis authentication token',
+  isOptional: false,
+},
+{
+  name: 'prefix',
+  type: 'string',
+  description: 'Key prefix for all stored items',
+  isOptional: true,
+  defaultValue: 'mastra:',
+},
+]}
+/>
+
+## 附加說明 {/* #additional-notes */}
+
+### 關鍵結構 {/* #key-structure */}
+
+Upstash儲存實作使用鍵值結構：
+
+* 線程鍵：`{prefix}thread:{threadId}`
+* 訊息鍵：`{prefix}message:{messageId}`
+* 元資料鍵：`{prefix}metadata:{entityId}`
+
+### 無伺服器的好處 {/* #serverless-benefits */}
+
+Upstash 儲存特別適合無伺服器部署：
+
+* 無需連接管理
+* 按請求付費定價
+* 全域複製選項
+* 邊緣相容
+
+### 資料持久化 {/* #data-persistence */}
+
+Upstash 提供：
+
+* 自動資料持久化
+* 時間點恢復
+* 跨區域複製選項
+
+### 性能考慮因素 {/* #performance-considerations */}
+
+為了獲得最佳性能：
+
+*
+* 監控Redis記憶體使用情況
+* 如果需要，請考慮資料過期策略
+
+## 使用範例 {/* #usage-example */}
+
+### 為Agent添加內存 {/* #adding-memory-to-an-agent */}
+
+若要將 Upstash 記憶體新增至Agent，請使用`Memory` class and create a new `storage` key using `UpstashStore` and a new `vector` key using `UpstashVector`. The configuration can point to either a remote service or a local setup.
+
+```typescript title="src/mastra/agents/example-upstash-agent.ts"
+import { Memory } from '@mastra/memory'
+import { Agent } from '@mastra/core/agent'
+import { UpstashStore } from '@mastra/upstash'
+
+export const upstashAgent = new Agent({
+  id: 'upstash-agent',
+  name: 'Upstash Agent',
+  instructions:
+    'You are an AI agent with the ability to automatically recall memories from previous interactions.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  memory: new Memory({
+    storage: new UpstashStore({
+      id: 'upstash-agent-storage',
+      url: process.env.UPSTASH_REDIS_REST_URL!,
+      token: process.env.UPSTASH_REDIS_REST_TOKEN!,
+    }),
+    options: {
+      generateTitle: true, // Explicitly enable automatic title generation
+    },
+  }),
+})
+```
+
+### 使用Agent {/* #using-the-agent */}
+
+使用`memoryOptions` to scope recall for this request. Set `lastMessages: 5` to limit recency-based recall, and use `semanticRecall` to fetch the `topK: 3` most relevant messages, including `messageRange: 2` neighboring messages for context around each match.
+
+```typescript title="src/test-upstash-agent.ts"
+import 'dotenv/config'
+
+import { mastra } from './mastra'
+
+const threadId = '123'
+const resourceId = 'user-456'
+
+const agent = mastra.getAgent('upstashAgent')
+
+const message = await agent.stream('My name is Mastra', {
+  memory: {
+    thread: threadId,
+    resource: resourceId,
+  },
+})
+
+await message.textStream.pipeTo(new WritableStream())
+
+const stream = await agent.stream("What's my name?", {
+  memory: {
+    thread: threadId,
+    resource: resourceId,
+  },
+  memoryOptions: {
+    lastMessages: 5,
+    semanticRecall: {
+      topK: 3,
+      messageRange: 2,
+    },
+  },
+})
+
+for await (const chunk of stream.textStream) {
+  process.stdout.write(chunk)
+}
+```

@@ -1,0 +1,138 @@
+---
+title: "Discord | Channels"
+description: "Connect a Mastra agent to Discord interactions and bot messages by installing the adapter, configuring the agent, and exposing a webhook route."
+packages:
+  - "@mastra/core"
+  - "@mastra/connect"
+---
+
+import DiscordConnectTools from "@site/src/components/connect/generated/discord.mdx";
+
+# 不和谐
+
+通过两种方式将 Discord 与 Mastra 结合使用：
+
+* **AgentTool**让Agent在 Discord 服务器中运行，例如发送消息或管理频道。
+* **Agent聊天**让人们通过机器人消息和交互（例如斜线命令和按钮）在 Discord 中与您的Agent交谈。
+
+[马斯特拉连接](/docs/mastra-platform/connect)通过一个 Discord 机器人设置两者，并将其代币保留在 Mastra 平台上。对于Agent聊天，您还可以自行管理机器人凭据。
+
+## 连接 {/* #connect */}
+
+在开始之前，请完成[Connect setup](/docs/mastra-platform/connect#get-started) to install `@mastra/connect` and configure your platform project.
+
+一`discord` connection provides both agent tools and agent chat. It uses a **bot token**, not a user OAuth token.
+
+### 创建一个 Discord 机器人 {/* #create-a-discord-bot */}
+
+1. 在[Discord Developer Portal](https://discord.com/developers/applications), create an application.
+2. 打开**Bot**, add a bot, then select **Reset Token** and copy the bot token.
+3. 对于Agent聊天，启用**Message Content Intent** under **Privileged Gateway Intents**.
+
+什么时候`mastra connect add discord` asks for a credential, enter the bot token.
+
+<DiscordConnectTools />
+
+### Agent聊天 {/* #agent-chat */}
+
+您的服务器需要一个公共 URL，Discord 可以访问该 URL 以进行 Webhook 传递和 OAuth 回调。 Mastra 平台提供此 URL。当您在其他地方托管时，请设置`MASTRA_SERVER_URL` to your public server URL. For local development, use a public HTTPS tunnel.
+
+1. 如果您尚未添加连接，请运行`mastra connect add discord` and enter the bot token.
+
+2. 经过[`channels()`](/reference/connect/channels) to the `Mastra` constructor. It registers the Discord channel provider and its routes:
+
+   ```typescript title="src/mastra/index.ts"
+   import { Mastra } from '@mastra/core'
+   import { channels } from '@mastra/connect'
+   import { assistant } from './agents/assistant'
+
+   export const mastra = new Mastra({
+     agents: { assistant },
+     channels: await channels({ providers: ['discord'] }),
+   })
+   ```
+
+   要也注册其他频道，请将其Provider ID 添加到`providers`.
+
+3. 启动您的 Mastra 申请。
+
+4. 在 Studio 中，将 Discord 通道连接到Agent。如果机器人尚未位于服务器中，请打开生成的授权 URL，选择服务器并批准请求的权限。
+
+Discord 使用网关来发送消息，使用 HTTP 交互路由来发送斜杠命令和按钮。看[Discord permissions](/reference/connect/channels#discord-permissions) for the scopes and permissions requested by the bot invite.
+
+## 自我管理设置 {/* #self-managed-setup */}
+
+将 Chat SDK Discord 适配器与您自己的 Discord 应用程序和凭据结合使用。
+
+### 安装适配器 {/* #install-the-adapter */}
+
+从 Chat SDK 安装 Discord 适配器：
+
+```bash npm2yarn
+npm install @chat-adapter/discord
+```
+
+### Agent配置 {/* #agent-configuration */}
+
+添加`createDiscordAdapter()` to the agent's `channels.adapters` object:
+
+```typescript title="src/mastra/agents/discord-agent.ts"
+import { Agent } from '@mastra/core/agent'
+import { createDiscordAdapter } from '@chat-adapter/discord'
+
+export const discordAgent = new Agent({
+  id: 'discord-agent',
+  name: 'Discord Agent',
+  instructions: 'Answer questions and help with tasks in Discord.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  channels: {
+    adapters: {
+      discord: createDiscordAdapter(),
+    },
+  },
+})
+```
+
+在 Mastra 实例上注册Agent：
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { discordAgent } from './agents/discord-agent'
+
+export const mastra = new Mastra({
+  agents: { discordAgent },
+})
+```
+
+### 适配器设置 {/* #adapter-setup */}
+
+遵循[Chat SDK Discord adapter docs](https://chat-sdk.dev/adapters/official/discord) for Discord-specific setup, including application creation, bot tokens, interaction endpoints, permissions, and Gateway behavior.
+
+适配器从环境变量中读取 Discord 凭据，例如：
+
+```bash title=".env"
+DISCORD_BOT_TOKEN=your-discord-bot-token
+DISCORD_PUBLIC_KEY=your-discord-application-public-key
+DISCORD_APPLICATION_ID=your-discord-application-id
+```
+
+### 网络钩子 URL {/* #webhook-url */}
+
+Mastra 根据Agent ID 和适配器密钥生成 Discord Webhook 路由：
+
+```text
+/api/agents/discord-agent/channels/discord/webhook
+```
+
+使用您的公共 Mastra 服务器 URL 作为基本 URL：
+
+```text
+https://your-app.example.com/api/agents/discord-agent/channels/discord/webhook
+```
+
+在 Discord 适配器文档要求交互端点或 Webhook URL 的任何地方使用此 URL。 Discord 常规消息事件可能需要在生成的 Webhook 路由之外设置网关。请遵循该路径的聊天 SDK 适配器文档。
+
+## 有关的 {/* #related */}
+
+* [渠道概览](/docs/channels)
+* [更多的](/docs/channels#other-adapters)

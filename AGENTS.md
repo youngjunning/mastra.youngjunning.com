@@ -6,7 +6,7 @@ This repository is based on the `docs/` snapshot from
 [`mastra-ai/mastra`](https://github.com/mastra-ai/mastra) `main` at commit
 `f33264f517ae603279afd5c4251e2b40f6dd3618` (synced 2026-08-09).
 
-For upstream English and Simplified Chinese sync, batch planning, or progress
+For upstream English and Chinese locale sync, batch planning, or progress
 checks, read `.codex/skills/mastra-doc-sync/SKILL.md`. For translation of
 selected pages, also read `.codex/skills/translation/SKILL.md`. Current source
 and progress are recorded in `UPSTREAM.md` and `UPSTREAM_INCREMENTAL.json`.

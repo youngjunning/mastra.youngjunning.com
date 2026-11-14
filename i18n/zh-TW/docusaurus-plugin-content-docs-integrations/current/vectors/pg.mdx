@@ -1,0 +1,730 @@
+---
+title: "PG | Vector Stores"
+description: "Run pgvector similarity search inside PostgreSQL from Mastra with HNSW or IVFFlat indexing, metadata filtering, and direct connection pool access."
+packages:
+  - "@mastra/pg"
+---
+
+# PG向量存儲
+
+PgVector 類別提供向量搜索[PostgreSQL](https://www.postgresql.org/)和[PG向量](https://github.com/pgvector/pgvector)擴大。它在您現有的 PostgreSQL 資料庫中提供可靠的向量相似性搜尋功能。
+
+## 建構函數選項 {/* #constructor-options */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'id',
+  type: 'string',
+  description: 'Unique identifier for this vector store instance',
+},
+{
+  name: 'connectionString',
+  type: 'string',
+  description: 'PostgreSQL connection URL',
+  isOptional: true,
+},
+{
+  name: 'host',
+  type: 'string',
+  description: 'PostgreSQL server host',
+  isOptional: true,
+},
+{
+  name: 'port',
+  type: 'number',
+  description: 'PostgreSQL server port',
+  isOptional: true,
+},
+{
+  name: 'database',
+  type: 'string',
+  description: 'PostgreSQL database name',
+  isOptional: true,
+},
+{
+  name: 'user',
+  type: 'string',
+  description: 'PostgreSQL user',
+  isOptional: true,
+},
+{
+  name: 'password',
+  type: 'string',
+  description: 'PostgreSQL password',
+  isOptional: true,
+},
+{
+  name: 'ssl',
+  type: 'boolean | ConnectionOptions',
+  description: 'Enable SSL or provide custom SSL configuration',
+  isOptional: true,
+},
+{
+  name: 'schemaName',
+  type: 'string',
+  description:
+    'The name of the schema you want the vector store to use. Will use the default schema if not provided.',
+  isOptional: true,
+},
+{
+  name: 'max',
+  type: 'number',
+  description: 'Maximum number of pool connections (default: 20)',
+  isOptional: true,
+},
+{
+  name: 'idleTimeoutMillis',
+  type: 'number',
+  description: 'Idle connection timeout in milliseconds (default: 30000)',
+  isOptional: true,
+},
+{
+  name: 'pgPoolOptions',
+  type: 'PoolConfig',
+  description: 'Additional pg pool configuration options',
+  isOptional: true,
+},
+{
+  name: 'disableInit',
+  type: 'boolean',
+  description:
+    'When true, automatic DDL (schema, extension, table, and index creation) inside `createIndex` is skipped. Useful for CI/CD pipelines where schema and indexes are managed separately and the runtime database role lacks DDL privileges. Can also be enabled with the `MASTRA_DISABLE_STORAGE_INIT` environment variable.',
+  isOptional: true,
+  defaultValue: 'false',
+},
+]}
+/>
+
+## 構造函數範例 {/* #constructor-examples */}
+
+### 連接字串 {/* #connection-string */}
+
+```ts
+import { PgVector } from '@mastra/pg'
+
+const vectorStore = new PgVector({
+  id: 'pg-vector',
+  connectionString: 'postgresql://user:password@localhost:5432/mydb',
+})
+```
+
+### 主機/連接埠/資料庫配置 {/* #hostportdatabase-configuration */}
+
+```ts
+const vectorStore = new PgVector({
+  id: 'pg-vector',
+  host: 'localhost',
+  port: 5432,
+  database: 'mydb',
+  user: 'postgres',
+  password: 'password',
+})
+```
+
+### 進階配置 {/* #advanced-configuration */}
+
+```ts
+const vectorStore = new PgVector({
+  id: 'pg-vector',
+  connectionString: 'postgresql://user:password@localhost:5432/mydb',
+  schemaName: 'custom_schema',
+  max: 30,
+  idleTimeoutMillis: 60000,
+  pgPoolOptions: {
+    connectionTimeoutMillis: 5000,
+    allowExitOnIdle: true,
+  },
+})
+```
+
+## 方法 {/* #methods */}
+
+### `createIndex()` {/* #createindex */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index to create',
+},
+{
+  name: 'dimension',
+  type: 'number',
+  description: 'Vector dimension (must match your embedding model)',
+},
+{
+  name: 'metric',
+  type: "'cosine' | 'euclidean' | 'dotproduct' | 'hamming' | 'jaccard'",
+  isOptional: true,
+  defaultValue: "'cosine' ('hamming' when vectorType is 'bit')",
+  description:
+    "Distance metric for similarity search. 'hamming' and 'jaccard' are only valid with vectorType 'bit', and 'jaccard' requires an HNSW index.",
+},
+{
+  name: 'vectorType',
+  type: "'vector' | 'halfvec' | 'bit' | 'sparsevec'",
+  isOptional: true,
+  defaultValue: 'vector',
+  description: 'pgvector storage type for the embeddings',
+},
+{
+  name: 'indexConfig',
+  type: 'IndexConfig',
+  isOptional: true,
+  defaultValue: "{ type: 'ivfflat' }",
+  description: 'Index configuration',
+},
+{
+  name: 'buildIndex',
+  type: 'boolean',
+  isOptional: true,
+  defaultValue: 'true',
+  description: 'Whether to build the index',
+},
+{
+  name: 'metadataIndexes',
+  type: 'string[]',
+  isOptional: true,
+  description:
+    'Array of metadata field names to create btree indexes on. Improves query performance when filtering by these metadata fields.',
+},
+]}
+/>
+
+#### `IndexConfig` {/* #indexconfig */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'type',
+  type: "'flat' | 'hnsw' | 'ivfflat'",
+  description: 'Index type',
+  defaultValue: 'ivfflat',
+  properties: [
+    {
+      type: 'string',
+      parameters: [
+        {
+          name: 'flat',
+          type: 'flat',
+          description: 'Sequential scan (no index) that performs exhaustive search.',
+        },
+        {
+          name: 'ivfflat',
+          type: 'ivfflat',
+          description: 'Clusters vectors into lists for approximate search.',
+        },
+        {
+          name: 'hnsw',
+          type: 'hnsw',
+          description: 'Graph-based index offering fast search times and high recall.',
+        },
+      ],
+    },
+  ],
+},
+{
+  name: 'ivf',
+  type: 'IVFConfig',
+  isOptional: true,
+  description: 'IVF configuration',
+  properties: [
+    {
+      type: 'object',
+      parameters: [
+        {
+          name: 'lists',
+          type: 'number',
+          description:
+            'Number of lists. If not specified, automatically calculated based on dataset size. (Minimum 100, Maximum 4000)',
+          isOptional: true,
+        },
+      ],
+    },
+  ],
+},
+{
+  name: 'hnsw',
+  type: 'HNSWConfig',
+  isOptional: true,
+  description: 'HNSW configuration',
+  properties: [
+    {
+      type: 'object',
+      parameters: [
+        {
+          name: 'm',
+          type: 'number',
+          description: 'Maximum number of connections per node (default: 8)',
+          isOptional: true,
+        },
+        {
+          name: 'efConstruction',
+          type: 'number',
+          description: 'Build-time complexity (default: 32)',
+          isOptional: true,
+        },
+      ],
+    },
+  ],
+},
+]}
+/>
+
+#### 記憶體需求 {/* #memory-requirements */}
+
+HNSW 索引在建置期間需要大量共享記憶體。對於 100K 向量：
+
+* 小尺寸 (64d)：預設設定約 60MB
+* 中等尺寸 (256d)：預設約 180MB
+* 大尺寸 (384d+)：預設值約 250MB+
+
+
+
+### `upsert()` {/* #upsert */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index to upsert vectors into',
+},
+{
+  name: 'vectors',
+  type: 'number[][]',
+  description: 'Array of embedding vectors',
+},
+{
+  name: 'metadata',
+  type: 'Record<string, any>[]',
+  isOptional: true,
+  description: 'Metadata for each vector',
+},
+{
+  name: 'ids',
+  type: 'string[]',
+  isOptional: true,
+  description: 'Optional vector IDs (auto-generated if not provided)',
+},
+]}
+/>
+
+### `query()` {/* #query */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index to query',
+},
+{
+  name: 'queryVector',
+  type: 'number[]',
+  description: 'Query vector',
+},
+{
+  name: 'topK',
+  type: 'number',
+  isOptional: true,
+  defaultValue: '10',
+  description: 'Number of results to return',
+},
+{
+  name: 'filter',
+  type: 'Record<string, any>',
+  isOptional: true,
+  description: 'Metadata filters',
+},
+{
+  name: 'includeVector',
+  type: 'boolean',
+  isOptional: true,
+  defaultValue: 'false',
+  description: 'Whether to include the vector in the result',
+},
+{
+  name: 'minScore',
+  type: 'number',
+  isOptional: true,
+  defaultValue: '-1',
+  description: 'Minimum similarity score threshold',
+},
+{
+  name: 'ef',
+  type: 'number',
+  isOptional: true,
+  description: 'HNSW search parameter. Higher values improve accuracy at the cost of speed.',
+},
+{
+  name: 'probes',
+  type: 'number',
+  isOptional: true,
+  description: 'IVFFlat search parameter. Number of lists to visit during search.',
+},
+]}
+/>
+
+### `listIndexes()` {/* #listindexes */}
+
+以字串形式傳回索引名稱數組。
+
+### `describeIndex()` {/* #describeindex */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index to describe',
+},
+]}
+/>
+
+返回：
+
+```typescript
+interface PGIndexStats {
+  dimension: number
+  count: number
+  metric: 'cosine' | 'euclidean' | 'dotproduct' | 'hamming' | 'jaccard'
+  type: 'flat' | 'hnsw' | 'ivfflat'
+  vectorType: 'vector' | 'halfvec' | 'bit' | 'sparsevec'
+  config: {
+    m?: number
+    efConstruction?: number
+    lists?: number
+    probes?: number
+  }
+}
+```
+
+`count`是一個精確的`SELECT COUNT(*)`, which scans the whole table, so avoid calling `describeIndex()` on a hot path for a large index. Reads and writes never pay for it: they only use the index metadata, which comes from the Postgres catalog.
+
+### `deleteIndex()` {/* #deleteindex */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index to delete',
+},
+]}
+/>
+
+### `truncateIndex()` {/* #truncateindex */}
+
+刪除索引中的每個向量，同時保留索引本身。
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index to clear',
+},
+]}
+/>
+
+```typescript
+await vectorStore.truncateIndex({ indexName: 'my_vectors' })
+```
+
+### `updateVector()` {/* #updatevector */}
+
+透過 ID 或元資料過濾器更新單一向量。任何一個`id` or `filter` must be provided, but not both.
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index containing the vector',
+},
+{
+  name: 'id',
+  type: 'string',
+  isOptional: true,
+  description: 'ID of the vector to update (mutually exclusive with filter)',
+},
+{
+  name: 'filter',
+  type: 'Record<string, any>',
+  isOptional: true,
+  description: 'Metadata filter to identify vector(s) to update (mutually exclusive with id)',
+},
+{
+  name: 'update',
+  type: '{ vector?: number[]; metadata?: Record<string, any>; }',
+  description: 'Object containing the vector and/or metadata to update',
+},
+]}
+/>
+
+透過 ID 或過濾器更新現有向量。更新物件中必須至少提供向量或元資料之一。
+
+```typescript
+// Update by ID
+await pgVector.updateVector({
+  indexName: 'my_vectors',
+  id: 'vector123',
+  update: {
+    vector: [0.1, 0.2, 0.3],
+    metadata: { label: 'updated' },
+  },
+})
+
+// Update by filter
+await pgVector.updateVector({
+  indexName: 'my_vectors',
+  filter: { category: 'product' },
+  update: {
+    metadata: { status: 'reviewed' },
+  },
+})
+```
+
+### `deleteVector()` {/* #deletevector */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index containing the vector',
+},
+{
+  name: 'id',
+  type: 'string',
+  description: 'ID of the vector to delete',
+},
+]}
+/>
+
+從指定索引中按 ID 刪除單一向量。
+
+```typescript
+await pgVector.deleteVector({ indexName: 'my_vectors', id: 'vector123' })
+```
+
+### `deleteVectors()` {/* #deletevectors */}
+
+透過 ID 或元資料過濾器刪除多個向量。任何一個`ids` or `filter` must be provided, but not both.
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index containing the vectors to delete',
+},
+{
+  name: 'ids',
+  type: 'string[]',
+  isOptional: true,
+  description: 'Array of vector IDs to delete (mutually exclusive with filter)',
+},
+{
+  name: 'filter',
+  type: 'Record<string, any>',
+  isOptional: true,
+  description: 'Metadata filter to identify vectors to delete (mutually exclusive with ids)',
+},
+]}
+/>
+
+### `disconnect()` {/* #disconnect */}
+
+關閉資料庫連線池。使用商店後應調用。
+
+### `buildIndex()` {/* #buildindex */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index to define',
+},
+{
+  name: 'metric',
+  type: "'cosine' | 'euclidean' | 'dotproduct' | 'hamming' | 'jaccard'",
+  isOptional: true,
+  defaultValue: 'cosine',
+  description: 'Distance metric for similarity search',
+},
+{
+  name: 'indexConfig',
+  type: 'IndexConfig',
+  description: 'Configuration for the index type and parameters',
+},
+]}
+/>
+
+使用指定的指標和配置來建立或重建索引。在建立新索引之前將刪除任何現有索引。
+
+```typescript
+// Define HNSW index
+await pgVector.buildIndex('my_vectors', 'cosine', {
+  type: 'hnsw',
+  hnsw: {
+    m: 8,
+    efConstruction: 32,
+  },
+})
+
+// Define IVF index
+await pgVector.buildIndex('my_vectors', 'cosine', {
+  type: 'ivfflat',
+  ivf: {
+    lists: 100,
+  },
+})
+
+// Define flat index
+await pgVector.buildIndex('my_vectors', 'cosine', {
+  type: 'flat',
+})
+```
+
+## 回應類型 {/* #response-types */}
+
+查詢結果以如下格式傳回：
+
+```typescript
+interface QueryResult {
+  id: string
+  score: number
+  metadata: Record<string, any>
+  vector?: number[] // Only included if includeVector is true
+}
+```
+
+## 錯誤處理 {/* #error-handling */}
+
+店裡丟`MastraError` instances from `@mastra/core/error`:
+
+```typescript
+import { MastraError } from '@mastra/core/error'
+
+try {
+  await store.query({
+    indexName: 'index_name',
+    queryVector: queryVector,
+  })
+} catch (error) {
+  if (error instanceof MastraError) {
+    console.log(error.id) // 'MASTRA_VECTOR_PG_QUERY_FAILED'
+    console.log(error.domain) // 'MASTRA_VECTOR'
+    console.log(error.category) // 'USER' | 'THIRD_PARTY'
+    console.log(error.details) // Additional error context
+  }
+}
+```
+
+## 索引配置指南 {/* #index-configuration-guide */}
+
+### 效能最佳化 {/* #performance-optimization */}
+
+#### IVF平面調諧 {/* #ivfflat-tuning */}
+
+* **列出參數**：設定為`sqrt(n) * 2` where n is the number of vectors
+* 更多列表 = 更高的準確性，但構建時間更慢
+* 更少的列表 = 更快的構建，但可能會降低準確性
+
+#### HNSW 調整 {/* #hnsw-tuning */}
+
+* **m參數**:
+  * 8-16：中等精度，較低內存
+  * 16-32：精度高，記憶體適中
+  * 32-64：非常高精度，高內存
+* **ef建築**:
+  * 32-64：建造速度快，品質好
+  * 64-128：建造速度較慢，品質較好
+  * 128-256：最慢的構建，最好的質量
+
+### 休閒行為指數 {/* #index-recreation-behavior */}
+
+系統自動偵測配置更改，僅在必要時重建索引：
+
+* 相同配置：保留索引（不重新建立）
+* 更改的配置：索引被刪除並重建
+* 這可以防止不必要的索引重新建立帶來的效能問題
+
+## 最佳實踐 {/* #best-practices */}
+
+* 定期評估您的索引配置以確保最佳效能。
+* 調整參數如`lists` and `m` based on dataset size and query requirements.
+* **監控指數表現**使用`describeIndex()` to track usage
+* 定期重建索引以保持效率，尤其是在大量資料變更之後
+
+## 直接訪問泳池 {/* #direct-pool-access */}
+
+這`PgVector` class exposes its underlying PostgreSQL connection pool as a public field:
+
+```typescript
+pgVector.pool // instance of pg.Pool
+```
+
+直接池存取支援進階操作，例如直接 SQL 查詢、交易或池狀態監視。直接使用池時：
+
+* 您負責釋放客戶（`client.release()`) after use.
+* 呼叫後泳池仍可訪問`disconnect()`, but new queries will fail.
+* 直接存取繞過 PgVector 方法提供的任何驗證或事務邏輯。
+
+此設計支援高階用例，但需要使用者仔細管理資源。
+
+## 使用範例 {/* #usage-example */}
+
+### 使用 fastembed 進行本地嵌入 {/* #local-embeddings-with-fastembed */}
+
+嵌入是記憶體使用的數字向量`semanticRecall` to retrieve related messages by meaning (not keywords). This setup uses `@mastra/fastembed` to generate vector embeddings.
+
+安裝`fastembed` to get started:
+
+```bash npm2yarn
+npm install @mastra/fastembed@latest
+```
+
+將以下內容新增至您的Agent程式：
+
+```typescript title="src/mastra/agents/example-pg-agent.ts"
+import { Memory } from '@mastra/memory'
+import { Agent } from '@mastra/core/agent'
+import { PostgresStore, PgVector } from '@mastra/pg'
+import { fastembed } from '@mastra/fastembed'
+
+export const pgAgent = new Agent({
+  id: 'pg-agent',
+  name: 'PG Agent',
+  instructions:
+    'You are an AI agent with the ability to automatically recall memories from previous interactions.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  memory: new Memory({
+    storage: new PostgresStore({
+      id: 'pg-agent-storage',
+      connectionString: process.env.DATABASE_URL!,
+    }),
+    vector: new PgVector({
+      id: 'pg-agent-vector',
+      connectionString: process.env.DATABASE_URL!,
+    }),
+    embedder: fastembed,
+    options: {
+      lastMessages: 10,
+      semanticRecall: {
+        topK: 3,
+        messageRange: 2,
+      },
+    },
+  }),
+})
+```
+
+## 有關的 {/* #related */}
+
+* [元資料過濾器](/reference/rag/metadata-filters)

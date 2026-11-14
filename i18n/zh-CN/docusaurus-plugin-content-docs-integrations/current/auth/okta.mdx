@@ -1,0 +1,257 @@
+---
+title: "Okta | Auth"
+description: "Secure Mastra APIs and Studio with Okta OAuth, encrypted cookie sessions, group-to-role RBAC mapping, and authenticated client requests."
+packages:
+  - "@mastra/auth-okta"
+---
+
+import Tabs from "@theme/Tabs";
+import TabItem from "@theme/TabItem";
+
+# 奥克塔
+
+这`@mastra/auth-okta`包使用 Okta 为 Mastra 提供身份验证和基于角色的访问控制。它支持带有加密会话 cookie 的 OAuth 2.0 / OIDC 登录流程，并将 Okta 组映射到 Mastra 权限。
+
+## 先决条件 {/* #prerequisites */}
+
+本指南使用 Okta 身份验证。确保：
+
+1. 创建一个 Okta 帐户：[okta.com](https://www.okta.com/)
+2. 在 Okta 管理控制台中设置 OAuth 应用程序（Web 应用程序、授权代码授予）
+3. 将重定向 URI 添加到应用程序的登录重定向 URI
+4. 创建 API 令牌（RBAC 所需）
+
+确保您的环境变量已设置。
+
+```env title=".env"
+OKTA_DOMAIN=dev-123456.okta.com
+OKTA_CLIENT_ID=your-client-id
+OKTA_CLIENT_SECRET=your-client-secret
+OKTA_REDIRECT_URI=http://localhost:4111/api/auth/callback
+OKTA_COOKIE_PASSWORD=a-random-string-at-least-32-characters-long
+OKTA_API_TOKEN=your-api-token
+```
+
+：：：笔记
+
+`OKTA_COOKIE_PASSWORD`加密会话cookie。如果省略，则使用自动生成的值，该值在服务器重新启动后不会保留。为生产明确设置它。
+
+`OKTA_API_TOKEN`仅在使用时需要`MastraRBACOkta` to map Okta groups to permissions.
+
+:::
+
+## 安装 {/* #installation */}
+
+```bash npm2yarn
+npm install @mastra/auth-okta
+```
+
+## 使用示例 {/* #usage-examples */}
+
+### 环境变量的基本用法 {/* #basic-usage-with-environment-variables */}
+
+设置上面的环境变量后，所有构造函数参数都是可选的：
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { MastraAuthOkta } from '@mastra/auth-okta'
+
+export const mastra = new Mastra({
+  server: {
+    auth: new MastraAuthOkta(),
+  },
+})
+```
+
+### 使用 RBAC 进行身份验证 {/* #auth-with-rbac */}
+
+：：：笔记
+
+RBAC 在生产中需要 Mastra Enterprise Edition (EE) 许可证。它在开发过程中无需许可证即可运行。看[what requires an EE license](/docs/license#what-requires-an-ee-license). [Contact sales](https://mastra.ai/contact) for more information.
+
+:::
+
+添加`MastraRBACOkta` to map Okta groups to Mastra permissions:
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { MastraAuthOkta, MastraRBACOkta } from '@mastra/auth-okta'
+
+export const mastra = new Mastra({
+  server: {
+    auth: new MastraAuthOkta(),
+    rbac: new MastraRBACOkta({
+      roleMapping: {
+        Admin: ['*'],
+        Engineering: ['agents:*', 'workflows:*', 'tools:*'],
+        Viewer: ['agents:read', 'workflows:read'],
+        _default: [], // users with unmapped groups get no permissions
+      },
+    }),
+  },
+})
+```
+
+### 跨Provider使用 {/* #cross-provider-usage */}
+
+使用不同的身份验证提供程序（Auth0、Clerk 等）进行登录，使用 Okta 进行 RBAC。通过一个`getUserId` function to resolve the Okta user ID from the other provider's user object:
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { MastraAuthAuth0 } from '@mastra/auth-auth0'
+import { MastraRBACOkta } from '@mastra/auth-okta'
+
+export const mastra = new Mastra({
+  server: {
+    auth: new MastraAuthAuth0(),
+    rbac: new MastraRBACOkta({
+      getUserId: user => user.metadata?.oktaUserId || user.email,
+      roleMapping: {
+        Engineering: ['agents:*', 'workflows:*'],
+        Admin: ['*'],
+        _default: [],
+      },
+    }),
+  },
+})
+```
+
+：：：笔记
+
+要链接Provider之间的用户，请将 Okta 用户 ID 存储在其他Provider的用户元数据中。 Mastra 使用此 ID 从 Okta 获取组。
+
+:::
+
+访问[MastraAuthOkta](/reference/auth/okta) for all available configuration options.
+
+## 角色映射 {/* #role-mapping */}
+
+这`roleMapping` option maps Okta group names to arrays of Mastra permission strings. Permissions follow a `resource:action` pattern and support wildcards:
+
+```typescript
+const rbac = new MastraRBACOkta({
+  roleMapping: {
+    // full access to everything
+    Admin: ['*'],
+
+    // full access to agents and workflows
+    Engineering: ['agents:*', 'workflows:*'],
+
+    // read-only access
+    Viewer: ['agents:read', 'workflows:read'],
+
+    // users whose groups don't match any key above
+    _default: [],
+  },
+})
+```
+
+这`_default` key assigns permissions to users whose Okta groups don't match any other key.
+
+## 客户端设置 {/* #client-side-setup */}
+
+启用身份验证后，对 Mastra 路由的请求需要身份验证。`MastraAuthOkta` uses SSO, so users authenticate through Okta's hosted login page. After login, an encrypted session cookie is set automatically.
+
+### Cookie 会话（推荐） {/* #cookie-session-recommended */}
+
+对于跨源请求（例如前端`:3000` calling Mastra on `:4111`), enable CORS credentials on the Mastra server:
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+
+export const mastra = new Mastra({
+  server: {
+    auth: new MastraAuthOkta(),
+    cors: {
+      origin: 'http://localhost:3000',
+      credentials: true,
+    },
+  },
+})
+```
+
+配置客户端以包含凭据：
+
+```typescript title="lib/mastra-client.ts"
+import { MastraClient } from '@mastra/client-js'
+
+export const mastraClient = new MastraClient({
+  baseUrl: 'http://localhost:4111',
+  credentials: 'include',
+})
+```
+
+### 不记名令牌 {/* #bearer-token */}
+
+您还可以将 Okta 令牌作为不记名令牌传递。该令牌根据 Okta 的 JWKS 端点进行验证，其`aud` claim must match the configured audience. The audience defaults to your client ID, and you can override it with the `audience` option or `OKTA_AUDIENCE`.
+
+Okta 将客户端 ID 放入`aud` claim of **ID tokens**, so ID tokens work with the default. **Access tokens** carry the audience of the authorization server that issued them, so set the audience to match:
+
+* **组织授权服务器**（默认，发行人`https://{domain}`): set the audience to `https://{domain}`.
+* **自定义授权服务器**（发行人`https://{domain}/oauth2/{name}`): set the audience to the server's audience value from the Okta Admin Console, for example `api://default`.
+
+```env title=".env"
+OKTA_AUDIENCE=https://dev-123456.okta.com
+```
+
+传递一个数组以接受多个受众，例如来自浏览器的 ID 令牌和来自同一提供者的服务调用者的访问令牌：
+
+```typescript title="src/mastra/index.ts"
+new MastraAuthOkta({
+  audience: ['your-client-id', 'https://dev-123456.okta.com'],
+})
+```
+
+：：：笔记
+
+`audience`仅适用于不记名令牌。 SSO 登录流程期间交换的 ID 令牌始终根据您的客户端 ID 进行验证。
+
+:::
+
+```typescript title="lib/mastra-client.ts"
+import { MastraClient } from '@mastra/client-js'
+
+export const createMastraClient = (token: string) => {
+  return new MastraClient({
+    baseUrl: 'http://localhost:4111',
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  })
+}
+```
+
+访问[Mastra Client SDK](/docs/server/mastra-client) for more configuration options.
+
+### 发出经过身份验证的请求 {/* #making-authenticated-requests */}
+
+<Tabs>
+  <TabItem value="client" label="MastraClient">
+    ```typescript title="src/api/agents.ts"
+    import { mastraClient } from '../lib/mastra-client'
+
+    const agent = mastraClient.getAgent('weatherAgent')
+    const response = await agent.generate('Weather in London')
+    console.log(response)
+    ```
+  </TabItem>
+
+  <TabItem value="curl" label="cURL">
+    ```bash
+    curl -X POST http://localhost:4111/api/agents/weatherAgent/generate \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer <your-okta-token>" \
+      -d '{
+        "messages": "Weather in London"
+      }'
+    ```
+  </TabItem>
+</Tabs>
+
+## 故障排除 {/* #troubleshooting */}
+
+* **每个请求均返回 401**：验证您的 Okta 域、客户端 ID 和客户端密钥是否正确。检查 Okta 应用程序中的重定向 URI 是否匹配`OKTA_REDIRECT_URI`.
+* **第401章`unexpected "aud" claim value` in the server logs**：承载令牌的受众与配置的受众不匹配。这通常意味着您发送了访问令牌，而受众仍然是默认客户端 ID。放`OKTA_AUDIENCE` to the audience of the authorization server that issued the token. See [Bearer token](#bearer-token).
+* **Cookie 未跨源发送**： 放`credentials: "include"` in `MastraClient` and configure `server.cors` with your frontend origin and `credentials: true`.
+* **重新启动时会话丢失**： 放`OKTA_COOKIE_PASSWORD` to a stable value (at least 32 characters). Without it, an auto-generated key is used that changes on each restart.
+* **RBAC 返回空权限**： 核实`OKTA_API_TOKEN` is set and the token has permission to list user groups. Check that group names in `roleMapping` match your Okta group names exactly.

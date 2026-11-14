@@ -1,0 +1,357 @@
+---
+title: "Streaming"
+description: "Stream incremental responses from Mastra agents and workflows, consume text and structured output, handle events, and integrate with AI SDK interfaces."
+packages:
+  - "@mastra/core"
+  - "@mastra/ai-sdk"
+---
+
+# 流媒体
+
+Mastra 支持来自Agent和Workflow程的实时增量响应，允许用户在生成时查看输出，而不是等待完成。这对于聊天、长格式内容、多步骤Workflow程或任何需要即时反馈的场景非常有用。
+
+## 入门 {/* #getting-started */}
+
+[`Agent.stream()`](/reference/streaming/agents/stream)是Agent的标准流 API。它返回一个`MastraModelOutput` that exposes `textStream`对于渐进式文本和承诺，例如`text`, `steps`， 和`usage`当流结束时解决。
+
+## 与Agent进行流式传输 {/* #streaming-with-agents */}
+
+传递一个字符串作为基本提示。提供多个上下文时，请使用字符串数组。消息对象数组`role` and `content` gives you precise control over roles and conversational flow.
+
+### 使用`Agent.stream()` {/* #using-agentstream */}
+
+一个`textStream` breaks the response into chunks as it's generated, allowing output to stream progressively instead of arriving all at once. Iterate over the `textStream` using a `for await` loop to inspect each stream chunk.
+
+```typescript
+const testAgent = mastra.getAgent('testAgent')
+
+const stream = await testAgent.stream([{ role: 'user', content: 'Help me organize my day' }])
+
+for await (const chunk of stream.textStream) {
+  process.stdout.write(chunk)
+}
+```
+
+访问[Agent.stream()](/reference/streaming/agents/stream) for more information.
+
+：：：提示
+
+对于派遣的Agent商[background tasks](/docs/harness/background-tasks), use `stream()` with the [`untilIdle` option](/reference/streaming/agents/stream#parameters), such as `untilIdle: true`, to keep the stream open until those tasks complete and the agent has had a chance to respond to their results. This option requires agent memory.
+
+:::
+
+### 输出来自`Agent.stream()` {/* #output-from-agentstream */}
+
+输出流传输Agent生成的响应。
+
+```text
+Of course!
+To help you organize your day effectively, I need a bit more information.
+Here are some questions to consider:
+...
+```
+
+### Agent流属性 {/* #agent-stream-properties */}
+
+Agent流提供对这些响应属性的访问：
+
+* **`stream.textStream`**：发出文本块的可读流。
+* **`stream.text`**：解析为全文响应的承诺。
+* **`stream.steps`**：解决已完成的模型步骤的承诺。
+* **`stream.finishReason`**：解决Agent停止流式传输的原因的承诺。
+* **`stream.usage`**：解析令牌使用信息的承诺。
+* **`stream.objectStream`**&#x548C;**`stream.object`**: Partial and final structured output when `structuredOutput` is passed.
+
+请参阅[`MastraModelOutput` reference](/reference/streaming/agents/MastraModelOutput) for the complete set of properties.
+
+### 人工智能SDK集成 {/* #ai-sdk-integration */}
+
+使用`toAISdkStream()` and `toAISdkMessages()` to convert Mastra streams and stored messages to AI SDK-compatible formats. The converters default to AI SDK v5 for backward compatibility. Pass the version that matches your installed AI SDK, such as `version: 'v7'` for AI SDK v7.
+
+```typescript
+import { toAISdkStream } from '@mastra/ai-sdk'
+
+const testAgent = mastra.getAgent('testAgent')
+const stream = await testAgent.stream([{ role: 'user', content: 'Help me organize my day' }])
+
+const aiSDKStream = toAISdkStream(stream, {
+  from: 'agent',
+  version: 'v7',
+})
+```
+
+将存储的消息转换为`useChat()`'s `initialMessages` with `toAISdkMessages()`:
+
+```typescript
+import { toAISdkMessages } from '@mastra/ai-sdk/ui'
+
+const initialMessages = toAISdkMessages([{ role: 'user', content: 'Hello' }], { version: 'v7' })
+```
+
+对于路由处理程序，请参阅[AI SDK UI](/integrations/agentic-ui/ai-sdk-ui), which covers `handleChatStream()`, `handleWorkflowStream()`, and `handleNetworkStream()`. Pass the version that matches your installed AI SDK to these handlers too. See the [`toAISdkStream()`](/reference/ai-sdk/to-ai-sdk-stream) and [`toAISdkMessages()`](/reference/ai-sdk/to-ai-sdk-messages) references for all options.
+
+## 通过Workflow程进行流式传输 {/* #streaming-with-workflows */}
+
+来自Workflow的流式传输返回描述运行生命周期的结构化事件序列，而不是增量文本块。这种基于事件的格式使得在使用创建运行后可以实时跟踪和响应Workflow程进度`.createRun()`.
+
+### 使用`Run.stream()` {/* #using-runstream */}
+
+这`stream()` method returns a `WorkflowRunOutput`. Its `fullStream` property is a `ReadableStream` of workflow events.
+
+```typescript
+const run = await testWorkflow.createRun()
+
+const stream = run.stream({
+  inputData: {
+    value: 'initial data',
+  },
+})
+
+for await (const chunk of stream.fullStream) {
+  console.log(chunk)
+}
+```
+
+访问[Run.stream()](/reference/streaming/workflows/stream) for more information.
+
+### 输出来自`Run.stream()` {/* #output-from-runstream */}
+
+活动包括`runId` and `from` at the top level, so you can identify the workflow run without inspecting the payload.
+
+```typescript oxfmt:false
+{
+  type: 'workflow-start',
+  runId: '1eeaf01a-d2bf-4e3f-8d1b-027795ccd3df',
+  from: 'WORKFLOW',
+  payload: {
+    workflowId: 'testWorkflow'
+  }
+}
+```
+
+### Workflow流属性 {/* #workflow-stream-properties */}
+
+Workflow流提供对这些响应属性的访问：
+
+* **`stream.status`**：Workflow程运行的状态。
+* **`stream.result`**：Workflow程运行的结果。
+* **`stream.usage`**：Workflow运行的总令牌使用量。
+
+来自Agent或Workflow程的流式传输提供了对 LLM 输出或Workflow程运行状态的实时可见性。将此反馈直接传递给用户，或在应用程序中使用它来显示Workflow状态的变化。
+
+从Agent或Workflow发出的事件代表生成和执行的不同阶段，例如运行开始时、生成文本时或调用Tool时。
+
+## 事件类型 {/* #event-types */}
+
+Agent和Workflow在执行期间发出不同的事件类型。
+
+### Agent活动 {/* #agent-events */}
+
+常见的Agent事件包括：
+
+* **`start`**：Agent运行开始。
+* **`text-start`**, **`text-delta`**, and **`text-end`**: The start and end events mark text generation boundaries. Delta events carry incremental text.
+* **`reasoning-start`**, **`reasoning-delta`**, and **`reasoning-end`**: The start and end events mark reasoning generation boundaries. Delta events carry incremental reasoning.
+* **`tool-call`**&#x548C;**`tool-result`**: A tool is called and returns a result.
+* **`step-start`**&#x548C;**`step-finish`**: A model step begins and ends.
+* **`finish`**：Agent运行完成。
+
+此列表并不详尽。请参阅[`ChunkType` reference](/reference/streaming/ChunkType) for all agent chunk types and payloads.
+
+### Workflow程事件 {/* #workflow-events */}
+
+Workflow事件包括：
+
+* **`workflow-start`**：Workflow程开始运行。
+* **`workflow-step-start`**：Workflow程步骤开始。
+* **`workflow-step-output`**：步骤发出自定义输出。
+* **`workflow-step-progress`**：步骤报告进度。
+* **`workflow-step-result`**：一个步骤完成并产生一个结果。
+* **`workflow-finish`**：Workflow程运行完成。
+* **`workflow-paused`**, **`workflow-step-suspended`**, and **`workflow-canceled`**: The workflow run is interrupted.
+
+请参阅[`Run.stream()` reference](/reference/streaming/workflows/stream) for workflow event details.
+
+## 检查Agent流 {/* #inspecting-agent-streams */}
+
+迭代一遍`stream.fullStream` with a `for await` loop to inspect all emitted event chunks.
+
+```typescript
+const testAgent = mastra.getAgent('testAgent')
+
+const stream = await testAgent.stream([{ role: 'user', content: 'Help me organize my day' }])
+
+for await (const chunk of stream.fullStream) {
+  console.log(chunk)
+}
+```
+
+访问[Agent.stream()](/reference/streaming/agents/stream) for more information.
+
+### Agent输出示例 {/* #example-agent-output */}
+
+以下是可能发出的事件的示例。每个事件总是包含一个`type` and can include additional fields like `from` and `payload`.
+
+```typescript {2,7,15} oxfmt:false
+{
+  type: 'start',
+  from: 'AGENT',
+  // ..
+}
+{
+  type: 'step-start',
+  from: 'AGENT',
+  payload: {
+    messageId: 'msg-cdUrkirvXw8A6oE4t5lzDuxi',
+    // ...
+  }
+}
+{
+  type: 'tool-call',
+  from: 'AGENT',
+  payload: {
+    toolCallId: 'call_jbhi3s1qvR6Aqt9axCfTBMsA',
+    toolName: 'testTool'
+    // ..
+  }
+}
+```
+
+## 编写器API {/* #writer-api */}
+
+这`writer` API is shared by tools and workflow steps. See the Tools and Workflows docs for feature-specific examples.
+
+## Agent使用Tool {/* #agent-using-tool */}
+
+Agent流可以与Tool调用相结合，允许Tool输出直接写入Agent的流响应中。这将Tool活动显示为交互的一部分。
+
+```typescript {2,9}
+import { Agent } from '@mastra/core/agent'
+import { testTool } from '../tools/test-tool'
+
+export const testAgent = new Agent({
+  id: 'test-agent',
+  name: 'Test Agent',
+  instructions: 'You are a weather agent.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  tools: { testTool },
+})
+```
+
+### 使用`context.writer` {/* #using-contextwriter */}
+
+这`context.writer` object is available in a tool's `execute()` function and can emit custom events, data, or values into the active stream. Tools use these events to provide intermediate results or status updates during execution.
+
+：：：警告
+
+你必须`await` the call to `writer.write()` or else you will lock the stream and get a `WritableStream is locked` error.
+
+:::
+
+```typescript {4,7,14}
+import { createTool } from '@mastra/core/tools'
+
+export const testTool = createTool({
+  execute: async (inputData, context) => {
+    const { value } = inputData
+
+    await context?.writer?.write({
+      type: 'custom-event',
+      status: 'pending',
+    })
+
+    const response = await fetch()
+
+    await context?.writer?.write({
+      type: 'custom-event',
+      status: 'success',
+    })
+
+    return {
+      value: '',
+    }
+  },
+})
+```
+
+您还可以使用`writer.custom()` to emit top-level stream chunks. This is useful when integrating with UI frameworks.
+
+```typescript {4,7,14}
+import { createTool } from '@mastra/core/tools'
+
+export const testTool = createTool({
+  execute: async (inputData, context) => {
+    const { value } = inputData
+
+    await context?.writer?.custom({
+      type: 'data-tool-progress',
+      status: 'pending',
+    })
+
+    const response = await fetch()
+
+    await context?.writer?.custom({
+      type: 'data-tool-progress',
+      status: 'success',
+    })
+
+    return {
+      value: '',
+    }
+  },
+})
+```
+
+### 瞬态数据块 {/* #transient-data-chunks */}
+
+默认情况下，`data-*` chunks emitted with `writer.custom()` are persisted to storage as part of the message history. For chunks that are only needed during live streaming, such as progress updates or verbose log output, set `transient: true` to skip storage persistence. Transient chunks are still streamed to the client in real time but aren't saved to the database.
+
+```typescript {4}
+await context?.writer?.custom({
+  type: 'data-build-log',
+  data: { line: 'Compiling module 3 of 12...' },
+  transient: true,
+})
+```
+
+当数据很大或频率很高并且仅在实时会话期间相关时，请使用瞬态块。页面刷新后，瞬态块不再可用。仅从存储加载Tool的返回值和任何非瞬态块。
+
+## 使用`writer` argument {/* #using-the-writer-argument */}
+
+这`writer` argument is passed to a workflow step's `execute` function and can emit custom events, data, or values into the active stream. Workflow steps use these events to provide intermediate results or status updates during execution.
+
+：：：警告
+
+你必须`await` the call to `writer.write(...)` or else you will lock the stream and get a `WritableStream is locked` error.
+
+:::
+
+```typescript {8,11,18}
+import { createStep } from '@mastra/core/workflows'
+import { z } from 'zod'
+
+export const testStep = createStep({
+  id: 'test-step',
+  inputSchema: z.object({ url: z.url() }),
+  outputSchema: z.object({ status: z.number() }),
+  execute: async ({ inputData, writer }) => {
+    const { url } = inputData
+
+    await writer.write({
+      type: 'custom-event',
+      status: 'pending',
+    })
+
+    const response = await fetch(url)
+
+    await writer.write({
+      type: 'custom-event',
+      status: 'success',
+    })
+
+    return {
+      status: response.status,
+    }
+  },
+})
+```

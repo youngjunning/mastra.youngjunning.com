@@ -1,0 +1,349 @@
+---
+title: "Amazon S3 | File Storage"
+description: "Store Mastra workspace files in Amazon S3 or compatible services such as Cloudflare R2, Neon Object Storage, and MinIO, with credentials, endpoints, and read-only mounts."
+packages:
+  - "@mastra/s3"
+---
+
+# 亞馬遜S3
+
+將檔案儲存在 Amazon S3 或 S3 相容的儲存服務中，例如 Cloudflare R2、Neon Object Storage、MinIO、DigitalOcean Spaces 和 Tigris。接口詳情請參見[WorkspaceFilesystem Interface](/reference/workspace/filesystem).
+
+## 安裝 {/* #installation */}
+
+```bash npm2yarn
+npm install @mastra/s3
+```
+
+## 用法 {/* #usage */}
+
+添加一個`S3Filesystem` to a workspace and assign it to an agent:
+
+```typescript
+import { Agent } from '@mastra/core/agent'
+import { Workspace } from '@mastra/core/workspace'
+import { S3Filesystem } from '@mastra/s3'
+
+const workspace = new Workspace({
+  filesystem: new S3Filesystem({
+    bucket: 'my-bucket',
+    region: 'us-east-1',
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+  }),
+})
+
+const agent = new Agent({
+  id: 'file-agent',
+  name: 'file-agent',
+  model: '__GATEWAY_ANTHROPIC_MODEL_OPUS__',
+  workspace,
+})
+```
+
+### AWS憑證Provider鏈 {/* #aws-credential-provider-chain */}
+
+當沒有提供憑證時，`S3Filesystem` uses the AWS SDK default credential provider chain. This discovers credentials automatically from environment variables, `~/.aws` config files, ECS container credentials, EC2 instance profiles, and other standard sources.
+
+```typescript
+import { S3Filesystem } from '@mastra/s3'
+
+// SDK discovers credentials from the environment automatically
+const filesystem = new S3Filesystem({
+  bucket: 'my-bucket',
+  region: 'us-east-1',
+})
+```
+
+傳遞憑證Provider函數以自動刷新憑證。這對於 ECS、Lambda 上的部署或使用臨時憑證過期且需要刷新的 SSO/AssumeRole 時非常有用。
+
+呼叫時安裝 AWS SDK 憑證Provider包`fromNodeProviderChain()` directly:
+
+```bash npm2yarn
+npm install @aws-sdk/credential-providers
+```
+
+```typescript
+import { S3Filesystem } from '@mastra/s3'
+import { fromNodeProviderChain } from '@aws-sdk/credential-providers'
+
+const filesystem = new S3Filesystem({
+  bucket: 'my-bucket',
+  region: 'us-east-1',
+  credentials: fromNodeProviderChain(),
+})
+```
+
+Provider功能僅適用於`S3Filesystem` API calls. When mounting the filesystem into an E2B or Daytona sandbox, mount configuration only supports static `accessKeyId`, `secretAccessKey`, and `sessionToken` values, so credential refresh must be handled outside the mount. See [temporary credentials in Daytona](/integrations/sandboxes/daytona#temporary-s3-credentials) for mount lifetime and isolation requirements.
+
+### 前綴範圍的權限 {/* #prefix-scoped-permissions */}
+
+什麼時候`prefix` is set, initialization calls `ListObjectsV2` with the normalized prefix, including its trailing `/`, and `MaxKeys: 1`. Credentials must permit listing that prefix. Without a prefix, initialization uses `HeadBucket`. These checks verify access, not whether a directory exists.
+
+前綴限制了檔案系統位址的鍵。它不是授權邊界。為了進行隔離，請使用其儲存Provider政策限制對該前綴的存取的憑證。將家長憑證保存在您的後端。僅讀取和寫入權限不足以進行前綴檔案系統初始化。
+
+### Cloudflare R2 {/* #cloudflare-r2 */}
+
+```typescript
+import { S3Filesystem } from '@mastra/s3'
+
+const filesystem = new S3Filesystem({
+  bucket: 'my-r2-bucket',
+  region: 'auto',
+  endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+  accessKeyId: process.env.R2_ACCESS_KEY_ID,
+  secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
+})
+```
+
+### Neon 物件存儲 {/* #neon-object-storage */}
+
+```typescript
+import { S3Filesystem } from '@mastra/s3'
+
+const filesystem = new S3Filesystem({
+  bucket: 'agent-files',
+  region: process.env.AWS_REGION!,
+  endpoint: process.env.AWS_ENDPOINT_URL_S3,
+  accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+})
+```
+
+`neon deploy`和`neon env pull` write these variables for the current Neon branch. Keep the default path-style addressing. Each branch has its own endpoint and its own copy of the files. See [Neon Object Storage](/integrations/file-storage/neon) for bucket setup and branching.
+
+### 最小IO {/* #minio */}
+
+```typescript
+import { S3Filesystem } from '@mastra/s3'
+
+const filesystem = new S3Filesystem({
+  bucket: 'my-bucket',
+  region: 'us-east-1',
+  endpoint: 'http://localhost:9000',
+  accessKeyId: 'minioadmin',
+  secretAccessKey: 'minioadmin',
+})
+```
+
+### 底格里斯河 {/* #tigris */}
+
+```typescript
+import { S3Filesystem } from '@mastra/s3'
+
+const filesystem = new S3Filesystem({
+  bucket: 'my-bucket',
+  region: 'auto',
+  endpoint: 'https://t3.storage.dev',
+  accessKeyId: process.env.TIGRIS_ACCESS_KEY_ID,
+  secretAccessKey: process.env.TIGRIS_SECRET_ACCESS_KEY,
+  forcePathStyle: false,
+})
+```
+
+Tigris 使用虛擬託管式定址，因此`forcePathStyle` must be set to `false` (the default is `true` when a custom endpoint is provided). Create credentials from the [Tigris Dashboard](https://console.tigris.dev/). Access keys are prefixed `tid_` and secrets `tsec_`.
+
+## 建構函數參數 {/* #constructor-parameters */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'bucket',
+  type: 'string',
+  description: 'S3 bucket name',
+},
+{
+  name: 'region',
+  type: 'string',
+  description: "AWS region (use 'auto' for R2)",
+},
+{
+  name: 'credentials',
+  type: 'AwsCredentialIdentity | AwsCredentialIdentityProvider',
+  description:
+    'AWS credentials or credential provider function. Accepts static credentials or a provider that auto-refreshes (e.g. `fromNodeProviderChain()` from `@aws-sdk/credential-providers`). Takes precedence over `accessKeyId`/`secretAccessKey`/`sessionToken`. When all credential options are omitted, the SDK default credential provider chain is used.',
+  isOptional: true,
+},
+{
+  name: 'accessKeyId',
+  type: 'string',
+  description:
+    'AWS access key ID. When omitted along with `secretAccessKey` and `credentials`, the SDK default credential provider chain is used.',
+  isOptional: true,
+},
+{
+  name: 'secretAccessKey',
+  type: 'string',
+  description:
+    'AWS secret access key. When omitted along with `accessKeyId` and `credentials`, the SDK default credential provider chain is used.',
+  isOptional: true,
+},
+{
+  name: 'sessionToken',
+  type: 'string',
+  description:
+    'AWS session token for static temporary credentials. Use with `accessKeyId`/`secretAccessKey` only when passing a complete temporary credential set manually. For auto-refreshing SSO, AssumeRole, or container credentials, use the `credentials` provider parameter or the SDK default credential provider chain.',
+  isOptional: true,
+},
+{
+  name: 'endpoint',
+  type: 'string',
+  description: 'Custom endpoint URL for S3-compatible storage (R2, Neon, MinIO, Tigris, etc.)',
+  isOptional: true,
+},
+{
+  name: 'forcePathStyle',
+  type: 'boolean',
+  description:
+    'Force path-style URLs instead of virtual-hosted-style. Required for some S3-compatible services like MinIO. Defaults to true when a custom endpoint is provided.',
+  isOptional: true,
+  defaultValue: 'true (when endpoint is set)',
+},
+{
+  name: 'prefix',
+  type: 'string',
+  description: 'Optional prefix for all keys (acts like a subdirectory)',
+  isOptional: true,
+},
+{
+  name: 'id',
+  type: 'string',
+  description: 'Unique identifier for this filesystem instance',
+  isOptional: true,
+  defaultValue: 'Auto-generated',
+},
+{
+  name: 'displayName',
+  type: 'string',
+  description: 'Human-friendly display name for the UI',
+  isOptional: true,
+},
+{
+  name: 'icon',
+  type: 'FilesystemIcon',
+  description: 'Icon identifier for the UI',
+  isOptional: true,
+},
+{
+  name: 'description',
+  type: 'string',
+  description: 'Short description of this filesystem for the UI',
+  isOptional: true,
+},
+{
+  name: 'readOnly',
+  type: 'boolean',
+  description: 'When true, all write operations are blocked',
+  isOptional: true,
+  defaultValue: 'false',
+},
+]}
+/>
+
+## 特性 {/* #properties */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'id',
+  type: 'string',
+  description: 'Filesystem instance identifier',
+},
+{
+  name: 'name',
+  type: 'string',
+  description: "Provider name ('S3Filesystem')",
+},
+{
+  name: 'provider',
+  type: 'string',
+  description: "Provider identifier ('s3')",
+},
+{
+  name: 'bucket',
+  type: 'string',
+  description: 'The S3 bucket name',
+},
+{
+  name: 'readOnly',
+  type: 'boolean | undefined',
+  description: 'Whether the filesystem is in read-only mode',
+},
+]}
+/>
+
+## 方法 {/* #methods */}
+
+S3檔案系統實作了[WorkspaceFilesystem interface](/reference/workspace/filesystem), providing all standard filesystem methods:
+
+* `readFile(path, options?)`- 讀取文件內容
+* `writeFile(path, content, options?)`- 將內容寫入文件
+* `appendFile(path, content)`- 將內容附加到文件
+* `deleteFile(path, options?)`- 刪除文件
+* `copyFile(src, dest, options?)`- 複製文件
+* `moveFile(src, dest, options?)`- 移動或重新命名文件
+* `mkdir(path, options?)`- 建立目錄
+* `rmdir(path, options?)`- 刪除目錄
+* `readdir(path, options?)`- 列出目錄內容
+* `exists(path)`- 檢查路徑是否存在
+* `stat(path)`- 取得檔案或目錄元數據
+
+### `init()` {/* #init */}
+
+初始化檔案系統。驗證儲存桶存取和憑證。
+
+```typescript
+await filesystem.init()
+```
+
+### `getInfo()` {/* #getinfo */}
+
+傳回有關此檔案系統實例的元資料。
+
+```typescript
+const info = filesystem.getInfo()
+// { id: '...', name: 'S3Filesystem', provider: 's3', status: 'ready' }
+```
+
+### `getMountConfig()` {/* #getmountconfig */}
+
+傳回支援掛載此檔案系統類型的沙箱的掛載配置。
+
+```typescript
+const config = filesystem.getMountConfig()
+// { type: 's3', bucket: 'my-bucket', region: 'us-east-1', ... }
+```
+
+## 安裝在 E2B 沙箱中 {/* #mounting-in-e2b-sandboxes */}
+
+S3Filesystem 可以掛載到 E2B 沙箱中，使儲存桶可作為本機目錄存取：
+
+```typescript
+import { Workspace } from '@mastra/core/workspace'
+import { S3Filesystem } from '@mastra/s3'
+import { E2BSandbox } from '@mastra/e2b'
+
+const workspace = new Workspace({
+  mounts: {
+    '/data': new S3Filesystem({
+      bucket: 'my-bucket',
+      region: 'us-east-1',
+      accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+    }),
+  },
+  sandbox: new E2BSandbox({ id: 'dev-sandbox' }),
+})
+```
+
+看[E2BSandbox reference](/integrations/sandboxes/e2b) for more details on mounting.
+
+## 有關的 {/* #related */}
+
+* [Workspace檔案系統介面](/reference/workspace/filesystem)
+* [Neon 物件存儲](/integrations/file-storage/neon)
+* [Archil檔案系統參考](/integrations/file-storage/archil)
+* [GCS檔案系統參考](/integrations/file-storage/google-cloud-storage)
+* [AzureBlob 檔案系統參考](/integrations/file-storage/azure-blob)
+* [E2B沙箱參考](/integrations/sandboxes/e2b)
+* [檔案系統](/docs/sandbox/filesystem)

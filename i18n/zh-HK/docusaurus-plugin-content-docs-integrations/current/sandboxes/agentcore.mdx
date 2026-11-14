@@ -1,0 +1,281 @@
+---
+title: "AgentCore | Sandbox"
+description: "Execute commands in AWS Bedrock AgentCore Runtime sessions from Mastra workspaces, with session management, environment variables, and file operations."
+packages:
+  - "@mastra/agentcore"
+---
+
+# Agent核心
+
+執行 shell 命令[AWS Bedrock AgentCore Runtime](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-execute-command.html)會話透過使用`InvokeAgentRuntimeCommand`.
+
+使用`AgentCoreRuntimeSandbox` when your agent already runs in AgentCore Runtime and you want Mastra workspace command execution to use the same runtime session. For interface details, see [WorkspaceSandbox interface](/reference/workspace/sandbox).
+
+：：：警告
+
+`AgentCoreRuntimeSandbox`僅支援一次性命令執行。它不支援後台進程管理、標準輸入或檔案系統安裝。 AgentCore Code Interpreter 是一項單獨的 AWS 服務，不屬於該提供者的一部分。
+
+:::
+
+## 安裝 {/* #installation */}
+
+```bash npm2yarn
+npm install @mastra/agentcore
+```
+
+## 用法 {/* #usage */}
+
+添加一個`AgentCoreRuntimeSandbox` to a workspace and assign it to an agent:
+
+```typescript title="src/mastra/agents/dev-agent.ts"
+import { Agent } from '@mastra/core/agent'
+import { Workspace } from '@mastra/core/workspace'
+import { AgentCoreRuntimeSandbox } from '@mastra/agentcore'
+
+const workspace = new Workspace({
+  sandbox: new AgentCoreRuntimeSandbox({
+    region: 'us-west-2',
+    agentRuntimeArn: process.env.AGENTCORE_RUNTIME_ARN!,
+    runtimeSessionId: '12345678-1234-1234-1234-123456789012',
+  }),
+})
+
+const agent = new Agent({
+  id: 'dev-agent',
+  name: 'dev-agent',
+  model: 'anthropic/claude-sonnet-4-6',
+  instructions: 'You are a helpful development assistant.',
+  workspace,
+})
+```
+
+透過沙箱以程式方式運行命令：
+
+```typescript
+const result = await workspace.sandbox?.executeCommand?.('npm', ['test'], {
+  cwd: '/workspace',
+  env: {
+    NODE_ENV: 'test',
+  },
+  timeout: 300_000,
+})
+
+if (!result?.success) {
+  console.error(result?.stderr)
+}
+```
+
+## 建構函數參數 {/* #constructor-parameters */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'agentRuntimeArn',
+  type: 'string',
+  description: 'AgentCore Runtime ARN where commands execute.',
+},
+{
+  name: 'region',
+  type: 'string',
+  description: 'AWS region for the Bedrock AgentCore client. Falls back to the AWS SDK default region chain.',
+  isOptional: true,
+},
+{
+  name: 'runtimeSessionId',
+  type: 'string',
+  description:
+    'AgentCore Runtime session ID. Defaults to a generated UUID, which satisfies AgentCore Runtime session ID length requirements.',
+  isOptional: true,
+  defaultValue: 'Generated UUID',
+},
+{
+  name: 'qualifier',
+  type: 'string',
+  description: 'Agent runtime qualifier or endpoint.',
+  isOptional: true,
+  defaultValue: 'DEFAULT',
+},
+{
+  name: 'contentType',
+  type: 'string',
+  description: 'MIME type sent for command requests.',
+  isOptional: true,
+  defaultValue: 'application/json',
+},
+{
+  name: 'accept',
+  type: 'string',
+  description: 'Accept header used for command event streams.',
+  isOptional: true,
+  defaultValue: 'application/vnd.amazon.eventstream',
+},
+{
+  name: 'workingDirectory',
+  type: 'string',
+  description:
+    'Default directory for command execution when no per-command `cwd` is given, applied as a shell `cd` prefix. A per-command `cwd` always wins. The path is shell-quoted, so `~` is not expanded — use an absolute path.',
+  isOptional: true,
+},
+{
+  name: 'commandTimeout',
+  type: 'number',
+  description: 'Default command timeout in milliseconds.',
+  isOptional: true,
+  defaultValue: '300000',
+},
+{
+  name: 'stopSessionOnLifecycle',
+  type: 'boolean',
+  description:
+    'Whether `stop()` and `destroy()` should call `StopRuntimeSession`. Defaults to false because AgentCore Runtime sessions are often shared with agent invocations outside the sandbox instance.',
+  isOptional: true,
+  defaultValue: 'false',
+},
+{
+  name: 'stopClientToken',
+  type: 'string',
+  description: 'Client token used when `StopRuntimeSession` is called.',
+  isOptional: true,
+  defaultValue: 'Generated UUID',
+},
+{
+  name: 'client',
+  type: 'BedrockAgentCoreClient',
+  description: 'Preconfigured AWS SDK client. Use this for custom credentials, retry behavior, or tests.',
+  isOptional: true,
+},
+{
+  name: 'instructions',
+  type: 'string | ((opts) => string)',
+  description:
+    'Custom instructions that override the default instructions returned by `getInstructions()`. Pass a string to replace the defaults, or a function to extend them.',
+  isOptional: true,
+},
+]}
+/>
+
+## 特性 {/* #properties */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'id',
+  type: 'string',
+  description: 'Runtime session ID used by this sandbox instance.',
+},
+{
+  name: 'name',
+  type: "'AgentCoreRuntimeSandbox'",
+  description: 'Human-readable name.',
+},
+{
+  name: 'provider',
+  type: "'agentcore'",
+  description: 'Provider type identifier.',
+},
+{
+  name: 'status',
+  type: 'ProviderStatus',
+  description:
+    "Current lifecycle status: `'pending'`, `'starting'`, `'running'`, `'stopping'`, `'stopped'`, `'destroying'`, `'destroyed'`, or `'error'`.",
+},
+{
+  name: 'runtimeSessionId',
+  type: 'string',
+  description: 'AgentCore Runtime session ID used for command execution.',
+},
+{
+  name: 'agentRuntimeArn',
+  type: 'string',
+  description: 'AgentCore Runtime ARN where commands execute.',
+},
+]}
+/>
+
+## 方法 {/* #methods */}
+
+### 命令執行 {/* #command-execution */}
+
+#### `executeCommand(command, args?, options?)` {/* #executecommandcommand-args-options */}
+
+在 AgentCore 執行階段中執行一次性 shell 命令並傳回 stdout、stderr、退出程式碼和逾時狀態。
+
+```typescript
+const result = await sandbox.executeCommand('npm', ['test'], {
+  cwd: '/workspace',
+  env: {
+    NODE_ENV: 'test',
+  },
+  timeout: 300_000,
+})
+```
+
+返回：`Promise<CommandResult>`.
+
+`options.timeout`以毫秒為單位指定。 AgentCore 運行時接受 1 到 3600 秒的命令逾時。提供者在發送請求之前將毫秒轉換為秒。
+
+### 生命週期 {/* #lifecycle */}
+
+#### `start()` {/* #start */}
+
+運行沙箱生命週期啟動掛鉤。此提供者不會在以下期間建立 AgentCore 執行階段會話`start()`.
+
+```typescript
+await sandbox.start()
+```
+
+#### `stop()` {/* #stop */}
+
+僅在以下情況下停止 AgentCore 運行時會話`stopSessionOnLifecycle` is `true`.
+
+```typescript
+await sandbox.stop()
+```
+
+#### `stopRuntimeSession()` {/* #stopruntimesession */}
+
+明確停止此沙箱使用的 AgentCore 執行階段會話。
+
+當沙箱擁有運行時會話並且您想要直接清理它時，請使用此選項。`destroy()` doesn't call this method unless `stopSessionOnLifecycle` is `true`, because AgentCore Runtime sessions can be shared with agent invocations outside the Workspace sandbox lifecycle.
+
+```typescript
+await sandbox.stopRuntimeSession()
+```
+
+#### `destroy()` {/* #destroy */}
+
+銷毀沙箱實例。如果此執行個體擁有其 AWS SDK 用戶端，`destroy()` also destroys the client. If `stopSessionOnLifecycle` is `true`, it calls `StopRuntimeSession`.
+
+```typescript
+await sandbox.destroy()
+```
+
+### 元數據 {/* #metadata */}
+
+#### `getInfo()` {/* #getinfo */}
+
+返回沙箱狀態和 AgentCore 運行時元資料。
+
+```typescript
+const info = await sandbox.getInfo()
+```
+
+返回：`Promise<SandboxInfo>`.
+
+## 限制 {/* #limitations */}
+
+`AgentCoreRuntimeSandbox`遵循 AgentCore 運行時命令執行語意：
+
+* **一次性命令**：每個命令運行完成或逾時。
+* **無持久外殼**：Shell 狀態不會在指令之間傳遞。例如，對每個命令中的狀態進行編碼`cd /workspace && npm test`.
+* **不支援後台進程**: 提供者沒有公開`processes` manager.
+* **互動式標準輸入不可用**：運行時命令執行不透過此提供者提供互動式標準輸入流。
+* **不支援Workspace檔案系統掛載**：此提供者不支援Workspace檔案系統安裝。
+* **容器相關Tool**：指令只能使用 AgentCore Runtime 容器映像中安裝的Tool。
+
+## 有關的 {/* #related */}
+
+* [WorkspaceSandbox介面](/reference/workspace/sandbox)
+* [工作空間類](/reference/workspace/workspace-class)
+* [Sandbox概述](/docs/sandbox/overview)
+* [AWS Bedrock AgentCore 執行階段指令執行](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-execute-command.html)

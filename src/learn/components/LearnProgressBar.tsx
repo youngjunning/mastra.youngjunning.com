@@ -1,5 +1,4 @@
 import { cn } from '@site/src/lib/utils'
-import { useLocalizedLearnContent } from '../localization'
 
 type LearnProgressBarProps = {
   completed: number
@@ -8,7 +7,6 @@ type LearnProgressBarProps = {
 }
 
 export function LearnProgressBar({ completed, total, className }: LearnProgressBarProps) {
-  const { isSimplifiedChinese, isTaiwanChinese, isHongKongChinese, isJapanese } = useLocalizedLearnContent()
   const pct = total > 0 ? (completed / total) * 100 : 0
 
   return (
@@ -17,13 +15,7 @@ export function LearnProgressBar({ completed, total, className }: LearnProgressB
         <div className="learn-progress-completed absolute inset-y-0 left-0 rounded-full" style={{ width: `${pct}%` }} />
       </div>
       <span className="text-xs whitespace-nowrap text-(--mastra-text-tertiary)">
-        {isSimplifiedChinese
-          ? `已完成 ${completed}/${total}`
-          : isTaiwanChinese || isHongKongChinese
-            ? `已完成 ${completed}/${total}`
-            : isJapanese
-              ? `${completed}/${total} 完了`
-              : `${completed} of ${total} completed`}
+        {completed} of {total} completed
       </span>
     </div>
   )

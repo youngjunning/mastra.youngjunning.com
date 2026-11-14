@@ -1,19 +1,19 @@
 ---
-title: "參考：OtelExporter | 可觀測性"
-description: 用於 trace 與 log 的 OpenTelemetry exporter
+title: "Reference: OtelExporter | Observability"
+description: "Sends traces and logs to any OpenTelemetry-compatible observability platform. Traces use the standardized GenAI semantic conventions."
 packages:
   - "@mastra/otel-exporter"
 ---
 
 import PropertiesTable from "@site/src/components/PropertiesTable";
 
-# OtelExporter
+# 奧特爾出口商
 
-將 trace 與 log 傳送至任何與 OpenTelemetry 相容的可觀測性平台。Trace 使用標準化 GenAI semantic convention；log 保留原始 severity 與 message body，並透過 OTEL log record 的原生 trace context，以及 `mastra.traceId`／`mastra.spanId` 屬性與 trace 建立關聯。
+將追蹤和日誌傳送到任何與 OpenTelemetry 相容的可觀測平台。追蹤使用標準化 GenAI 語意約定。日誌攜帶其原始嚴重性和訊息正文，並透過 OTEL 日誌記錄的本機追蹤上下文和追蹤與追蹤相關聯。`mastra.traceId` / `mastra.spanId`屬性。
 
-## 建構函式 {/* #constructor */}
+## 建構函數 {/* #constructor */}
 
-```typescript prettier:false
+```typescript oxfmt:false
 new OtelExporter(config: OtelExporterConfig)
 ```
 
@@ -29,52 +29,82 @@ interface OtelExporterConfig {
   timeout?: number
   batchSize?: number
   logLevel?: 'debug' | 'info' | 'warn' | 'error'
+  metadataMapping?: Record<string, string>
 }
 ```
 
 <PropertiesTable
-  props={[
-  {
-    name: 'provider',
-    type: 'ProviderConfig',
-    description: 'Provider 專屬設定（請見下方）',
-    required: true,
-  },
-  {
-    name: 'signals',
-    type: '{ traces?: boolean; logs?: boolean }',
-    description:
-      '個別 signal 開關。兩者預設皆為 true。將任一值設為 false 即可停用該 signal。匯出 log 也需要安裝所選 protocol 對應的 `@opentelemetry/exporter-logs-otlp-*` package。',
-    required: false,
-  },
-  {
-    name: 'timeout',
-    type: 'number',
-    description: '匯出逾時（毫秒，預設：30000）',
-    required: false,
-  },
-  {
-    name: 'batchSize',
-    type: 'number',
-    description: '每批 span／log 的數量（預設：512）',
-    required: false,
-  },
-  {
-    name: 'logLevel',
-    type: "'debug' | 'info' | 'warn' | 'error'",
-    description: "Logger 層級（預設：'warn'）",
-    required: false,
-  },
-  {
-    name: 'resourceAttributes',
-    type: 'DetectedResourceAttributes',
-    description: '選用的 OpenTelemetry Resource Attribute（此處的值會覆寫任何預設值）',
-    required: false,
-  },
+  content={[
+{
+  name: 'provider',
+  type: 'ProviderConfig',
+  description: 'Provider-specific configuration (see below)',
+  isOptional: false,
+},
+{
+  name: 'signals',
+  type: '{ traces?: boolean; logs?: boolean }',
+  description:
+    'Per-signal toggle. Both default to true. Set a value to false to disable that signal. Log export also requires the matching `@opentelemetry/exporter-logs-otlp-*` package to be installed for the chosen protocol.',
+  isOptional: true,
+},
+{
+  name: 'timeout',
+  type: 'number',
+  description: 'Export timeout in milliseconds (default: 30000)',
+  isOptional: true,
+},
+{
+  name: 'batchSize',
+  type: 'number',
+  description: 'Number of spans/logs per batch (default: 512)',
+  isOptional: true,
+},
+{
+  name: 'logLevel',
+  type: "'debug' | 'info' | 'warn' | 'error'",
+  description:
+    "Level for the logger the exporter creates when no `logger` is passed (default: 'info'). It has no effect on a supplied `logger`. When the exporter is registered with Mastra, Mastra replaces this logger with the application logger. Setting `debug` also writes exporter diagnostics directly to the console and installs a global OpenTelemetry diagnostic logger, whichever logger is in use.",
+  isOptional: true,
+},
+{
+  name: 'metadataMapping',
+  type: 'Record<string, string>',
+  description:
+    'Maps metadata keys to top-level span attribute names, for example `{ userId: "user.id" }`. Disabled by default. Namespaced metadata is retained. See Metadata mapping below for value conversion and precedence.',
+  isOptional: true,
+},
+{
+  name: 'resourceAttributes',
+  type: 'DetectedResourceAttributes',
+  description: 'Optional OpenTelemetry Resource Attributes (values here override any defaults)',
+  isOptional: true,
+},
 ]}
 />
 
-## Provider 設定 {/* #provider-configurations */}
+## 元資料映射 {/* #metadata-mapping */}
+
+使用`metadataMapping` when your backend expects metadata such as `userId` under a specific span attribute name:
+
+```typescript
+import { OtelExporter } from '@mastra/otel-exporter'
+
+const exporter = new OtelExporter({
+  provider: {
+    custom: { endpoints: { traces: 'https://collector.example.com/v1/traces' } },
+  },
+  metadataMapping: { userId: 'user.id', tenantId: 'tenant.id' },
+})
+```
+
+帶有元資料的跨度`{ userId: 'user-123', tenantId: 'acme' }` exports both `user.id` and `tenant.id`, alongside the existing `mastra.metadata.userId` and `mastra.metadata.tenantId`屬性。映射適用於包含所選元資料鍵的每個範圍，包括子範圍。
+
+映射值是字串。物件和陣列是 JSON 編碼的。鑰匙遺失，`null`, `undefined`, and empty strings are omitted. `0` and `false` become `"0"` and `"false"`。鍵按字面匹配，因此包含點的鍵不會選擇嵌套屬性。空目標名稱將被忽略。
+
+明確映射會覆寫具有相同目標名稱的現有屬性。如果多個元資料鍵對應到相同名稱，則最後一個具有非空值的對應獲勝。映射不會影響日誌記錄或資源屬性。
+
+## Provider配置 {/* #provider-configurations */}
 
 ### `Dash0Config` {/* #dash0config */}
 
@@ -87,25 +117,25 @@ interface Dash0Config {
 ```
 
 <PropertiesTable
-  props={[
-  {
-    name: 'apiKey',
-    type: 'string',
-    description: 'Dash0 API key。若未設定，則使用 DASH0_API_KEY 環境變數。',
-    required: false,
-  },
-  {
-    name: 'endpoint',
-    type: 'string',
-    description: 'Dash0 ingress endpoint。若未設定，則使用 DASH0_ENDPOINT 環境變數。',
-    required: false,
-  },
-  {
-    name: 'dataset',
-    type: 'string',
-    description: 'Dataset 名稱。若未設定，則使用 DASH0_DATASET 環境變數。',
-    required: false,
-  },
+  content={[
+{
+  name: 'apiKey',
+  type: 'string',
+  description: 'Dash0 API key. Falls back to DASH0_API_KEY env var.',
+  isOptional: true,
+},
+{
+  name: 'endpoint',
+  type: 'string',
+  description: 'Dash0 ingress endpoint. Falls back to DASH0_ENDPOINT env var.',
+  isOptional: true,
+},
+{
+  name: 'dataset',
+  type: 'string',
+  description: 'Dataset name. Falls back to DASH0_DATASET env var.',
+  isOptional: true,
+},
 ]}
 />
 
@@ -120,25 +150,25 @@ interface SignozConfig {
 ```
 
 <PropertiesTable
-  props={[
-  {
-    name: 'apiKey',
-    type: 'string',
-    description: 'SigNoz ingestion key。若未設定，則使用 SIGNOZ_API_KEY 環境變數。',
-    required: false,
-  },
-  {
-    name: 'region',
-    type: "'us' | 'eu' | 'in'",
-    description: "SigNoz cloud region。若未設定，則使用 SIGNOZ_REGION 環境變數。（預設：'us'）",
-    required: false,
-  },
-  {
-    name: 'endpoint',
-    type: 'string',
-    description: '自訂 endpoint。若未設定，則使用 SIGNOZ_ENDPOINT 環境變數。',
-    required: false,
-  },
+  content={[
+{
+  name: 'apiKey',
+  type: 'string',
+  description: 'SigNoz ingestion key. Falls back to SIGNOZ_API_KEY env var.',
+  isOptional: true,
+},
+{
+  name: 'region',
+  type: "'us' | 'eu' | 'in'",
+  description: "SigNoz cloud region. Falls back to SIGNOZ_REGION env var. (default: 'us')",
+  isOptional: true,
+},
+{
+  name: 'endpoint',
+  type: 'string',
+  description: 'Custom endpoint. Falls back to SIGNOZ_ENDPOINT env var.',
+  isOptional: true,
+},
 ]}
 />
 
@@ -152,20 +182,20 @@ interface NewRelicConfig {
 ```
 
 <PropertiesTable
-  props={[
-  {
-    name: 'apiKey',
-    type: 'string',
-    description: 'New Relic license key。若未設定，則使用 NEW_RELIC_LICENSE_KEY 環境變數。',
-    required: false,
-  },
-  {
-    name: 'endpoint',
-    type: 'string',
-    description:
-      '自訂 endpoint。若未設定，則使用 NEW_RELIC_ENDPOINT 環境變數。（預設：https://otlp.nr-data.net:443/v1/traces）',
-    required: false,
-  },
+  content={[
+{
+  name: 'apiKey',
+  type: 'string',
+  description: 'New Relic license key. Falls back to NEW_RELIC_LICENSE_KEY env var.',
+  isOptional: true,
+},
+{
+  name: 'endpoint',
+  type: 'string',
+  description:
+    'Custom endpoint. Falls back to NEW_RELIC_ENDPOINT env var. (default: https://otlp.nr-data.net:443/v1/traces)',
+  isOptional: true,
+},
 ]}
 />
 
@@ -180,26 +210,26 @@ interface TraceloopConfig {
 ```
 
 <PropertiesTable
-  props={[
-  {
-    name: 'apiKey',
-    type: 'string',
-    description: 'Traceloop API key。若未設定，則使用 TRACELOOP_API_KEY 環境變數。',
-    required: false,
-  },
-  {
-    name: 'destinationId',
-    type: 'string',
-    description: '目的地識別碼。若未設定，則使用 TRACELOOP_DESTINATION_ID 環境變數。',
-    required: false,
-  },
-  {
-    name: 'endpoint',
-    type: 'string',
-    description:
-      '自訂 endpoint。若未設定，則使用 TRACELOOP_ENDPOINT 環境變數。（預設：https://api.traceloop.com/v1/traces）',
-    required: false,
-  },
+  content={[
+{
+  name: 'apiKey',
+  type: 'string',
+  description: 'Traceloop API key. Falls back to TRACELOOP_API_KEY env var.',
+  isOptional: true,
+},
+{
+  name: 'destinationId',
+  type: 'string',
+  description: 'Destination identifier. Falls back to TRACELOOP_DESTINATION_ID env var.',
+  isOptional: true,
+},
+{
+  name: 'endpoint',
+  type: 'string',
+  description:
+    'Custom endpoint. Falls back to TRACELOOP_ENDPOINT env var. (default: https://api.traceloop.com/v1/traces)',
+  isOptional: true,
+},
 ]}
 />
 
@@ -213,84 +243,142 @@ interface LaminarConfig {
 ```
 
 <PropertiesTable
-  props={[
-  {
-    name: 'apiKey',
-    type: 'string',
-    description: 'Laminar 專案 API key。若未設定，則使用 LMNR_PROJECT_API_KEY 環境變數。',
-    required: false,
-  },
-  {
-    name: 'endpoint',
-    type: 'string',
-    description: '自訂 endpoint。若未設定，則使用 LAMINAR_ENDPOINT 環境變數。（預設：https://api.lmnr.ai/v1/traces）',
-    required: false,
-  },
+  content={[
+{
+  name: 'apiKey',
+  type: 'string',
+  description: 'Laminar project API key. Falls back to LMNR_PROJECT_API_KEY env var.',
+  isOptional: true,
+},
+{
+  name: 'endpoint',
+  type: 'string',
+  description: 'Custom endpoint. Falls back to LAMINAR_ENDPOINT env var. (default: https://api.lmnr.ai/v1/traces)',
+  isOptional: true,
+},
 ]}
 />
 
 ### `CustomConfig` {/* #customconfig */}
 
 ```typescript
-interface CustomConfig {
-  endpoint: string
+type CustomConfig = {
   protocol?: 'http/json' | 'http/protobuf' | 'grpc' | 'zipkin'
   headers?: Record<string, string>
-}
+} & (
+  | { endpoint?: string; endpoints?: never }
+  | {
+      endpoint?: never
+      endpoints:
+        | { traces: string | undefined; logs?: string | undefined }
+        | { traces?: string | undefined; logs: string | undefined }
+    }
+)
 ```
 
 <PropertiesTable
-  props={[
-  {
-    name: 'endpoint',
-    type: 'string',
-    description: 'OTEL collector endpoint URL',
-    required: true,
-  },
-  {
-    name: 'protocol',
-    type: "'http/json' | 'http/protobuf' | 'grpc' | 'zipkin'",
-    description: "匯出 protocol（預設：'http/json'）",
-    required: false,
-  },
-  {
-    name: 'headers',
-    type: 'Record<string, string>',
-    description: '用於驗證的自訂 header',
-    required: false,
-  },
+  content={[
+{
+  name: 'endpoint',
+  type: 'string',
+  description:
+    'Legacy collector endpoint. Cannot be combined with endpoints. Uses the existing signal-path derivation for OTLP.',
+  isOptional: true,
+},
+{
+  name: 'endpoints',
+  type: '{ traces: string | undefined; logs?: string | undefined } | { traces?: string | undefined; logs: string | undefined }',
+  description:
+    'Exact per-signal URLs. Supply at least one endpoint. Omitted signals are not exported. Cannot be combined with endpoint.',
+  isOptional: true,
+},
+{
+  name: 'protocol',
+  type: "'http/json' | 'http/protobuf' | 'grpc' | 'zipkin'",
+  description: "Export protocol (default: 'http/json')",
+  isOptional: true,
+},
+{
+  name: 'headers',
+  type: 'Record<string, string>',
+  description: 'Custom headers for authentication',
+  isOptional: true,
+},
 ]}
 />
+
+### 自訂訊號端點 {/* #custom-signal-endpoints */}
+
+供應任一`endpoint` or `endpoints`, never both. TypeScript rejects configurations with both options. Runtime validation also rejects them and disables the exporter with an error message.
+
+使用`endpoints` to supply the exact URL for each signal. URLs are passed to the selected exporter without adding, removing, or replacing path segments. Trace and log endpoints can use different hosts and unrelated paths:
+
+```typescript
+import { OtelExporter } from '@mastra/otel-exporter'
+
+const exporter = new OtelExporter({
+  provider: {
+    custom: {
+      protocol: 'http/protobuf',
+      endpoints: {
+        traces: 'https://traces.example.com/api/ingest/?tenant=acme',
+        logs: 'https://logs.example.com/events',
+      },
+    },
+  },
+})
+```
+
+提供至少一個訊號端點。忽略`logs` for trace-only export or `traces` for log-only export. The `signals` toggles can still disable a configured signal. Protocol and headers apply to both endpoints. The selected protocol must support the signal. A custom `exporter` instance overrides trace transport as before.
+
+您可以明確傳遞環境變數值：
+
+```typescript
+const exporter = new OtelExporter({
+  provider: {
+    custom: {
+      endpoints: {
+        traces: process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT,
+        logs: process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT,
+      },
+    },
+  },
+})
+```
+
+該類型需要至少一個信號鍵並允許`undefined` values for environment-variable configuration. At runtime, at least one URL must be non-empty. A missing value disables that signal. Mastra doesn't load endpoint environment variables automatically.
+
+奇異的`endpoint` option retains its existing behavior for compatibility: OTLP signal paths are derived from the collector URL, and Zipkin uses the configured URL directly. For custom paths, use `endpoints` instead.
 
 ## 方法 {/* #methods */}
 
 ### `exportTracingEvent` {/* #exporttracingevent */}
 
-```typescript prettier:false
+```typescript oxfmt:false
 async exportTracingEvent(event: TracingEvent): Promise<void>
 ```
 
-將 tracing 事件匯出至設定的 OTEL 後端。
+將追蹤事件匯出到配置的 OTEL 後端。
 
-### flush {/* #flush */}
+### 沖水 {/* #flush */}
 
-```typescript prettier:false
+```typescript oxfmt:false
 async flush(): Promise<void>
 ```
 
-強制將所有緩衝的 span flush 至 OTEL 後端，而不關閉 exporter。這在 serverless 環境中特別實用，可確保 runtime 結束前已匯出 span。
+強制將任何緩衝的跨度刷新到 OTEL 後端，而無需關閉導出器。在無伺服器環境中很有用，您需要確保在執行時間終止之前導出跨度。
 
-### shutdown {/* #shutdown */}
+### 關閉 {/* #shutdown */}
 
-```typescript prettier:false
+```typescript oxfmt:false
 async shutdown(): Promise<void>
 ```
 
-Flush 待處理 trace 並關閉 exporter。
+刷新待處理的追蹤並關閉導出器。
 
 ## 使用範例 {/* #usage-examples */}
 
-### 零設定（使用環境變數） {/* #zero-config-using-environment-variables */}
+### 零配置（使用環境變數） {/* #zero-config-using-environment-variables */}
 
 ```typescript
 import { OtelExporter } from '@mastra/otel-exporter'
@@ -305,7 +393,7 @@ const exporter = new OtelExporter({ provider: { signoz: {} } })
 // Set LMNR_PROJECT_API_KEY for Laminar
 ```
 
-### 明確設定 {/* #explicit-configuration */}
+### 明確配置 {/* #explicit-configuration */}
 
 ```typescript
 import { OtelExporter } from '@mastra/otel-exporter'
@@ -320,7 +408,7 @@ const exporter = new OtelExporter({
 })
 ```
 
-### 使用自訂 Endpoint {/* #with-custom-endpoint */}
+### 使用自訂端點 {/* #with-custom-endpoint */}
 
 ```typescript
 const exporter = new OtelExporter({
@@ -338,22 +426,22 @@ const exporter = new OtelExporter({
 })
 ```
 
-## Protocol 需求 {/* #protocol-requirements */}
+## 協議要求 {/* #protocol-requirements */}
 
-不同 Provider 需要不同的 OTEL exporter package。Trace 與 log 匯出彼此獨立：若只需要 trace，只需安裝 trace package；若也需要匯出 log，請同時安裝所選 protocol 的 trace 與 log package。Zipkin 不支援 OTLP log。
+不同的Provider需要不同的 OTEL 匯出程式包。跟踪和日誌匯出是獨立的：如果您只需要跟踪，則僅安裝跟踪包；如果您還需要日誌匯出，則安裝所選協議的跟踪和日誌包。 Zipkin 不支援 OTLP 日誌。
 
-| Protocol | Trace package | Log package |
+|協定|追蹤包 |日誌包|
 | - | - | - |
-| gRPC | `@opentelemetry/exporter-trace-otlp-grpc` (+ `@grpc/grpc-js`) | `@opentelemetry/exporter-logs-otlp-grpc` (+ `@grpc/grpc-js`) |
+| gRPC |`@opentelemetry/exporter-trace-otlp-grpc` (+ `@grpc/grpc-js`) | `@opentelemetry/exporter-logs-otlp-grpc` (+ `@grpc/grpc-js`) |
 | HTTP/Protobuf | `@opentelemetry/exporter-trace-otlp-proto` | `@opentelemetry/exporter-logs-otlp-proto` |
 | HTTP/JSON | `@opentelemetry/exporter-trace-otlp-http` | `@opentelemetry/exporter-logs-otlp-http` |
-| Zipkin | `@opentelemetry/exporter-zipkin` | 不支援 |
+| Zipkin | `@opentelemetry/exporter-zipkin` | not supported |
 
 ## 標籤支援 {/* #tags-support */}
 
-OtelExporter 支援以 trace 標籤進行分類與篩選。標籤只會套用至根 span，並儲存為 `mastra.tags` 屬性。
+OtelExporter 支援追蹤標記以進行分類和過濾。標籤僅應用於根跨度並儲存為`mastra.tags` attribute.
 
-### 使用方式 {/* #usage */}
+### 用法 {/* #usage */}
 
 ```typescript
 const result = await agent.generate('Hello', {
@@ -363,9 +451,9 @@ const result = await agent.generate('Hello', {
 })
 ```
 
-### 標籤的儲存方式 {/* #how-tags-are-stored */}
+### 標籤如何存儲 {/* #how-tags-are-stored */}
 
-為了達到最高的後端相容性，標籤會以 JSON 字串化 array 的形式儲存於 `mastra.tags` span 屬性中：
+`mastra.tags` span attribute for maximum backend compatibility:
 
 ```json
 {
@@ -373,12 +461,12 @@ const result = await agent.generate('Hello', {
 }
 ```
 
-:::note
-雖然 OpenTelemetry 規格支援原生 array 屬性，但許多後端（Jaeger、Zipkin、Tempo）對 array 的支援有限。JSON 字串可確保在所有可觀測性平台上有一致的行為。
+:::注意
+雖然 OpenTelemetry 規格支援本機陣列屬性，但許多後端（Jaeger、Zipkin、Tempo）對陣列的支援有限。 JSON 字串確保所有可觀察平台的行為一致。
 :::
 
-## 相關內容 {/* #related */}
+## 有關的 {/* #related */}
 
-- [OtelExporter 指南](/docs/observability/integrations/exporters/otel)：包含 Provider 設定的建置指南
-- [OtelBridge](/docs/observability/integrations/bridges/otel)：用於雙向 OTEL context 整合
-- [Tracing 概覽](/docs/observability/tracing/overview)：一般 tracing 概念
+* [Otel出口商指南](/integrations/observability/opentelemetry#exporter)：包含Provider配置的設定指南
+* [奧泰布里奇飯店](/integrations/observability/opentelemetry#bridge)：用於雙向 OTEL 上下文集成
+* [追蹤概述](/docs/observability/tracing/overview)：一般追蹤概念

@@ -1,0 +1,82 @@
+---
+title: "RAG (Retrieval-Augmented Generation) in Mastra | RAG"
+description: "RAG in Mastra helps you enhance LLM outputs by incorporating relevant context from your own data sources, improving accuracy and grounding responses in real information."
+packages:
+  - "@mastra/core"
+  - "@mastra/oracledb"
+  - "@mastra/pg"
+  - "@mastra/rag"
+---
+
+# Mastra 中的 RAG（检索增强生成）
+
+Mastra 中的 RAG 通过整合您自己的数据源中的相关上下文、提高准确性并根据真实信息做出响应，帮助您增强 LLM 输出。
+
+Mastra 的 RAG 系统提供：
+
+* 用于处理和嵌入文档的标准化 API
+* 支持多个向量存储
+* 用于最佳检索的分块和嵌入策略
+* 用于跟踪嵌入和检索性能的可观察性
+
+## 例子 {/* #example */}
+
+要实现 RAG，您需要将文档处理成块，创建嵌入，将它们存储在矢量数据库中，然后在查询时检索相关上下文。
+
+```ts
+import { embedMany } from 'ai'
+import { PgVector } from '@mastra/pg'
+import { MDocument } from '@mastra/rag'
+import { z } from 'zod'
+
+// 1. Initialize document
+const doc = MDocument.fromText(`Your document text here...`)
+
+// 2. Create chunks
+const chunks = await doc.chunk({
+  strategy: 'recursive',
+  size: 512,
+  overlap: 50,
+})
+
+// 3. Generate embeddings; we need to pass the text of each chunk
+import { ModelRouterEmbeddingModel } from '@mastra/core/llm'
+
+const { embeddings } = await embedMany({
+  values: chunks.map(chunk => chunk.text),
+  model: new ModelRouterEmbeddingModel('openai/text-embedding-3-small'),
+})
+
+// 4. Store in vector database
+const pgVector = new PgVector({
+  id: 'pg-vector',
+  connectionString: process.env.POSTGRES_CONNECTION_STRING,
+})
+await pgVector.upsert({
+  indexName: 'embeddings',
+  vectors: embeddings,
+}) // using an index name of 'embeddings'
+
+// 5. Query similar chunks
+const results = await pgVector.query({
+  indexName: 'embeddings',
+  queryVector: queryVector,
+  topK: 3,
+}) // queryVector is the embedding of the query
+
+console.log('Similar chunks:', results)
+```
+
+这个例子展示了要点。初始化文档并创建块，然后在查询类似内容之前生成并存储嵌入。
+
+## 文件处理 {/* #document-processing */}
+
+RAG 的基本构建块是文档处理。可以使用策略（递归、滑动窗口等）对文档进行分块，并使用元数据进行丰富。请参阅[chunking and embedding doc](../../reference/rag/chunking-and-embedding).
+
+## 矢量存储 {/* #vector-storage */}
+
+Mastra 支持多种用于嵌入持久性和相似性搜索的矢量存储，包括 pgvector、OracleDB、Pinecone、Qdrant 和 MongoDB。请参阅[vector database doc](./vector-databases).
+
+## 更多资源 {/* #more-resources */}
+
+* [思想链 RAG 示例](https://github.com/mastra-ai/mastra/tree/main/examples/basics/rag/cot-rag)

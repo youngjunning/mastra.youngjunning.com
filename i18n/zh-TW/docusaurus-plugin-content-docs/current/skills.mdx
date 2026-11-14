@@ -1,0 +1,225 @@
+---
+title: "Agent skills"
+description: "Attach reusable Agent Skills directly to Mastra agents using inline definitions, filesystem paths, dynamic loaders, and programmatic skill access."
+packages:
+  - "@mastra/core"
+---
+
+# Agent技巧
+
+技能是可重複使用的指令，指導Agent如何執行特定任務。他們遵循[Agent Skills specification](https://agentskills.io).
+
+直接透過Agent附加技能`skills` config, or configure them on a [workspace](/docs/sandbox/skills)。Agent级技能属于一个Agent，可以在没有工作区的情况下在代码中定义，而工作区技能是从文件系统中发现的，并由使用该工作区的每个Agent共享。本页介绍如何通过每个请求解析来定义和加载Agent级技能。
+
+## {/* #when-to-use-agent-level-skills */}
+
+在以下情況下使用Agent級技能：
+
+* 您需要不依賴Workspace的獨立Agent
+* 技能在程式碼中定義，不需要檔案系統發現
+* 您正在建立包含Agent功能的套件或庫
+* 您需要根據上下文來解決每個請求的技能問題
+
+對於跨專案的基於檔案系統的技能發現，請使用[workspace skills](/docs/sandbox/skills) instead.
+
+## 快速入門 {/* #quickstart */}
+
+定義內聯技能並將其附加到Agent：
+
+```typescript title="src/mastra/agents/index.ts"
+import { Agent } from '@mastra/core/agent'
+import { createSkill } from '@mastra/core/skills'
+
+const codeReview = createSkill({
+  name: 'code-review',
+  description: 'Use when reviewing code changes.',
+  instructions: `
+    When reviewing code:
+    1. Check for correctness and edge cases
+    2. Verify style consistency
+    3. Look for potential bugs
+  `,
+})
+
+export const reviewer = new Agent({
+  id: 'reviewer',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  instructions: 'You are a code review assistant.',
+  // highlight-next-line
+  skills: [codeReview],
+})
+```
+
+Agent自動獲取`skill`, `skill_read`, and `skill_search` tools so it can discover and load skills during conversations.
+
+## 定義內聯技能 {/* #defining-inline-skills */}
+
+使用`createSkill()` to create skills entirely in code:
+
+```typescript title="src/mastra/skills.ts"
+import { createSkill } from '@mastra/core/skills'
+
+export const releaseChecklist = createSkill({
+  name: 'release-checklist',
+  description: 'Use when preparing a release.',
+  instructions: `
+    ## Release Checklist
+    1. Run the full test suite
+    2. Update CHANGELOG.md
+    3. Bump version numbers
+    4. Create a git tag
+  `,
+  references: {
+    'changelog-format.md': '# Changelog Format\nUse Keep a Changelog...',
+  },
+})
+```
+
+這`references` field bundles supporting documents that the agent can read with the `skill_read` tool, like `references/` files in a filesystem skill. Visit [`createSkill()` reference](/reference/agents/createSkill) for the full API.
+
+## 檔案系統路徑技巧 {/* #filesystem-path-skills */}
+
+指向磁碟上沒有工作空間的技能目錄：
+
+```typescript title="src/mastra/agents/index.ts"
+import { Agent } from '@mastra/core/agent'
+import { createSkill } from '@mastra/core/skills'
+
+export const agent = new Agent({
+  id: 'my-agent',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  skills: [
+    './skills/code-review', // path to a SKILL.md directory
+    './skills/testing', // another filesystem skill
+    createSkill({/* ... */}), // inline skill
+  ],
+})
+```
+
+檔案系統路徑使用`LocalSkillSource` under the hood, which reads `SKILL.md` files following the same format as [workspace skills](/docs/sandbox/skills#skillmd-format).
+
+## 動態技能 {/* #dynamic-skills */}
+
+對於每個請求的技能解析，傳遞一個函數：
+
+```typescript title="src/mastra/agents/index.ts"
+import { Agent } from '@mastra/core/agent'
+import { createSkill } from '@mastra/core/skills'
+
+const devSkill = createSkill({
+  name: 'dev-tools',
+  description: 'Developer productivity tools.',
+  instructions: '...',
+})
+
+const supportSkill = createSkill({
+  name: 'support-guide',
+  description: 'Customer support guidelines.',
+  instructions: '...',
+})
+
+export const agent = new Agent({
+  id: 'dynamic-agent',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  // highlight-start
+  skills: ({ requestContext }) => {
+    const role = requestContext.get('userRole')
+    if (role === 'developer') return [devSkill]
+    return [supportSkill]
+  },
+  // highlight-end
+})
+```
+
+解析器函數接收`{ requestContext, tracingContext }` and returns a `SkillInput[]` array or a `Promise<SkillInput[]>`.
+
+解析器每運行一次`RequestContext`. During an agent execution it runs inside a `resolve-skills` span, and `tracingContext.currentSpan` lets you create child spans for your own work, the same way tools do. The resolver also runs on metadata reads such as `agent.listSkills()` and the server's agent endpoints, where no span exists and `tracingContext.currentSpan` is `undefined`, so keep it fast and guard any span usage:
+
+```typescript title="src/mastra/agents/index.ts"
+skills: async ({ requestContext, tracingContext }) => {
+  const span = tracingContext?.currentSpan?.createChildSpan({
+    type: 'generic',
+    name: 'entitlements-lookup',
+  })
+  const skills = await fetchSkillsFor(requestContext.get('userId'))
+  span?.end()
+  return skills
+}
+```
+
+看[Request Context](/docs/server/request-context) for more on using request context with agents and workflows.
+
+## 與工作空間技能融合 {/* #merging-with-workspace-skills */}
+
+當Agent同時擁有兩者時`skills` and a workspace with skills configured, they merge. Agent-level skills take precedence on name conflicts:
+
+```typescript title="src/mastra/agents/index.ts"
+import { Agent } from '@mastra/core/agent'
+import { Workspace, LocalFilesystem } from '@mastra/core/workspace'
+import { createSkill } from '@mastra/core/skills'
+
+const workspace = new Workspace({
+  filesystem: new LocalFilesystem({ basePath: './workspace' }),
+  skills: ['skills'], // provides "code-review" skill
+})
+
+const customReview = createSkill({
+  name: 'code-review', // same name as workspace skill
+  description: 'Custom review process.',
+  instructions: '...',
+})
+
+export const reviewer = new Agent({
+  id: 'reviewer',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  workspace,
+  skills: [customReview], // agent-level "code-review" wins
+})
+```
+
+## 程式化技能訪問 {/* #programmatic-skill-access */}
+
+使用`agent.getSkill()` and `agent.listSkills()` to access skills from application code (e.g., in workflows or API routes):
+
+```typescript title="src/routes/skills.ts"
+import { reviewer } from '../mastra/agents'
+
+// Get a specific skill by name
+const skill = await reviewer.getSkill('code-review')
+if (skill) {
+  console.log(skill.instructions)
+}
+
+// List all available skills
+const allSkills = await reviewer.listSkills()
+for (const meta of allSkills) {
+  console.log(`${meta.name}: ${meta.description}`)
+}
+```
+
+訪問[`.getSkill()` reference](/reference/agents/getSkill) and [`.listSkills()` reference](/reference/agents/listSkills) for the full API.
+
+## 保存前驗證技能 {/* #validating-skills-before-saving */}
+
+如果你的應用程式寫`SKILL.md` files (from a tool, an upload, or a shell command), validate the content first with `validateSkillContent()`. It applies the same rules used when skills are loaded, including the check that `name` matches the directory name, and returns structured results instead of throwing:
+
+```typescript
+import { validateSkillContent } from '@mastra/core/skills'
+
+const result = validateSkillContent({ content: skillMarkdown, directoryName: 'code-review' })
+
+if (!result.valid) {
+  throw new Error(`Invalid skill:\n${result.errors.join('\n')}`)
+}
+// result.warnings lists non-blocking issues, such as very long instructions
+```
+
+若要驗證已解析的 frontmatter 對象，請使用`validateSkillMetadata({ metadata, directoryName })`.
+
+## 有關的 {/* #related */}
+
+* [工作空間技能](/docs/sandbox/skills)
+* [`createSkill()`參考](/reference/agents/createSkill)
+* [`.getSkill()`參考](/reference/agents/getSkill)
+* [`.listSkills()`參考](/reference/agents/listSkills)
+* [Agent技能規範](https://agentskills.io)

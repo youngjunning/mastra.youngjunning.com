@@ -1,0 +1,387 @@
+---
+title: 'Sandboxes'
+description: "Run Mastra agents in isolated local or remote sandboxes with filesystem access, shell commands, code execution, and optional computer-use tools."
+packages:
+  - '@mastra/core'
+---
+
+import { IntegrationGrid } from '@site/src/components/integrations/grid';
+
+# Sandbox和文件系统
+
+{/* vale ai-tells.VerbTricolon = NO */}
+
+Sandbox为您的Agent提供了一个隔离的环境，可以在其中运行命令、执行代码、安装依赖项和管理进程。这使得Agent可以执行有风险、资源密集型或直接在应用程序内运行不切实际的工作。
+
+Sandbox通常是临时的，因此当环境停止时，在其中创建的文件可能会消失。一个[filesystem](/docs/sandbox/filesystem) gives the agent a place to read, write, and [搜索](/docs/sandbox/search)比Sandbox寿命更长的文件。您可以使用它来保留运行之间的输出，使用现有文件播种新的Sandbox，或者向Agent提供它可以在工作时搜索的文档。文件系统也可以在没有Sandbox的情况下工作，例如，当Agent只需要知识库或访问 Google Drive 等服务中的文件时。一个现实世界的例子是[马斯特拉工厂](https://factory.mastra.ai/)它使用Sandbox为编码Agent会话提供存储库签出、依赖项和命令的环境。
+
+{/* vale ai-tells.VerbTricolon = YES */}
+
+## 何时使用Sandbox {/* #when-to-use-sandboxes */}
+
+当Agent需要执行以下操作时使用Sandbox：
+
+* 克隆存储库并在单独的环境中运行 shell、Git、构建或测试Workflow程。
+* 使用专门的库处理 PDF、演示文稿或其他文件并生成新的工件。
+* 在具有隔离文件和进程的单独环境中运行长期或并行工作。
+
+如果Agent只需要读取、写入或搜索文件，请配置[direct filesystem access](/docs/sandbox/filesystem#direct-filesystem-access).
+
+## 快速入门 {/* #quickstart */}
+
+为Agent提供一个本地Sandbox：
+
+```typescript title="src/mastra/agents/coding-agent.ts"
+import { Agent } from '@mastra/core/agent'
+import { LocalSandbox, Workspace } from '@mastra/core/workspace'
+
+export const codingAgent = new Agent({
+  id: 'coding-agent',
+  name: 'Coding agent',
+  instructions: 'Use the sandbox to complete coding tasks.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  workspace: new Workspace({
+    sandbox: new LocalSandbox({
+      workingDirectory: './workspace',
+    }),
+  }),
+})
+
+await codingAgent.generate('List the files in the sandbox directory')
+```
+
+：：：警告
+
+`LocalSandbox`默认情况下在应用程序主机上运行命令，并且不隔离或不安全。使能够[native isolation](#localsandbox), or use a remote or container sandbox when running untrusted code.
+
+:::
+
+静态Sandbox在使用Agent的每个请求和内存线程之间共享。使用一个[resolver](#sandboxes-per-user-or-thread) when each user or thread needs a separate environment. See [Lifecycle and persistence](#lifecycle-and-persistence) for sharing and cleanup details.
+
+## 使用Sandbox {/* #using-the-sandbox */}
+
+Agent接收沙盒后端支持的功能Tool：
+
+|Tool|是否 |
+| - | - |
+|`execute_command` | Runs a shell command and returns stdout, stderr, and the exit code. Supports `background: true` when the backend can spawn long-running processes. |
+| `get_process_output` | Gets stdout, stderr, and status for a background process. Supports `tail` to limit output and `wait: true` to wait for the process to exit. For a static sandbox, this tool and `kill_process` are only added when the backend supports background processes. Workspaces that resolve their sandbox per request always include both tools, because capabilities aren't known until the sandbox resolves. |
+| `kill_process` | Stops a background process and returns its recent output. |
+
+配置的功能决定了哪些Tool可用。然后，Tool配置可以禁用、重命名这些Tool或向这些Tool添加策略：
+
+```typescript
+import { LocalSandbox, Workspace, WORKSPACE_TOOLS } from '@mastra/core/workspace'
+
+const workspace = new Workspace({
+  sandbox: new LocalSandbox({ workingDirectory: './workspace' }),
+  tools: {
+    requireApproval: true,
+    [WORKSPACE_TOOLS.SANDBOX.EXECUTE_COMMAND]: {
+      enabled: false,
+    },
+  },
+})
+```
+
+放`{ enabled: false }` on one tool to remove it, or set the top-level `enabled: false` to disable generated tools by default. A per-tool `{ enabled: true }` overrides that global setting. The top-level `requireApproval` policy applies to every generated tool unless a per-tool entry overrides it.
+
+请参阅[sandbox tools reference](/reference/workspace/workspace-class#sandbox-tools) for all generated tools and the [tool configuration reference](/reference/workspace/workspace-class#tool-configuration) for approvals, output limits, and hooks.
+
+{/* vale ai-tells.VerbTricolon = NO */}
+
+编写的运行时函数（包括Tool和Workflow步骤）可以从其执行上下文获取实时Sandbox。使用它来执行命令、安装依赖项、处理文件或生成长时间运行的进程。
+
+{/* vale ai-tells.VerbTricolon = YES */}
+
+```typescript title="src/mastra/tools/start-server.ts"
+import { createTool } from '@mastra/core/tools'
+import { z } from 'zod'
+
+export const startServerTool = createTool({
+  id: 'start-server',
+  description: 'Starts a server in the sandbox',
+  inputSchema: z.object({
+    command: z.string(),
+  }),
+  execute: async ({ command }, ctx) => {
+    if (!ctx.workspace || !ctx.requestContext) {
+      throw new Error('This tool requires a workspace execution context')
+    }
+
+    const sandbox = await ctx.workspace.resolveSandbox({
+      requestContext: ctx.requestContext,
+    })
+
+    if (!sandbox?.processes) {
+      throw new Error('The configured sandbox does not support background processes')
+    }
+
+    const server = await sandbox.processes.spawn(command)
+    return { pid: server.pid }
+  },
+})
+```
+
+## Sandbox {/* #sandboxes */}
+
+### `LocalSandbox` {/* #localsandbox */}
+
+[`LocalSandbox`](/reference/workspace/local-sandbox)在与 Mastra 应用程序相同的机器上执行命令。默认情况下，命令直接在主机上运行，​​具有应用程序进程的权限。
+
+`workingDirectory`仅设置命令运行的位置。 Mastra 不会将您的项目复制到其中。要为Agent提供自己的结账功能，请运行`git clone` or `git worktree add` into a directory outside the source repository.
+
+```typescript
+const sandbox = new LocalSandbox({
+  workingDirectory: './workspace',
+  isolation: 'seatbelt', // Use 'bwrap' on Linux
+  nativeSandbox: {
+    allowNetwork: false,
+    readOnlyPaths: ['./reference-data'],
+  },
+})
+```
+
+启用本机隔离以限制操作系统级别的文件系统和网络访问。在 macOS 上，本机隔离使用安全带 (`sandbox-exec`). On Linux, it uses Bubblewrap (`bwrap`). Use `LocalSandbox.detectIsolation()` to check whether Seatbelt or Bubblewrap is available on the current operating system.
+
+这[`nativeSandbox` options](/reference/workspace/local-sandbox#nativesandboxconfig) control network access, read-only or writable paths, write access to the working directory, and system binaries. You can also provide a custom Seatbelt profile or Bubblewrap arguments. See [`LocalSandbox`](/reference/workspace/local-sandbox) for the full configuration.
+
+### 远程Sandbox {/* #remote-sandboxes */}
+
+当命令需要来自主机应用程序的更强边界或工作负载需要扩展到超出应用程序服务器的资源时，请使用远程Sandbox或容器Sandbox。每个Sandbox都有自己的隔离、持久性、网络和挂载行为：
+
+<IntegrationGrid section="Sandboxes" />
+
+如果 Mastra 不支持您的SandboxProvider，请实施[sandbox provider interface](/reference/workspace/sandbox) to add it.
+
+## 文件系统 {/* #filesystem */}
+
+每个Sandbox都有一个用于命令的文件系统。`LocalSandbox` uses the host filesystem, while remote sandboxes have isolated filesystems that are often temporary. For files that need to outlive a sandbox, use external storage.
+
+Mastra 文件系统将Agent和Sandbox连接到Provider支持的存储，例如 Amazon S3、Google Cloud Storage 或 Google Drive。配置一个为Agent提供了读取、写入和搜索文件的Tool。当远程Sandbox和提供程序支持挂载时，Mastra 会自动通过用户空间中的文件系统 (FUSE) 挂载存储。命令使用普通文件路径，而提供程序将更改存储在Sandbox之外。
+
+看[Filesystem](/docs/sandbox/filesystem) for providers, file tools, and mounts.
+
+## 电脑使用 {/* #computer-use */}
+
+支持的桌面Sandbox为Agent提供屏幕截图、鼠标和键盘控制。看[Computer](/docs/sandbox/computer) for supported sandboxes and configuration.
+
+## 每个用户或线程的Sandbox {/* #sandboxes-per-user-or-thread */}
+
+使用一个**resolver** when each user, tenant, or thread needs a separate sandbox. Set `sandboxCacheKey` to the identity that owns the sandbox so later requests reuse the same live environment.
+
+此示例为每个用户创建并缓存一个 Daytona Sandbox：
+
+```typescript title="src/mastra/workspaces.ts"
+import { Workspace } from '@mastra/core/workspace'
+import { DaytonaSandbox } from '@mastra/daytona'
+
+const workspace = new Workspace({
+  sandbox: async ({ requestContext }) => {
+    const userId = requestContext.get('user-id') as string
+    const sandbox = new DaytonaSandbox({ id: `user-${userId}` })
+    await sandbox.start()
+    return sandbox
+  },
+  sandboxCacheKey: ({ requestContext }) => requestContext.get('user-id') as string,
+})
+```
+
+用户的第一个请求将创建Sandbox。具有相同用户 ID 的后续请求将重用它。
+
+对于具有持久存储的Sandbox，创建一个[filesystem](/docs/sandbox/filesystem) and mount it inside the resolver. This example creates one Daytona sandbox and one S3 storage prefix per memory thread, then mounts the storage at `/workspace`:
+
+```typescript title="src/mastra/workspaces.ts"
+import { MASTRA_THREAD_ID_KEY, type RequestContext } from '@mastra/core/request-context'
+import { Workspace } from '@mastra/core/workspace'
+import { DaytonaSandbox } from '@mastra/daytona'
+import { S3Filesystem } from '@mastra/s3'
+
+const getThreadId = (requestContext: RequestContext) => {
+  const threadId = requestContext.get(MASTRA_THREAD_ID_KEY)
+  if (typeof threadId !== 'string' || !threadId) {
+    throw new Error('MASTRA_THREAD_ID_KEY is not set on the request context')
+  }
+  return threadId
+}
+
+const createThreadFilesystem = (threadId: string) =>
+  new S3Filesystem({
+    bucket: process.env.S3_BUCKET!,
+    region: process.env.S3_REGION!,
+    prefix: `threads/${threadId}`,
+  })
+
+const workspace = new Workspace({
+  filesystem: ({ requestContext }) => createThreadFilesystem(getThreadId(requestContext)),
+  sandbox: async ({ requestContext }) => {
+    const threadId = getThreadId(requestContext)
+    const sandbox = new DaytonaSandbox({
+      id: `thread-${threadId}`,
+      language: 'typescript',
+    })
+
+    await sandbox.start()
+    await sandbox.mount(createThreadFilesystem(threadId), '/workspace')
+    return sandbox
+  },
+  sandboxCacheKey: ({ requestContext }) => getThreadId(requestContext),
+})
+```
+
+解析器仅接收请求上下文，因此线程 ID 必须位于其上。`agent.stream()` and `agent.generate()` don't copy `memory.thread` to `MASTRA_THREAD_ID_KEY`, so set the key yourself from a trusted thread ID, either in [server middleware](/docs/server/request-context#reserved-keys) or when you call the agent:
+
+```typescript
+import { MASTRA_THREAD_ID_KEY, RequestContext } from '@mastra/core/request-context'
+
+const requestContext = new RequestContext()
+requestContext.set(MASTRA_THREAD_ID_KEY, threadId)
+
+await agent.stream(message, {
+  memory: { thread: threadId, resource: userId },
+  requestContext,
+})
+```
+
+`getThreadId()`当密钥丢失时抛出，因此没有线程的请求失败而不是共享`threads/undefined` prefix and sandbox with every other such request.
+
+线程中的第一个请求运行解析器并启动Sandbox。具有相同线程 ID 的后续请求将重用缓存的Sandbox。不同的线程ID会创建不同的Sandbox和存储前缀。
+
+该示例将文件系统安装在解析器内，因为静态`mounts` can't be combined with a sandbox resolver. Generated tools resolve the filesystem and sandbox from the request context automatically.
+
+：：：警告
+
+您的应用程序拥有解析器返回的Sandbox。消灭他们并召唤`workspace.clearSandboxCache(cacheKey)` when the user, thread, or session ends. `workspace.destroy()` doesn't destroy resolver-returned sandboxes.
+
+:::
+
+### 座席Workspace功能 {/* #agent-workspace-functions */}
+
+一个Agent的`workspace` option also accepts a function that returns a `Workspace`. Mastra calls this function whenever it needs the agent's workspace, not only when the agent runs. This includes registering the agent at startup and reading agent metadata, such as `GET /api/agents` and `GET /api/agents/:agentId`, which Studio calls when it lists agents. These calls aren't cached.
+
+保持该功能便宜。不要在其中启动Sandbox或其他付费基础设施。返回一个使用的Workspace`filesystem` and `sandbox` resolvers instead. Mastra calls the filesystem resolver when it builds the workspace instructions for a run, when a tool needs the provider, and when the agent's workspace skills are read, including on the agent metadata routes. It calls the sandbox resolver only when a tool needs the provider, unless you set `instructions.dynamicSandbox` to `'resolve'`.
+
+### Tool可用性 {/* #tool-availability */}
+
+通过静态Sandbox，Mastra 知道后端支持哪些功能，只为Agent提供相应的Tool。应用程序代码还应该在使用之前检查可选功能是否可用。
+
+因为一个[resolver-backed sandbox](#sandboxes-per-user-or-thread) isn't known until request time, Mastra initially exposes every sandbox tool. Calling one unsupported by the resolved backend fails with `SandboxFeatureNotSupportedError`.
+
+## 后台进程 {/* #background-processes */}
+
+当Agent通过以下方式启动后台进程时`execute_command`, you can receive lifecycle callbacks for stdout, stderr, and process exit. Configure these through the `backgroundProcesses` option on its `WORKSPACE_TOOLS.SANDBOX.EXECUTE_COMMAND` entry:
+
+```typescript title="src/mastra/workspaces.ts"
+import { Workspace, LocalSandbox, WORKSPACE_TOOLS } from '@mastra/core/workspace'
+
+const workspace = new Workspace({
+  sandbox: new LocalSandbox({ workingDirectory: './workspace' }),
+  tools: {
+    [WORKSPACE_TOOLS.SANDBOX.EXECUTE_COMMAND]: {
+      backgroundProcesses: {
+        onStdout: (data, { pid }) => console.log(`[${pid}] ${data}`),
+        onStderr: (data, { pid }) => console.error(`[${pid}] ${data}`),
+        onExit: ({ pid, exitCode }) => console.log(`Process ${pid} exited: ${exitCode}`),
+      },
+    },
+  },
+})
+```
+
+这些回调会为Agent通过以下方式启动的所有后台进程触发：`execute_command`.
+
+默认情况下，后台进程会继承Agent的中止信号，并在Agent断开连接时停止。放`abortSignal` to a custom signal, or use `null` or `false` when the process should continue after the request ends.
+
+对于完整的`SandboxProcessManager` API, including programmatic process spawning, output, and standard input, see the [`SandboxProcessManager` reference](/reference/workspace/process-manager).
+
+## 生命周期和持久性 {/* #lifecycle-and-persistence */}
+
+谁共享Sandbox取决于您配置它的位置以及您是否使用解析器：
+
+|配置|谁分享沙盒|
+| - | - |
+|玛斯特拉级配置|继承配置的Agent[`Mastra`](/reference/configuration) instance use the same sandbox. |
+| Agent-level configuration | Every request handled by that agent instance uses the same sandbox. |
+| Resource-scoped resolver | The resolver caches one sandbox for each resource ID. |
+| Thread-scoped resolver | A memory thread keeps its sandbox across requests in that thread. |
+
+静态Sandbox不会自动将范围限定为当前资源或内存线程。对于资源或线程范围，使用解析器并设置`sandboxCacheKey` to the corresponding ID. See [Sandboxes per user or thread](#sandboxes-per-user-or-thread).
+
+### 开始 {/* #start */}
+
+静态Sandbox环境通常在第一个命令运行时启动，因此大多数应用程序不需要显式初始化它们。称呼`workspace.init()` during application startup only when you want to start a static sandbox and prepare its mounts before serving requests. This is useful when credential, network, or provider errors need to surface during startup instead of on the first command.
+
+`workspace.init()`不会启动解析器支持的Sandbox，因为在请求运行之前不会选择任何Sandbox。解析器必须返回一个已经启动的Sandbox或者可以在第一次使用时自行启动。
+
+### 挂钩 {/* #hooks */}
+
+使用`onStart`, `onStop`, and `onDestroy` to run application code during lifecycle transitions. Hooks receive the live sandbox instance:
+
+```typescript
+const sandbox = new LocalSandbox({
+  workingDirectory: './workspace',
+  onStart: ({ sandbox }) => console.log(`Started ${sandbox.id}`),
+  onStop: ({ sandbox }) => console.log(`Stopping ${sandbox.id}`),
+  onDestroy: ({ sandbox }) => console.log(`Destroying ${sandbox.id}`),
+})
+```
+
+`onStart`Sandbox启动后运行。`onStop` and `onDestroy` run before their corresponding operation.
+
+### 清理 {/* #cleanup */}
+
+当您直接配置Sandbox而不是使用解析器时，Mastra 拥有它。`mastra dev` and the generated Mastra server handle shutdown signals and destroy registered resources automatically. If you embed Mastra in a custom server or process, call `mastra.shutdown()` from its shutdown hook. For standalone use, call `workspace.destroy()` directly.
+
+后端决定什么`stop()` and `destroy()` do. For example, stopping may shut down compute while preserving an environment that can restart, while destroying may delete the environment and its ephemeral files. Check the selected backend before relying on either behavior.
+
+解析器返回的Sandbox归您的应用程序所有。`workspace.destroy()` and `mastra.shutdown()` clear cached references but don't destroy resolved sandboxes. Application lifecycle code must keep track of them, call `destroy()` when their user, thread, or session ends, and then call `workspace.clearSandboxCache(cacheKey)`. This prevents unused compute from continuing to run and later requests from reusing a stale sandbox.
+
+### 坚持 {/* #persistence */}
+
+持久性是特定于后端的。当Sandbox停止或应用程序重新启动时，不能保证文件和进程能够存活。空闲超时也可能会丢弃它们。某些后端通过Sandbox ID 重新连接或保留快照和卷。其他人创造了一个新鲜的环境。
+
+每个Sandbox都有一个`id`, but the ID isn't a cross-backend persistence guarantee. Read the selected backend's reference before relying on reconnection or persisted state.
+
+## 网络和凭证安全 {/* #network-and-credential-safety */}
+
+Mastra 没有定义适用于每个Sandbox后端的一种网络策略。默认值和支持的控件各不相同，因此请在运行不受信任的代码之前检查所选的后端。对于敏感或生产工作负载，最好阻止出站访问或仅允许任务所需的目的地。创建Sandbox时应用该策略，以便它在命令运行之前生效。
+
+如果Agent在远程Sandbox内启动 Web 服务器，该服务器最初会侦听Sandbox内的端口。支持端口暴露的后端实现`sandbox.networking.getPortUrl()` to return a URL you can use to preview or test the server from outside the sandbox:
+
+```typescript
+const url = await sandbox.networking?.getPortUrl(8000)
+```
+
+根据后端的访问控制，该 URL 可能会使其他人可以访问该服务。这种入站暴露与出站Sandbox访问是分开的。`LocalSandbox` with native isolation blocks network access by default unless `allowNetwork` is enabled. Without native isolation, local commands use the host network.
+
+例如，`DaytonaSandbox` allows outbound access unless you configure a restriction. Set `networkBlockAll` with a domain allowlist when the task only needs specific services:
+
+```typescript
+import { DaytonaSandbox } from '@mastra/daytona'
+
+const sandbox = new DaytonaSandbox({
+  networkBlockAll: true,
+  domainAllowList: 'registry.npmjs.org,api.github.com',
+})
+```
+
+Daytona 在创建Sandbox时应用这些设置。它还通过以下方式支持 CIDR 规则`networkAllowList`. See the [Daytona integration page](/integrations/sandboxes/daytona) for full configuration details.
+
+传递到Sandbox或命令的环境变量可供在那里运行的代码使用。 Mastra 不提供后端中立的凭证Agent，该Agent在授权其请求时将秘密保留在Sandbox之外。仅向命令提供其所需的凭据（仅限于任务）。遵循所选后端的秘密管理指导。
+
+例如，将只读令牌传递给需要它的命令，而不是为Sandbox中的每个命令配置它：
+
+```typescript
+await sandbox.executeCommand('node', ['scripts/download-reports.js'], {
+  env: {
+    REPORTS_READ_TOKEN: process.env.REPORTS_READ_TOKEN,
+  },
+})
+```
+
+## 有关的 {/* #related */}
+
+* [`SandboxProcessManager`参考](/reference/workspace/process-manager)
+* [Sandbox提供者接口](/reference/workspace/sandbox)
+* [文件系统](/docs/sandbox/filesystem)
+* [马斯特拉工厂](https://factory.mastra.ai)

@@ -1,0 +1,512 @@
+---
+title: "Vercel | Sandbox"
+description: "Run Mastra workspace commands in Vercel Sandbox microVMs or stateless Serverless Functions, with authentication, files, ports, and processes."
+packages:
+  - "@mastra/vercel"
+---
+
+import Tabs from "@theme/Tabs";
+import TabItem from "@theme/TabItem";
+
+# Vercel 沙箱
+
+使用持久性 Sandbox microVM 或無狀態 Serverless Functions 在隔離的 Vercel 環境中執行指令。
+
+## 維塞爾沙箱 {/* #vercel-sandbox */}
+
+執行裡面的命令[Vercel Sandbox](https://vercel.com/docs/vercel-sandbox) which is an ephemeral [Firecracker](https://firecracker-microvm.github.io/)運行 Amazon Linux 2023 的 MicroVM。提供持久的會話中檔案系統，`sudo`存取、暴露的連接埠和後台進程。接口詳情請參見[WorkspaceSandbox介面](/reference/workspace/sandbox).
+
+：：：筆記
+
+這與[`VercelServerlessSandbox`](#vercel-serverless-sandbox), which runs commands as stateless Vercel serverless **Functions**. `VercelSandbox` runs a full Linux MicroVM with a persistent filesystem and long-running processes.
+
+:::
+
+### 安裝 {/* #installation */}
+
+```bash npm2yarn
+npm install @mastra/vercel
+```
+
+### 驗證 {/* #authentication */}
+
+這`@vercel/sandbox` SDK uses a Vercel OIDC token automatically when no explicit credentials are provided. If you provide `token`, `teamId`, or `projectId`, provide all three values together.
+
+<Tabs>
+  <TabItem value="oidc" label="OIDC (recommended)">
+    對於本機開發，連結專案並拉取開發令牌：
+
+    ```bash
+    vercel link
+    vercel env pull
+    ```
+
+    在 Vercel 上，身份驗證是自動處理的 - 無需配置。
+  </TabItem>
+
+  <TabItem value="env-file" label="Access token (.env)">
+    對於沒有 OIDC 的環境，請一起提供所有三個值：
+
+    ```bash
+    VERCEL_TOKEN=your-token
+    VERCEL_TEAM_ID=your-team-id
+    VERCEL_PROJECT_ID=your-project-id
+    ```
+  </TabItem>
+
+  <TabItem value="constructor" label="Constructor">
+    ```typescript
+    new VercelSandbox({
+      token: 'your-token',
+      teamId: 'your-team-id',
+      projectId: 'your-project-id',
+    })
+    ```
+  </TabItem>
+</Tabs>
+
+### 用法 {/* #usage */}
+
+添加一個`VercelSandbox` to a workspace and assign it to an agent:
+
+```typescript
+import { Agent } from '@mastra/core/agent'
+import { Workspace } from '@mastra/core/workspace'
+import { VercelSandbox } from '@mastra/vercel'
+
+const workspace = new Workspace({
+  sandbox: new VercelSandbox({
+    runtime: 'node24',
+    timeout: 600_000,
+  }),
+})
+
+const agent = new Agent({
+  id: 'code-agent',
+  name: 'Code Agent',
+  instructions: 'You are a coding assistant working in this workspace.',
+  model: '__GATEWAY_ANTHROPIC_MODEL_SONNET__',
+  workspace,
+})
+
+const response = await agent.generate('Print "Hello, world!" and show the Node.js version.')
+
+console.log(response.text)
+```
+
+#### 資源和暴露的端口 {/* #resources-and-exposed-ports */}
+
+分配 vCPU（每個 vCPU 2048 MB 記憶體）並公開連接埠以存取沙箱內運行的網路服務：
+
+```typescript
+const sandbox = new VercelSandbox({
+  runtime: 'node24',
+  resources: { vcpus: 4 },
+  ports: [3000],
+})
+
+const workspace = new Workspace({ sandbox })
+await sandbox.start()
+
+// The public HTTPS domain for an exposed port is available via getInfo()
+const { metadata } = sandbox.getInfo()
+console.log(metadata?.domains) // { 3000: 'https://....vercel.run' }
+```
+
+#### 串流輸出 {/* #streaming-output */}
+
+透過即時串流命令輸出`onStdout` and `onStderr` callbacks:
+
+```typescript
+await sandbox.executeCommand('sh', ['-c', 'for i in 1 2 3; do echo "line $i"; sleep 1; done'], {
+  onStdout: chunk => process.stdout.write(chunk),
+  onStderr: chunk => process.stderr.write(chunk),
+})
+```
+
+兩個回調都是可選的並且可以獨立使用。
+
+### 建構函數參數 {/* #constructor-parameters */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'id',
+  type: 'string',
+  description: 'Unique identifier for this sandbox instance.',
+  isOptional: true,
+  defaultValue: 'Auto-generated',
+},
+{
+  name: 'sandboxName',
+  type: 'string',
+  description: 'Optional name passed to the Vercel API. Auto-generated if omitted.',
+  isOptional: true,
+},
+{
+  name: 'token',
+  type: 'string',
+  description: 'Vercel API token. Falls back to the VERCEL_TOKEN environment variable. Omit to use the OIDC token.',
+  isOptional: true,
+},
+{
+  name: 'teamId',
+  type: 'string',
+  description: 'Vercel team ID. Falls back to the VERCEL_TEAM_ID environment variable.',
+  isOptional: true,
+},
+{
+  name: 'projectId',
+  type: 'string',
+  description: 'Vercel project ID. Falls back to the VERCEL_PROJECT_ID environment variable.',
+  isOptional: true,
+},
+{
+  name: 'runtime',
+  type: "'node24' | 'node22' | 'node26' | 'python3.13'",
+  description: 'Sandbox runtime.',
+  isOptional: true,
+  defaultValue: "'node24'",
+},
+{
+  name: 'timeout',
+  type: 'number',
+  description: 'Timeout in milliseconds before the sandbox auto-terminates.',
+  isOptional: true,
+  defaultValue: '300000 (5 minutes)',
+},
+{
+  name: 'resources',
+  type: '{ vcpus?: number }',
+  description: 'Resource allocation. Each vCPU comes with 2048 MB of memory.',
+  isOptional: true,
+},
+{
+  name: 'ports',
+  type: 'number[]',
+  description:
+    'Ports to expose from the sandbox (up to 15). Public HTTPS domains are available via getInfo().metadata.domains.',
+  isOptional: true,
+},
+{
+  name: 'env',
+  type: 'Record<string, string>',
+  description: 'Default environment variables inherited by all commands.',
+  isOptional: true,
+  defaultValue: '{}',
+},
+{
+  name: 'workingDirectory',
+  type: 'string',
+  description:
+    'Default directory for command execution when no per-command `cwd` is given. A per-command `cwd` always wins. Use an absolute path.',
+  isOptional: true,
+},
+{
+  name: 'metadata',
+  type: 'Record<string, unknown>',
+  description: 'Custom metadata surfaced via getInfo().',
+  isOptional: true,
+  defaultValue: '{}',
+},
+{
+  name: 'instructions',
+  type: 'string | ((opts) => string)',
+  description:
+    'Override the default instructions returned by getInstructions(). Pass a string to replace them, or a function to extend the defaults.',
+  isOptional: true,
+},
+{
+  name: 'onStart',
+  type: 'SandboxStartHook',
+  description: 'Lifecycle hook called after the sandbox reaches `running` status.',
+  isOptional: true,
+},
+{
+  name: 'onStop',
+  type: 'SandboxLifecycleHook',
+  description: 'Lifecycle hook called before the sandbox stops.',
+  isOptional: true,
+},
+{
+  name: 'onDestroy',
+  type: 'SandboxLifecycleHook',
+  description: 'Lifecycle hook called before the sandbox is destroyed.',
+  isOptional: true,
+},
+]}
+/>
+
+### 特性 {/* #properties */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'id',
+  type: 'string',
+  description: 'Sandbox instance identifier.',
+},
+{
+  name: 'name',
+  type: "'VercelSandbox'",
+  description: 'Human-readable name.',
+},
+{
+  name: 'provider',
+  type: "'vercel-sandbox'",
+  description: 'Provider type identifier.',
+},
+{
+  name: 'status',
+  type: 'ProviderStatus',
+  description: "'pending' | 'starting' | 'running' | 'stopping' | 'stopped' | 'destroying' | 'destroyed' | 'error'",
+},
+{
+  name: 'sandbox',
+  type: 'Sandbox',
+  description:
+    'The underlying @vercel/sandbox Sandbox instance. Throws SandboxNotReadyError if the sandbox has not been started.',
+},
+{
+  name: 'processes',
+  type: 'VercelSandboxProcessManager',
+  description:
+    'Background process manager. See [SandboxProcessManager reference](/reference/workspace/process-manager).',
+},
+]}
+/>
+
+### 後台程式 {/* #background-processes */}
+
+`VercelSandbox`包括用於產生和管理後台進程的進程管理器。每個產生的進程都以 MicroVM 內的獨立命令執行，並透過命令日誌傳輸輸出。
+
+```typescript
+const sandbox = new VercelSandbox({ runtime: 'node24', ports: [3000] })
+await sandbox.start()
+
+const handle = await sandbox.processes.spawn('node server.js', {
+  env: { PORT: '3000' },
+  onStdout: data => console.log(data),
+})
+
+console.log(handle.stdout)
+await handle.kill()
+```
+
+請參閱[`SandboxProcessManager` reference](/reference/workspace/process-manager) for the full API.
+
+：：：筆記
+
+Vercel Sandbox SDK 不公開用於運行命令的標準輸入通道，因此`handle.sendStdin()` throws.
+
+Mastra 適配器不實作 Workspace 檔案系統安裝 API。底層 Vercel Sandbox 產品支持[Filesystem in Userspace (FUSE) mounts](https://vercel.com/docs/sandbox/mount-remote-storage). You can configure a mount directly through the underlying SDK instance exposed by `sandbox.sandbox`, but Mastra doesn't manage its lifecycle.
+
+:::
+
+### 限制 {/* #limits */}
+
+* 最多 32 個 vCPU，每個 vCPU 具有 2048 MB 記憶體。
+* 最多 15 個暴露連接埠。
+* 文件系統是短暫的。它僅在會話內保留，並在沙箱停止時丟失。
+* 最長運行時間取決於計劃（Hobby 為 45 分鐘，Pro 和 Enterprise 最長為 24 小時），預設為 5 分鐘。
+
+請參閱[Vercel Sandbox documentation](https://vercel.com/docs/vercel-sandbox) for current limits and pricing.
+
+## Vercel 無伺服器沙箱 {/* #vercel-serverless-sandbox */}
+
+`VercelServerlessSandbox`執行命令為[Vercel](https://vercel.com) serverless functions. It provides globally distributed, zero-infrastructure execution with automatic scaling. For interface details, see the [WorkspaceSandbox interface](/reference/workspace/sandbox).
+
+：：：警告
+
+`VercelServerlessSandbox`是無國籍的。它不提供持久檔案系統、互動式 shell 或長時間運行的背景進程。僅有的`/tmp` is writable, and it's ephemeral between invocations.
+
+:::
+
+：：：筆記
+
+對於具有持久檔案系統的完整 Linux MicroVM，`sudo` access, exposed ports, and background processes, use [`VercelSandbox`](#vercel-sandbox), which is backed by the [Vercel Sandbox](https://vercel.com/docs/vercel-sandbox) product.
+
+:::
+
+### 安裝 {/* #installation-1 */}
+
+```bash npm2yarn
+npm install @mastra/vercel
+```
+
+### 用法 {/* #usage-1 */}
+
+添加一個`VercelServerlessSandbox` to a workspace and assign it to an agent:
+
+```typescript
+import { Agent } from '@mastra/core/agent'
+import { Workspace } from '@mastra/core/workspace'
+import { VercelServerlessSandbox } from '@mastra/vercel'
+
+const workspace = new Workspace({
+  sandbox: new VercelServerlessSandbox({
+    token: process.env.VERCEL_TOKEN,
+  }),
+})
+
+const agent = new Agent({
+  id: 'dev-agent',
+  name: 'dev-agent',
+  instructions: 'You are a coding assistant working in this workspace.',
+  model: '__GATEWAY_ANTHROPIC_MODEL_SONNET__',
+  workspace,
+})
+```
+
+#### 使用自訂資源進行團隊範圍的部署 {/* #team-scoped-deployment-with-custom-resources */}
+
+```typescript
+const workspace = new Workspace({
+  sandbox: new VercelServerlessSandbox({
+    token: process.env.VERCEL_TOKEN,
+    teamId: 'team_abc123',
+    regions: ['iad1', 'sfo1'],
+    maxDuration: 120,
+    memory: 3008,
+    env: {
+      NODE_ENV: 'production',
+    },
+  }),
+})
+```
+
+### 建構函數參數 {/* #constructor-parameters-1 */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'token',
+  type: 'string',
+  description: 'Vercel API token. Falls back to `VERCEL_TOKEN` environment variable.',
+  isOptional: true,
+},
+{
+  name: 'teamId',
+  type: 'string',
+  description: 'Vercel team ID for team-scoped deployments.',
+  isOptional: true,
+},
+{
+  name: 'projectName',
+  type: 'string',
+  description: 'Existing Vercel project name. Auto-generated if omitted.',
+  isOptional: true,
+},
+{
+  name: 'regions',
+  type: 'string[]',
+  description: 'Deployment regions.',
+  isOptional: true,
+  defaultValue: "['iad1']",
+},
+{
+  name: 'maxDuration',
+  type: 'number',
+  description: 'Function maximum duration in seconds.',
+  isOptional: true,
+  defaultValue: '60',
+},
+{
+  name: 'memory',
+  type: 'number',
+  description: 'Function memory in MB.',
+  isOptional: true,
+  defaultValue: '1024',
+},
+{
+  name: 'env',
+  type: 'Record<string, string>',
+  description:
+    'Environment variables baked into the deployed function source. These are embedded at deploy time, not set dynamically.',
+  isOptional: true,
+},
+{
+  name: 'workingDirectory',
+  type: 'string',
+  description:
+    'Default directory for command execution when no per-command `cwd` is given. A per-command `cwd` always wins. When omitted, commands fall back to `/tmp` and `sandbox.workingDirectory` stays undefined.',
+  isOptional: true,
+},
+{
+  name: 'commandTimeout',
+  type: 'number',
+  description: 'Per-invocation command timeout in milliseconds.',
+  isOptional: true,
+  defaultValue: '55000',
+},
+{
+  name: 'instructions',
+  type: 'string | ((opts) => string)',
+  description:
+    'Custom instructions that override the default instructions returned by `getInstructions()`. Pass a string to fully replace, or a function to extend the defaults.',
+  isOptional: true,
+},
+{
+  name: 'onStart',
+  type: 'SandboxStartHook',
+  description: 'Lifecycle hook called after the sandbox reaches `running` status.',
+  isOptional: true,
+},
+{
+  name: 'onStop',
+  type: 'SandboxLifecycleHook',
+  description: 'Lifecycle hook called before the sandbox stops.',
+  isOptional: true,
+},
+{
+  name: 'onDestroy',
+  type: 'SandboxLifecycleHook',
+  description: 'Lifecycle hook called before the sandbox is destroyed.',
+  isOptional: true,
+},
+]}
+/>
+
+### 特性 {/* #properties-1 */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'id',
+  type: 'string',
+  description: 'Unique identifier for this sandbox instance.',
+},
+{
+  name: 'name',
+  type: "'VercelServerlessSandbox'",
+  description: 'Human-readable name.',
+},
+{
+  name: 'provider',
+  type: "'vercel-serverless'",
+  description: 'Provider type identifier.',
+},
+{
+  name: 'status',
+  type: 'ProviderStatus',
+  description:
+    "Current lifecycle status: `'pending'`, `'starting'`, `'running'`, `'stopping'`, `'stopped'`, `'destroying'`, `'destroyed'`, or `'error'`.",
+},
+]}
+/>
+
+### 限制 {/* #limitations */}
+
+`VercelServerlessSandbox`在底層使用無伺服器功能，這意味著：
+
+* **沒有持久性檔案系統**：寫入的文件`/tmp` are ephemeral and cleared between invocations.
+* **沒有互動式 shell**：命令運行通過`/bin/sh -c` with no stdin streaming.
+* **無後台程式**：沒有進程管理器、PID 或長時間運行的任務。
+* **無需安裝**：不支援雲端儲存安裝（S3、GCS）。
+* **逾時限制**：最大執行時間受以下限制`maxDuration` (default 60s).
+
+### 有關的 {/* #related */}
+
+* [WorkspaceSandbox介面](/reference/workspace/sandbox)
+* [工作空間類](/reference/workspace/workspace-class)
+* [E2B沙箱](/integrations/sandboxes/e2b)：功能齊全的雲端沙箱，具有持久檔案系統和進程管理

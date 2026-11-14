@@ -1,0 +1,445 @@
+---
+title: 'Reference: Knowledge tools | Knowledge'
+description: 'Arguments, operations, required roles and errors of the six Knowledge tools.'
+packages:
+  - '@mastra/core'
+---
+
+# 知識Tool
+
+知識為Agent提供了六種Tool。Agent獲得哪些取決於知識`tools`和`pinnedContext`選項，或傳遞給的群組[`createTools()`](/reference/knowledge/knowledge-class#createtools)。看[Agent商和Tool](/docs/knowledge/agents-and-tools)了解Agent商如何使用它們。
+
+|集團|Tool|啟用者 |
+| - | - | - |
+|閱讀 |`knowledge_list`, `knowledge_search`, `knowledge_read` | `tools: true` or `tools: { read: true }`|
+|寫 |`knowledge_page`, `knowledge_note` | `tools: true`或者`tools: { write: true }`|
+|針腳 |`knowledge_pin` | `pinnedContext` |
+
+每個Tool都根據運行的範圍和知識聲明賦予它們的角色進行操作。不包含範圍的運行失敗並顯示：
+
+```text
+Knowledge tools need run scopes: give the agent or the call `scopes`, or run it with Memory.
+```
+
+Tool錯誤作為Tool結果而不是異常返回模型。執行無法讀取的頁面或註釋看起來不存在：錯誤表示未找到該頁面或註釋，但從未表示存取被拒絕。
+
+：：：阿爾法
+
+知識處於阿爾法階段。其 API 可能會在不同版本之間變更。
+
+:::
+
+## 頁面參考 {/* #page-references */}
+
+參數命名`page` (and `into`, `parent`, `from`) take any of these:
+
+* 頁面 ID。
+* 範圍位址，例如`org:acme`, for the scope's own page.
+* 頁面路徑，`<scope>#<key>[/<key>…]`, such as `policy:acme#refund-policy` or `org:acme#policies/refund`.
+* 準確的頁面名稱。
+
+在頁面路徑中，`/` before the `#` names a child scope, and a `/` after it names a child page. Leading, trailing and doubled slashes in the page part are dropped, so `org:acme#policies/` and `org:acme#policies` are the same page. Paths resolve when used. A moved page answers only to its new path.
+
+與多個可讀頁面相符的名稱將被候選人的參考文獻拒絕：
+
+```text
+Knowledge page name "Chargeback Playbook" is ambiguous; use one of these refs: team:acme:billing#chargeback-playbook, team:acme:support#chargeback-playbook.
+```
+
+`ref`, which any of these arguments accepts:
+
+* 範圍頁面的範圍位址。
+* 完整路徑，每個層級都有一個鍵的頁面，例如`docs:acme#guides/observability/logging`.
+* 頁面 ID，否則。
+
+讀取不存在的頁面時會列出最多三個相近的符合項`ref`.
+
+## `knowledge_search` {/* #knowledge_search */}
+
+搜尋運行可以讀取的頁面和註解。
+
+查詢被分割成單字，並且引號被忽略。每個單字作為任何單字的一部分進行匹配，不區分大小寫，因此`refund` matches `refunds`. A page matches when its name, description or body contains at least one of the words. A note matches when its own text does.
+
+關鍵字結果按以下順序排名：
+
+1. 名稱包含整個查詢的頁面。
+2. 其他頁面，按照它們包含的查詢單字數量，然後按照單字的位置（名稱高於描述，描述高於正文），然後是最近更新。
+3. 註釋，按它們包含多少個查詢詞，然後是最新的。
+
+訪問檢查和`scope` filter results before ranking. `limit` applies after it. With `vector` and `embedder` on the Knowledge instance, keyword and semantic results are merged by rank, so this order no longer holds.
+
+<PropertiesTable
+  content={[
+{
+  name: 'query',
+  type: 'string',
+  description:
+    'Words to look for. A result contains at least one of them, case-insensitively. An empty query returns nothing.',
+},
+{ name: 'scope', type: 'string[]', description: 'Only search pages in these scope addresses.', isOptional: true },
+{ name: 'limit', type: 'number', description: 'Maximum results, 1 to 50.', isOptional: true, defaultValue: '10' },
+]}
+/>
+
+退貨`{ results }`, each `{ type: 'page', page }` or `{ type: 'note', page, note }`. These searches also return `more`:
+
+* 沒有找到任何內容的搜尋表明不同的關鍵字或`knowledge_list`:
+
+  ```text
+  results: no page or note contains any word of "enterprise pricing tiers". Search again with different key words, or browse with knowledge_list.
+  ```
+
+* 一次充滿的搜索`limit` says how many results were shown, and to narrow the query or raise `limit` (up to 50) when none of them fits.
+
+`scope`僅採用範圍位址。頁面引用，例如`docs:acme#billing` is refused with a pointer to `knowledge_list`.
+
+## `knowledge_list` {/* #knowledge_list */}
+
+在起點下列出頁面樹，以便Agent可以在搜尋或讀取之前查看範圍或部分的組織方式。沒有`from`, it lists the scopes the run can read. Scopes the run can't read are left out.
+
+<PropertiesTable
+  content={[
+{ name: 'from', type: 'string', description: 'Where to start: a page reference.', isOptional: true },
+{
+  name: 'depth',
+  type: 'number',
+  description: 'How many levels below `from` to list, 1 to 3.',
+  isOptional: true,
+  defaultValue: '1',
+},
+{ name: 'limit', type: 'number', description: 'Maximum entries, 1 to 100.', isOptional: true, defaultValue: '50' },
+{
+  name: 'descriptions',
+  type: 'boolean',
+  description: "Add each page's description to its entry.",
+  isOptional: true,
+  defaultValue: 'false',
+},
+{
+  name: 'cursor',
+  type: 'string',
+  description:
+    "The previous result's `nextCursor`, or the cursor `more` gives. Pass the same `from`. A cursor keeps the `depth` and `limit` of the result it came from.",
+  isOptional: true,
+},
+]}
+/>
+
+退貨`{ from?, entries, nextCursor?, more? }`. `from` is `{ ref, name }`. Each entry is `{ ref, name, depth, children, scope? }`, plus `description` when `descriptions` is `true`: `depth` is 1 for the starting point's children, `children` counts the readable child pages (and child scopes, for a scope), and `scope` is `true` for a scope.
+
+結果停止於`limit` entries or at the read cap (about 1,000 tokens of entries by default), whichever comes first, and always holds at least one entry. When it stops early, `more` says how many entries were left out and gives the cursor that continues where it stopped.
+
+## `knowledge_read` {/* #knowledge_read */}
+
+讀取頁面：其正文、註釋、子頁面以及提及該頁面的其他頁面上的註釋。作用域位址讀取該作用域的頁面，其中列出了其頁面和子作用域。沒有`page`, it lists the scopes the run holds.
+
+<PropertiesTable
+  content={[
+{ name: 'page', type: 'string', description: 'A page reference.', isOptional: true },
+{
+  name: 'outline',
+  type: 'boolean',
+  description: "Return the body's headings, each with its level, line and size in tokens, instead of the body.",
+  isOptional: true,
+},
+{
+  name: 'section',
+  type: 'string',
+  description:
+    'Return only the section under this heading, subsections included, as numbered lines with their `range`. A unique part of the title works.',
+  isOptional: true,
+},
+{
+  name: 'match',
+  type: 'string | string[]',
+  description:
+    'Return only the lines that contain this term, or any of these terms (up to 10), case-insensitively, with `context` lines around each, like `grep -C`.',
+  isOptional: true,
+},
+{
+  name: 'context',
+  type: 'number',
+  description: 'With `match`: lines to show before and after each matching line, 0 to 20.',
+  isOptional: true,
+  defaultValue: '2',
+},
+{
+  name: 'from',
+  type: '{ line: number; col?: number }',
+  description:
+    'Where to start reading: in the chosen `section`, otherwise in the body. With `match`, where to continue matching. `more` gives it when a result is cut short. `col` (0-based) only appears inside a line too long for one read.',
+  isOptional: true,
+},
+{
+  name: 'notes',
+  type: 'boolean',
+  description: "Return only the page's notes, however long, without the body.",
+  isOptional: true,
+},
+{
+  name: 'mentionedIn',
+  type: 'boolean',
+  description: 'Return only the notes on other pages that mention this page, however long, without the body.',
+  isOptional: true,
+},
+{
+  name: 'cursor',
+  type: 'string',
+  description: "The previous result's `nextCursor`. Returns only the next notes.",
+  isOptional: true,
+},
+{
+  name: 'mentionedInCursor',
+  type: 'string',
+  description: "The previous result's `mentionedInCursor`. Returns only the next notes that mention this page.",
+  isOptional: true,
+},
+{
+  name: 'limit',
+  type: 'number',
+  description: 'Maximum notes, child pages and mentioning notes, 1 to 50.',
+  isOptional: true,
+  defaultValue: '10',
+},
+]}
+/>
+
+完整讀取返回`{ page, notes, children, childScopes?, mentionedIn, nextCursor?, mentionedInCursor?, more? }`, with the body on `page`. Anything cut short is listed in `more`, with how to get the rest:
+
+* **身體.**&#x9069;合讀取上限的主體（1,000 個令牌，除非[`tools.read.maxTokens`](/reference/knowledge/knowledge-class#constructor-options) sets it) comes back as `page.body`. A longer one comes back as `page.lines`, numbered (`12│text`), with `page.range`, the lines it covers, and `page.lineCount`. `more` says where to read on, such as `body: showing lines 1–40 of 412. Read on with from: {"line":41}.`
+* **第一次讀到很長的一頁。**&#x7C21;單閱讀（無`section` or `from`) of a body with headings shows the whole page at a glance instead: `page.lines` holds every heading with its line number and the first lines under it, shared out within the read cap, with `⋯ lines a–b` where lines are left out and `…` where a line is cut short. It has `page.lineCount` but no `page.range`, so it can't be written back: read a `section` or `from` a line first, and edit with the `range` that read returns. A body with no headings, or with more headings than fit in the cap, comes back as its first lines with `page.range` instead, plus `page.outline` of the headings it didn't reach (up to about 500 tokens of them).
+* **註釋和提及。**&#x6574;個讀取最多可達`limit` notes and up to `limit` mentioning notes. Each list comes along while those fetched notes stay under 1,000 tokens. A longer list is replaced by `notesLeftOut` or `mentionedInLeftOut`, the number of notes fetched, and `more` says to read it with `notes: true` or `mentionedIn: true`. When there are more notes than `limit`, both that number and the token estimate in `more` cover only the fetched notes, so the list is larger.
+* **子頁面和範圍。**&#x904E;去的`limit`, `more` says to list them with `knowledge_list`.
+
+一個`range` is `{ start: { line, col? }, end: { line, col? } }`. Lines start at 1. A read gives `col` only when a line is too long for one read. It's 0-based, and an end `col` is exclusive. Pass a range to `knowledge_page` to replace those lines.
+
+`match`回報`matches`, each `{ range, lines }`. When the matches run past the read cap (1,000 tokens by default), `more` gives the line to continue from, such as `match: stopped at about 1,000 tokens; more matches from line 120. Read again with the same match and from: {"line":120}.`
+
+`outline`, `section`, `match` and `from` return only that part of the body, with no notes, child pages or mentions. Pass at most one of `outline`, `section` and `match`. `notes`, `mentionedIn` and both cursors return only those notes, with no body, and can't be combined with the body options:
+
+```text
+knowledge_read: read notes or mentionedIn on their own, without outline, section, match or from.
+```
+
+## `knowledge_page` {/* #knowledge_page */}
+
+建立、編輯、移動、合併和刪除頁面。`scope` only names the destination: the home scope on create, the target scope on move. Edits and merges take no `scope`, and a delete ignores it. All three act on the page's own scope.
+
+<PropertiesTable
+  content={[
+{
+  name: 'op',
+  type: "'write' | 'move' | 'merge' | 'delete'",
+  description: '`write` with `page` edits it; without `page` it creates one.',
+},
+{ name: 'page', type: 'string', description: 'The page to edit, move, merge or delete.', isOptional: true },
+{
+  name: 'scope',
+  type: 'string',
+  description: 'Create: the home scope. Move: the destination scope.',
+  isOptional: true,
+},
+{ name: 'parent', type: 'string', description: 'Create or move: a parent page in that scope.', isOptional: true },
+{
+  name: 'into',
+  type: 'string',
+  description: "Merge: the page that remains. Both pages' notes are kept.",
+  isOptional: true,
+},
+{
+  name: 'key',
+  type: 'string',
+  description:
+    'Create: one path segment, unique among the page\'s siblings, with no "/", "#" or "%". `parent` supplies the rest of the path.',
+  isOptional: true,
+},
+{ name: 'name', type: 'string', description: 'The page name. Required on create.', isOptional: true },
+{
+  name: 'description',
+  type: 'string',
+  description: 'A short synopsis, about 100 tokens at most. An empty string clears it.',
+  isOptional: true,
+},
+{
+  name: 'body',
+  type: 'string',
+  description:
+    'The curated long-form summary, in markdown. Replaces the whole body, or with `range` only those lines. An empty `body` with `range` removes the lines.',
+  isOptional: true,
+},
+{
+  name: 'range',
+  type: '{ start: { line: number; col?: number }; end: { line: number; col?: number } }',
+  description:
+    'Edit: the lines to replace, from a `knowledge_read` `range` or `matches` entry, or a smaller range inside one. Needs `expectedVersion`.',
+  isOptional: true,
+},
+{
+  name: 'expectedVersion',
+  type: 'number',
+  description: 'The version you read. The write is refused if the page changed since.',
+  isOptional: true,
+},
+]}
+/>
+
+一個`body` write without `range` is refused when the stored body is longer than one read returns (the read cap, 1,000 tokens by default). A `range` is refused without `expectedVersion`, when it starts after it ends or runs past the end of the body, and when it covers more than one read from its first line shows:
+
+```text
+Lines 1–150 run past what one knowledge_read from line 1 shows, so this can't be a range a read gave you. Edit the body part by part: write each part back with the range its own read returned.
+```
+
+一個`body` that still has the line numbers from a read is refused: `This body still has the line numbers a knowledge_read put in front of each line ("12│"). Write the text without them.`
+
+|運作|需要的角色 |
+| - | - |
+|創造 （`write` without `page`) | `contributor` on `scope` |
+| Edit (`write` with `page`) | `editor` on the page's scope |
+| Move within a scope | `editor` on the page's scope |
+| Move to another scope | `owner` on the page's scope and on `scope` |
+| Merge | `owner` on the merged page's scope; on the scope of `into`, `editor` if it's the same scope and `owner` if it's another, since the merged page's children move there |
+| Delete | `owner` on the page's scope |
+
+模板頁面，在範圍中聲明`pages`, can be edited, annotated with notes and merged into, but not moved, merged away or deleted, whatever the run's role.
+
+範圍頁面的名稱和描述來自配置，因此`write` on a scope page changes only its body. The scope page can't be moved, merged or deleted.
+
+`delete`從讀取、搜尋和固定中刪除頁面。當頁面具有子頁面、範圍頁面和範本頁面時，它會被拒絕。
+
+錯誤：
+
+```text
+Creating a page needs scope and name.
+Editing a page needs at least one of name, description or body.
+Editing a page takes no scope, parent or key; use op "move" to relocate it.
+Moving a page needs the destination scope.
+Merging needs into: the page that remains.
+"Escalation" has child pages; move or delete them first.
+"org:acme" is a scope page; scope pages can't be moved, merged or deleted.
+"org:acme" is a scope page; its name and description come from config, so only its body can be written.
+Knowledge page "org:acme#policies/escalation" not found.
+Knowledge page key "a/b" must not contain "/", "#" or "%"
+Knowledge page key "escalation" already exists under page aa8f6099-6111-4952-b9cb-04cb97eb2bb5. Keys are unique among siblings; pick another key or move one of the pages.
+"org:acme#policies/refund" is declared in config; change the scope's pages to move it.
+"org:acme#policies/refund" is declared in config; change the scope's pages to remove it.
+Editing a page needs editor on "team:acme:support"; this run has viewer there.
+Moving a page across scopes needs owner on "org:acme"; this run has editor there.
+Merging a page away needs owner on "team:acme:support"; this run has editor there.
+Merging a page across scopes needs owner on "team-public:acme:support"; this run has editor there.
+Deleting a page needs owner on "org:acme"; this run has editor there.
+Knowledge page description exceeds the 100 token limit; put long-form text in the page body
+Knowledge record version conflict: 37c1e879-b328-47a9-9d3c-5788ad35ca2d
+```
+
+## `knowledge_note` {/* #knowledge_note */}
+
+新增、重新標記和刪除註釋。註釋是一頁上的一個持久事實。連結其他頁面`[[Page Name]]`. Its stamp scopes say who can see it: a run reads a note when it can read the page and at least one stamp scope.
+
+<PropertiesTable
+  content={[
+{ name: 'op', type: "'add' | 'restamp' | 'remove'", description: 'What to do.' },
+{ name: 'page', type: 'string', description: 'Add: the page.', isOptional: true },
+{ name: 'note', type: 'string', description: 'Restamp or remove: the note ID.', isOptional: true },
+{
+  name: 'scope',
+  type: 'string[]',
+  description: 'Add and restamp: the stamp scope addresses. Required for both.',
+  isOptional: true,
+},
+{
+  name: 'text',
+  type: 'string',
+  description: 'Add: the note, about 250 tokens at most; inline markdown is fine.',
+  isOptional: true,
+},
+{
+  name: 'when',
+  type: 'string',
+  description:
+    'Add: when it was true or observed, as an ISO 8601 date-time (`2026-10-29T14:30:00Z`) or a plain date (`2026-10-29`).',
+  isOptional: true,
+},
+]}
+/>
+
+|運作|需要的角色 |
+| - | - |
+|`add` | `contributor` on the page's scope and on each stamp scope |
+| `restamp` | `editor` on the page's scope, `contributor` on each new stamp scope |
+| `remove` | `editor` on the page's scope |
+
+刪除註釋並再次新增會建立新的註釋 ID。錯誤：
+
+```text
+Adding a note needs page and text.
+Adding a note needs scope: the stamp scopes.
+Adding a note needs contributor on "team:acme:support"; this run has viewer there.
+Removing a note needs editor on "team:acme:support"; this run has viewer there.
+Knowledge note text exceeds the 250 token limit; split it into separate notes or put long-form text in the page body
+```
+
+## `knowledge_pin` {/* #knowledge_pin */}
+
+將頁面或其下的頁面清單固定到持有受眾範圍之一的每次運行、每次轉動的上下文中，或將其取消固定。需要內存來傳送引腳。看[Pinned context](/docs/knowledge/pinned-context).
+
+<PropertiesTable
+  content={[
+{ name: 'op', type: "'pin' | 'unpin'", description: 'What to do.' },
+{ name: 'page', type: 'string', description: 'The page to pin or unpin.' },
+{ name: 'audience', type: 'string[]', description: 'Scope addresses whose runs receive the pin.' },
+{
+  name: 'kind',
+  type: "'page' | 'list'",
+  description:
+    '`page` pins the page. `list` pins a listing of the pages under it. A page can have one pin of each kind, pinned and unpinned separately.',
+  isOptional: true,
+  defaultValue: "'page'",
+},
+{
+  name: 'depth',
+  type: 'number',
+  description:
+    'Levels a `list` pin shows below the page, 1 to 3. Pinning a listing again sets its new depth. Only with `op: "pin"` and `kind: "list"`.',
+  isOptional: true,
+  defaultValue: '1',
+},
+]}
+/>
+
+固定和取消固定的需要`editor` on the page's scope and, for each audience scope, holding it or `editor` on it. A pinned page reaches only runs that can read it, and a pinned listing shows only the pages the run can read. Pinning a listing needs a storage adapter version that stores pin kinds. With an older adapter, page pins still work and a listing pin is refused before anything is stored.
+
+```text
+Pinning a page needs editor on "policy:acme"; this run has viewer there.
+Pinning for "role:acme:sales" needs holding it or editor on it; this run has neither.
+Pin audience "project:x" does not match a declared scope type.
+```
+
+## 每個操作需要什麼 {/* #what-each-operation-needs */}
+
+|運營|角色 |上 |
+| - | - | - |
+|搜尋、閱讀、列出 |`viewer` | The page's scope |
+| Create a page | `contributor` | `scope` |
+| Edit a page | `editor` | The page's scope |
+| Move within a scope | `editor` | The page's scope |
+| Move to another scope | `owner` | Both scopes |
+| Merge | `owner` | The page that goes away |
+| | `editor` | The page that stays, in the same scope |
+| | `owner` | The page that stays, in another scope |
+| Delete a page | `owner` | The page's scope |
+| Add a note | `contributor` | The page's scope and each stamp |
+| Restamp, remove a note | `editor` | The page's scope (and `contributor` on each new stamp) |
+| Pin, unpin a page or listing | `editor` | The page's scope, plus authority over each audience |
+
+一個可以觸及但需要更強角色的呼叫會為其所需的角色命名：
+
+```text
+Adding a note needs contributor on "team:acme:support"; this run has viewer there.
+```
+
+## 有關的 {/* #related */}
+
+* [Agent商和Tool](/docs/knowledge/agents-and-tools)
+* [知識課](/reference/knowledge/knowledge-class)
+* [限制](/reference/knowledge/limits)
+* [Tool使用說明](/reference/knowledge/tool-instructions)

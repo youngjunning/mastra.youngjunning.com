@@ -1,43 +1,41 @@
 import { cn } from '@site/src/lib/utils'
 import Link from '@docusaurus/Link'
 import { useLocation } from '@docusaurus/router'
-import { translate } from '@docusaurus/Translate'
-import useBaseUrl from '@docusaurus/useBaseUrl'
 
 const docsTabs = [
   {
     id: 'Docs',
-    label: translate({ id: 'navbar.tabs.docs', message: 'Docs' }),
+    label: 'Docs',
     href: '/docs',
     basePath: '/docs',
   },
   {
     id: 'Models',
-    label: translate({ id: 'navbar.tabs.models', message: 'Models' }),
+    label: 'Models',
     href: '/models',
     basePath: '/models',
   },
   {
-    id: 'Guides',
-    label: translate({ id: 'navbar.tabs.guides', message: 'Guides' }),
-    href: '/guides',
-    basePath: '/guides',
+    id: 'Integrations',
+    label: 'Integrations',
+    href: '/integrations',
+    basePath: '/integrations',
   },
   {
     id: 'Reference',
-    label: translate({ id: 'navbar.tabs.reference', message: 'Reference' }),
+    label: 'Reference',
     href: '/reference',
     basePath: '/reference',
   },
   {
     id: 'Learn',
-    label: translate({ id: 'navbar.tabs.learn', message: 'Learn' }),
+    label: 'Learn',
     href: '/learn',
     basePath: '/learn',
   },
   {
     id: 'Platform',
-    label: translate({ id: 'navbar.tabs.platform', message: 'Platform' }),
+    label: 'Platform',
     href: '/docs/mastra-platform/overview',
     basePath: '/docs/mastra-platform',
   },
@@ -48,19 +46,11 @@ const matchesBasePath = (pathname: string, basePath: string) =>
 
 export const TabSwitcher = ({ className }: { className?: string }) => {
   const location = useLocation()
-  const localizedBaseUrl = useBaseUrl('/')
-  const basePath = localizedBaseUrl === '/' ? '' : localizedBaseUrl.replace(/\/$/, '')
-  const pathname =
-    basePath && location.pathname.startsWith(basePath)
-      ? location.pathname.slice(basePath.length) || '/'
-      : location.pathname
+  const pathname = location.pathname
   return (
     <div className={cn('-mb-0.5 bg-(--light-color-surface-15) px-4 dark:bg-(--primary-bg)', className)}>
       <div className="w-full">
-        <div
-          className="tab -ml-3 flex gap-6 overflow-x-auto px-5 py-2"
-          aria-label={translate({ id: 'navbar.tabs.ariaLabel', message: 'Documentation tabs' })}
-        >
+        <div className="tab -ml-3 flex gap-6 overflow-x-auto px-5 py-2" aria-label="Documentation tabs">
           {docsTabs.map(tab => {
             const matchesTabPath = matchesBasePath(pathname, tab.basePath)
             const isActive =

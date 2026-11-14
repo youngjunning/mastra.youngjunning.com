@@ -1,6 +1,6 @@
 ---
-title: "参考：MastraStorageExporter | Observability"
-description: MastraStorageExporter（原 DefaultExporter）的 API 参考
+title: "Reference: MastraStorageExporter | Observability"
+description: "Persists traces to Mastra's configured storage with automatic batching and retry logic."
 packages:
   - "@mastra/observability"
 ---
@@ -9,28 +9,40 @@ import PropertiesTable from "@site/src/components/PropertiesTable";
 
 # MastraStorageExporter
 
-通过自动批处理和重试逻辑，将 Trace 持久化到 Mastra 配置的存储中。
+通过自动批处理和重试逻辑将跟踪保留到 Mastra 的配置存储。
 
-:::note
+：：：笔记
 
-`MastraStorageExporter` 以前名为 `DefaultExporter`。原始 `DefaultExporter` 类仍从 `@mastra/observability` 导出，因此现有导入可继续使用，但它已被弃用，并将在未来的主要版本中移除。新代码应使用 `MastraStorageExporter`。
+`MastraStorageExporter`以前被称为`DefaultExporter`. The original `DefaultExporter`类仍然导出自`@mastra/observability`因此现有的导入仍然有效，但它已被弃用，并将在未来的主要版本中删除。新代码应该使用`MastraStorageExporter`.
 
 :::
 
+:::警告 平台存储限制
+
+什么时候`MASTRA_DEPLOYMENT_ID` is set, this exporter is disabled by default. Set `retainStorageExporterOnPlatform: true` on the **observability config**, not the exporter constructor, to allow remote storage export. `InMemoryStore` (including the fallback when no storage is configured), local libSQL, embedded replicas, and DuckDB remain blocked when the adapter reports local persistence, even with the opt-in. No observability events are written to that local database, even if the initialization warning is hidden by your logging setup.
+
+看[storage export on Platform](/docs/observability/integrations/exporters/mastra-storage#export-to-storage-and-platform) for the supported-provider table, adapter upgrade requirements, and a configuration example.
+
+:::
+
+## 跨度预览 {/* #span-previews */}
+
+`MastraStorageExporter`自动生成简短易读的`inputPreview`, `outputPreview`, and `errorPreview` summaries based on the span type. Each preview contains up to 100 characters plus an ellipsis when truncated. Full payloads remain available separately.
+
 ## 构造函数 {/* #constructor */}
 
-```typescript prettier:false
+```typescript oxfmt:false
 new MastraStorageExporter(config?: MastraStorageExporterConfig)
 ```
 
 <PropertiesTable
   props={[
-  {
-    name: 'config',
-    type: 'MastraStorageExporterConfig',
-    description: '批处理和配置选项',
-    required: false,
-  },
+{
+  name: 'config',
+  type: 'MastraStorageExporterConfig',
+  description: 'Batching and configuration options',
+  required: false,
+},
 ]}
 />
 
@@ -38,6 +50,12 @@ new MastraStorageExporter(config?: MastraStorageExporterConfig)
 
 ```typescript
 interface MastraStorageExporterConfig extends BaseExporterConfig {
+  /** Opt-in byte flush thresholds. Omit to keep count-based batching. */
+  byteBatching?: {
+    maxBatchBytes?: number // Default: 8 MiB
+    maxConcurrentWrites?: number // Default: 1
+  }
+
   /** Maximum number of spans per batch. Default: 1000 */
   maxBatchSize?: number
 
@@ -58,10 +76,30 @@ interface MastraStorageExporterConfig extends BaseExporterConfig {
 }
 ```
 
-扩展自 `BaseExporterConfig`，其中包括：
+延伸`BaseExporterConfig`, which includes:
 
-- `logger?: IMastraLogger` - Logger 实例
-- `logLevel?: LogLevel | 'debug' | 'info' | 'warn' | 'error'` - 日志级别（默认：INFO）
+* `logger?: IMastraLogger`- 记录器实例
+* `logLevel?: LogLevel | 'debug' | 'info' | 'warn' | 'error'`- 日志级别（默认：INFO）
+
+## 字节批处理 {/* #byte-batching */}
+
+启用字节批处理`byteBatching: {}` or supply custom thresholds. The exporter ignores byte batching when the resolved strategy is `realtime`, which keeps its immediate, awaited writes:
+
+```typescript
+new MastraStorageExporter({
+  byteBatching: {
+    maxBatchBytes: 8 * 1024 * 1024,
+    maxConcurrentWrites: 1,
+  },
+})
+```
+
+* `maxBatchBytes`默认情况下，当缓冲事件达到 8 MiB 时触发写入。较大的记录会完整发送，不会被截断或基于大小的丢弃。
+* `maxConcurrentWrites`控制并发存储写入。默认值为 1。基于更新的跟踪策略始终一次使用一次写入来保留跨度顺序。
+
+记录计数和基于计时器的刷新触发器仍然适用。当存储落后时，排队的记录会被保留，因此队列内存会增长。没有`byteBatching`, the exporter keeps its existing count-based batching behavior.
+
+检查当前队列`exporter.getByteBatchingStats()`.
 
 ## `TracingStorageStrategy` {/* #tracingstoragestrategy */}
 
@@ -71,77 +109,77 @@ type TracingStorageStrategy = 'realtime' | 'batch-with-updates' | 'insert-only'
 
 ### 策略行为 {/* #strategy-behaviors */}
 
-- **realtime**：立即将每个事件持久化到存储
-- **batch-with-updates**：分别批量处理创建和更新，并按顺序应用
-- **insert-only**：仅处理 SPAN\_ENDED 事件，忽略更新
+* **即时的**：立即将每个事件持久保存到存储中
+* **批量更新**：批量创建和单独更新，按顺序应用
+* **仅插入**：仅处理SPAN\_ENDED事件，忽略更新
 
-## 属性 {/* #properties */}
+## 特性 {/* #properties */}
 
-```typescript prettier:false
+```typescript oxfmt:false
 readonly name = 'mastra-storage-exporter';
 ```
 
-为保持向后兼容，已弃用的 `DefaultExporter` 类继续使用 `'mastra-default-observability-exporter'` 作为其 `name`。
+已弃用的`DefaultExporter` class continues to use `'mastra-default-observability-exporter'` as its `name` for backward compatibility.
 
 ## 方法 {/* #methods */}
 
-### init {/* #init */}
+### 初始化 {/* #init */}
 
-```typescript prettier:false
+```typescript oxfmt:false
 init(options: InitExporterOptions): void
 ```
 
-在依赖项就绪后初始化 Exporter。根据存储能力解析 tracing 策略。
+依赖项准备就绪后初始化导出器。解决基于存储能力的追踪策略。
 
 <PropertiesTable
   props={[
-  {
-    name: 'options',
-    type: 'InitExporterOptions',
-    description: '包含 Mastra 实例和配置的初始化选项',
-    required: true,
-  },
+{
+  name: 'options',
+  type: 'InitExporterOptions',
+  description: 'Initialization options containing Mastra instance and config',
+  required: true,
+},
 ]}
 />
 
 ### `exportTracingEvent` {/* #exporttracingevent */}
 
-```typescript prettier:false
+```typescript oxfmt:false
 async exportTracingEvent(event: TracingEvent): Promise<void>
 ```
 
-按照解析后的策略处理 tracing 事件。
+根据已解决的策略处理跟踪事件。
 
 <PropertiesTable
   props={[
-  {
-    name: 'event',
-    type: 'TracingEvent',
-    description: '要导出的 tracing 事件',
-    required: true,
-  },
+{
+  name: 'event',
+  type: 'TracingEvent',
+  description: 'The tracing event to export',
+  required: true,
+},
 ]}
 />
 
-### flush {/* #flush */}
+### 冲水 {/* #flush */}
 
-```typescript prettier:false
+```typescript oxfmt:false
 async flush(): Promise<void>
 ```
 
-在不关闭 Exporter 的情况下，强制将所有已缓冲事件刷新到存储。适用于需要在运行时终止前确保 Span 已导出的 serverless 环境。
+强制将所有缓冲的事件刷新到存储中，而无需关闭导出器。在无服务器环境中很有用，您需要确保在运行时终止之前导出跨度。
 
-### shutdown {/* #shutdown */}
+### 关闭 {/* #shutdown */}
 
-```typescript prettier:false
+```typescript oxfmt:false
 async shutdown(): Promise<void>
 ```
 
-刷新剩余的已缓冲事件并执行清理。
+刷新剩余的缓冲事件并执行清理。
 
-## 自动选择策略 {/* #automatic-strategy-selection */}
+## 自动策略选择 {/* #automatic-strategy-selection */}
 
-当 `strategy: 'auto'`（默认）时，Exporter 会查询存储适配器的能力：
+什么时候`strategy: 'auto'` (default), the exporter queries the storage adapter for its capabilities:
 
 ```typescript
 interface TracingStrategy {
@@ -153,39 +191,39 @@ interface TracingStrategy {
 }
 ```
 
-Exporter 将：
+出口商将：
 
-1. 如果可用，则使用存储适配器的首选策略
-1. 如果首选策略不可用，则回退到第一个受支持的策略
-1. 如果用户指定的策略不受支持，则记录警告
+1. 使用存储适配器的首选策略（如果可用）
+2. 如果首选策略不可用，则回退到第一个支持的策略
+3. 如果不支持用户指定的策略，则记录警告
 
 ## 批处理行为 {/* #batching-behavior */}
 
-### 刷新触发条件 {/* #flush-triggers */}
+### 冲洗触发器 {/* #flush-triggers */}
 
-满足以下任一条件时会刷新缓冲区：
+当满足以下任何条件时，缓冲区将刷新：
 
-- 缓冲区大小达到 `maxBatchSize`
-- 自第一个缓冲事件以来的时间超过 `maxBatchWaitMs`
-- 缓冲区大小达到 `maxBufferSize`（紧急刷新）
-- 调用 `shutdown()`
+* 缓冲区大小达到`maxBatchSize`
+* 自第一个缓冲事件以来的时间超过`maxBatchWaitMs`
+* 缓冲区大小达到`maxBufferSize` (emergency flush)
+* `shutdown()`被称为
 
 ### 重试逻辑 {/* #retry-logic */}
 
-刷新失败时会使用指数退避重试：
+使用指数退避重试失败的刷新：
 
-- 重试延迟：`retryDelayMs * 2^attempt`
-- 最大尝试次数：`maxRetries`
-- 所有重试均失败后丢弃批次
+* 重试延迟：`retryDelayMs * 2^attempt`
+* 最大尝试次数：`maxRetries`
+* 所有重试失败后批次将被丢弃
 
-### 乱序处理 {/* #out-of-order-handling */}
+### 无序处理 {/* #out-of-order-handling */}
 
-对于 `batch-with-updates` 策略：
+为了`batch-with-updates` strategy:
 
-- 跟踪已创建的 Span
-- 拒绝尚未创建的 Span 的更新/结束事件
-- 为乱序事件记录警告
-- 维护序列号以确保按顺序更新
+* 已创建的轨道
+* 拒绝更新/结束尚未创建的跨度
+* 记录无序事件的警告
+* 维护有序更新的序列号
 
 ## 用法 {/* #usage */}
 
@@ -204,9 +242,9 @@ const customExporter = new MastraStorageExporter({
 })
 ```
 
-## 从 `DefaultExporter` 迁移 {/* #migrating-from-defaultexporter */}
+## 迁移自`DefaultExporter` {/* #migrating-from-defaultexporter */}
 
-两个类具有相同的构造函数签名和行为。要迁移，请替换导入和构造函数：
+这两个类共享相同的构造函数签名和行为。要迁移，请替换导入和构造函数：
 
 ```typescript
 // Before
@@ -218,23 +256,22 @@ import { MastraStorageExporter } from '@mastra/observability'
 const exporter = new MastraStorageExporter()
 ```
 
-原始 `DefaultExporter` 会原样保留，因此在迁移完成前，匹配先前 `mastra-default-observability-exporter` Exporter 名称的仪表板或告警规则仍可继续工作。
+原来的`DefaultExporter` is preserved unchanged so dashboards or alert rules that match the previous `mastra-default-observability-exporter` exporter name keep working until you migrate.
 
-## 另请参阅 {/* #see-also */}
+## 参见 {/* #see-also */}
 
 ### 文档 {/* #documentation */}
 
-- [Tracing 概述](/docs/observability/tracing/overview)：完整指南
-- [Exporter](/docs/observability/integrations/overview#exporters)：Exporter 概念
+* [追踪概述](/docs/observability/tracing/overview)：完整指南
 
-### 其他 Exporter {/* #other-exporters */}
+### 其他出口商 {/* #other-exporters */}
 
-- [MastraPlatformExporter](/reference/observability/tracing/exporters/mastra-platform-exporter)：Mastra platform
-- [ConsoleExporter](/reference/observability/tracing/exporters/console-exporter)：调试输出
-- [Langfuse](/reference/observability/tracing/exporters/langfuse)：Langfuse 集成
-- [Braintrust](/reference/observability/tracing/exporters/braintrust)：Braintrust 集成
+* [Mastra平台出口商](/reference/observability/tracing/exporters/mastra-platform-exporter)：马斯特拉平台
+* [控制台导出器](/reference/observability/tracing/exporters/console-exporter)：调试输出
+* [朗福斯](/reference/observability/tracing/exporters/langfuse): 朗弗斯集成
+* [智囊团](/reference/observability/tracing/exporters/braintrust)：智囊团整合
 
 ### 参考 {/* #reference */}
 
-- [配置](/reference/observability/tracing/configuration)：配置选项
-- [接口](/reference/observability/tracing/interfaces)：类型定义
+* [配置](/reference/observability/tracing/configuration)：配置选项
+* [接口](/reference/observability/tracing/interfaces)：类型定义

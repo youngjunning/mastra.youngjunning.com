@@ -1,0 +1,197 @@
+---
+title: 'Reference: channels() | Connect'
+description: "API reference for channels() in @mastra/connect: a live channel-provider resolver over a project's platform connections for Slack, Telegram, Discord, and Microsoft Teams."
+packages:
+  - '@mastra/connect'
+---
+
+# 频道()
+
+通过连接到 Mastra 平台项目的连接返回实时通道解析器，随时可以使用`new Mastra({ channels })`。启用的提供程序实例构建一次，无需凭据，因此它们的 Webhook 和 OAuth 路由可以安装在`Mastra`建造。解析器会缓存项目的连接，并在连接更改时将凭据绑定到这些实例，而无需重新部署应用程序。
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { channels } from '@mastra/connect'
+
+export const mastra = new Mastra({
+  agents: { assistant },
+  channels: await channels(),
+})
+```
+
+返回：`Promise<ChannelsResolver>`. See [The resolver](#the-resolver).
+
+每个Provider的集成页面都涵盖其渠道设置：[Slack](/integrations/channels/slack#agent-chat), [Telegram](/integrations/channels/telegram#connect), [Discord](/integrations/channels/discord#agent-chat), and [微软团队](/integrations/channels/teams#agent-chat)。他们的实现来自`@mastra/slack`, `@mastra/telegram`, `@mastra/discord`， 和`@mastra/teams`，按需加载。直接使用这些包来配置平台连接流之外的通道。
+
+Teams Provider使用以下方式加密存储的机器人机密`MASTRA_ENCRYPTION_KEY` when set. When it isn't, the key is derived from the platform access token and a warning is logged while a Teams connection is active. Rotating the platform access token makes stored bot credentials unreadable (disconnect and reconnect to re-provision). Projects without a Teams connection are unaffected.
+
+## 参数 {/* #parameters */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'options',
+  type: 'ChannelsOptions',
+  description: 'Optional discovery and client configuration.',
+  isOptional: true,
+  properties: [
+    {
+      type: 'ChannelsOptions',
+      parameters: [
+        {
+          name: 'projectId',
+          type: 'string',
+          description: 'Platform project whose connections to discover. Falls back to MASTRA_PROJECT_ID.',
+          isOptional: true,
+        },
+        {
+          name: 'providers',
+          type: 'string[] | ChannelsProviders',
+          description:
+            'Channels to expose, keyed by registered provider ID (slack-channels, telegram, discord, microsoft-teams). slack is accepted as an alias for slack-channels; using both spellings throws. The array form is an allowlist: only the listed channels are constructed. The record form leaves unlisted registered channels enabled and configures listed channels individually: true (or {}) enables one with defaults, false excludes it, and an options object configures it. An ID that matches no channel provider throws at call time. See Per-provider options below.',
+          isOptional: true,
+        },
+        {
+          name: 'client',
+          type: 'ConnectClientOptions',
+          description:
+            'Platform client overrides (accessToken, orgId, baseUrl, fetch). See ConnectClientOptions in tools().',
+          isOptional: true,
+        },
+        {
+          name: 'ttlMs',
+          type: 'number',
+          description:
+            'How long a resolved snapshot stays fresh, in milliseconds. Default 30000. 0 revalidates on every resolution.',
+          isOptional: true,
+        },
+      ],
+    },
+  ],
+},
+]}
+/>
+
+使用数组形式仅挂载指定通道。记录表单使其他注册通道保持启用状态：
+
+```typescript
+const onlyDiscord = await channels({ providers: ['discord'] })
+const allExceptTelegram = await channels({ providers: { telegram: false } })
+```
+
+### 每个Provider的选项 {/* #per-provider-options */}
+
+中的每个值`providers` record form is `true`, `false`, or a `ChannelsProviderOptions`. `false` excludes the channel entirely: no instance is constructed and no routes are mounted.
+
+<PropertiesTable
+  content={[
+{
+  name: 'connectionId',
+  type: 'string',
+  description: 'Pin a specific connection ID, bypassing single-active-connection resolution.',
+  isOptional: true,
+},
+{
+  name: 'providerOptions',
+  type: 'Record<string, unknown>',
+  description:
+    'Provider-specific options forwarded to the channel provider constructor, for example Discord applicationId and publicKey. Credential fields (botToken, refreshToken, appId, appPassword) and framework-managed fields (baseUrl, encryptionKey) are reserved: the credential always comes from the platform connection, and reserved fields are rejected at the type level and stripped at runtime with a warning.',
+  isOptional: true,
+},
+]}
+/>
+
+## 解析器 {/* #the-resolver */}
+
+已解决的`ChannelsResolver` satisfies `@mastra/core`'s channels-resolver contract:
+
+* **可调用**：返回当前值`Record<string, ChannelProvider>` of providers with an active connection. Mastra invokes it at runtime, using the TTL cache to keep repeat calls cheap. Only the first resolution waits on the platform. After the TTL expires, resolution returns the stale snapshot immediately and refreshes in the background, skipping the refresh during a short cooldown after a failed fetch, so a new connection can appear one resolution later than the TTL suggests.
+* `getRoutes()`：每个启用通道的 API 路由的联合，同步可用，以便 Mastra 可以在构建时安装它们。路由在其Provider拥有活动连接之前（和之后）就存在。
+* `refresh()`：现在从平台获取连接并更新缓存。如果平台获取失败则拒绝。
+* `disconnect()`：清除缓存的快照，以便下一个分辨率获取新鲜的。它不会拆除提供者、会话或凭证。
+
+没有活动连接的提供者不会出现在解析的地图中。它们的路由保持安装状态，并在连接连接后开始工作。
+
+失败处理匹配[`tools()`](/reference/connect/tools): configuration errors (missing project ID, bad `ttlMs`, an unknown or malformed provider ID, both spellings of the Slack key) reject at call time, while per-provider problems (provider construction failure, `needs_reauth`, credential sync failure) are downgraded to warn-and-skip. Several active connections for one provider aren't a skip: the resolver warns and uses the first, and `providers.<id>.connectionId` pins the choice. The initial resolution rejects if its platform fetch fails. A failed background refresh warns and preserves the cached snapshot, while an explicit `refresh()` rejects on fetch failure.
+
+## 与自营渠道相结合 {/* #combine-with-self-managed-channels */}
+
+`channels()`取代整体`channels` option, and there is no built-in helper to merge it with providers you construct yourself. To use Connect for some channels and manage another yourself, wrap both in one resolver. The wrapper must stay callable and expose a `getRoutes()` that returns every provider's routes, because Mastra mounts channel routes once at construction:
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { channels } from '@mastra/connect'
+import { TelegramProvider } from '@mastra/telegram'
+import { assistant } from './agents/assistant'
+
+const connectChannels = await channels({ providers: ['slack', 'discord'] })
+const telegram = new TelegramProvider()
+
+export const mastra = new Mastra({
+  agents: { assistant },
+  channels: Object.assign(async () => ({ ...(await connectChannels()), telegram }), {
+    getRoutes: () => [...connectChannels.getRoutes(), ...telegram.getRoutes()],
+  }),
+})
+```
+
+从“连接”选择中排除自我管理通道，就像此处的数组形式一样。 Mastra 不会检测到注册相同路由的两个提供者，因此在两个地方启用的通道都会安装冲突的 webhook。在包装器外部创建一次自我管理的提供程序：Mastra 仅附加每个不同的提供程序实例一次。按照中所述配置其凭据[Telegram provider reference](/reference/channels/telegram-provider).
+
+## 按渠道使用不同的Tool {/* #vary-tools-by-channel */}
+
+频道消息放置了[`ChannelContext`](/integrations/channels/slack#request-context) on the [request context](/docs/server/request-context) under the `channel` key. It includes the platform, whether the conversation is a direct message (`isDM`), channel and thread IDs, and the sender's user ID and name. An agent's `tools` function can read it to filter the record that [`tools()`](/reference/connect/tools) resolves:
+
+```typescript title="src/mastra/agents/assistant.ts"
+import { Agent } from '@mastra/core/agent'
+import type { ChannelContext } from '@mastra/core/channels'
+import { tools } from '@mastra/connect'
+
+const connectTools = tools({ providers: ['linear'] })
+const readTools = new Set(['linear_list_issues'])
+
+export const assistant = new Agent({
+  id: 'assistant',
+  name: 'assistant',
+  instructions: 'You help the team track work in Linear from Slack and Discord.',
+  model: '__GATEWAY_OPENAI_MODEL_LUNA__',
+  tools: async ctx => {
+    const channel = ctx.requestContext?.get('channel') as ChannelContext | undefined
+    const all = await connectTools(ctx)
+
+    if (channel?.isDM && ctx.requestContext?.get('role') === 'operator') {
+      return all
+    }
+    return Object.fromEntries(Object.entries(all).filter(([key]) => readTools.has(key)))
+  },
+})
+```
+
+在这里，只有来自您的应用程序识别为操作员的用户的直接消息才能获得完整的 Linear Tool集。其他请求仅获取`linear_list_issues`. Set `role` in trusted server-side code after you verify the sender's identity and permissions. Don't grant write access based on conversation type alone. To filter by options instead of post-processing, see [per-request options](/reference/connect/tools#per-request-options).
+
+## 不和谐权限 {/* #discord-permissions */}
+
+Discord 机器人邀请 URL 请求`bot` and `applications.commands` scopes with these permissions:
+
+* **查看频道**
+* **发送消息**
+* **在话题中发送消息**
+* **嵌入链接**
+* **附加文件**
+* **阅读消息历史记录**
+* **添加反应**
+* **使用应用程序命令**
+
+这些权限支持聊天、线程、文件、反应和斜杠命令，而无需授予审核或频道管理访问权限。通过覆盖权限位字段`providers.discord.providerOptions.permissions`. See the [Discord permissions reference](https://discord.com/developers/docs/topics/permissions#permissions-bitwise-permission-flags) for bit values.
+
+## 错误 {/* #errors */}
+
+投掷`MastraConnectError` with a `code` property:
+
+|代码|当 |
+| - | - |
+|`missing_project_id` | No project ID configured |
+| `missing_access_token` | No platform token configured |
+| `invalid_options` | Unknown or malformed provider ID, both `slack` and `slack-channels` in one config, a malformed provider entry, or invalid `ttlMs` |
+| `no_active_connection` | A channel needed its credential while its provider has no active connection |
+| `unauthorized` | The platform rejected the token (401/403) |
+| `platform_error` | Any other platform request failure |

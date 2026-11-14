@@ -1,0 +1,103 @@
+---
+title: 'Signals'
+description: 'Send asynchronous input into a Mastra agent thread while Mastra manages whether the agent is active or idle.'
+packages:
+  - '@mastra/core'
+  - '@mastra/libsql'
+  - '@mastra/memory'
+---
+
+# 訊號
+
+**添加於：** `@mastra/core@1.39.0`
+
+訊號讓您可以將輸入發送到Agent的[thread](/docs/memory/message-history#threads-and-resources) at any time, including while the agent is working. That input might be a user message, an update from a background job, or an external event. Each signal has a type that tells Mastra what kind of input it carries.
+
+對於正在進行的對話，使用訊號發送輸入和[thread stream](/docs/signals/thread-streams) to receive output. Subscribe to the stream first, then send input whenever it becomes available. By default, Mastra delivers it to the active run or starts a run when the thread is idle. You don't need to check whether the agent is running before sending.
+
+對於一次性請求，請使用[`agent.stream()`](/reference/streaming/agents/stream) to start a run and read its response directly. It can also use Memory, but it doesn't give you a subscription that follows later runs on the same thread.
+
+:::提示\[📹觀看]
+
+手錶[Mastra signals overview](https://www.youtube.com/watch?v=7It2y89TVP4) to see how signals wake and steer long-running agents.
+
+:::
+
+## 快速入門 {/* #quickstart */}
+
+建立一個Agent，訂閱一個線程，然後將輸入傳送到該線程。首先訂閱意味著當輸入開始運行時訂閱已經開啟。
+
+### 使用Agent {/* #use-an-agent */}
+
+此範例儲存線程歷史記錄[Memory](/docs/memory/overview), using a local libSQL database, so the same conversation is available across runs and process restarts. Memory accepts any supported storage adapter, and the thread is created on the first run.
+
+```typescript title="src/mastra/signals.ts"
+import { Agent } from '@mastra/core/agent'
+import { Memory } from '@mastra/memory'
+import { LibSQLStore } from '@mastra/libsql'
+
+const agent = new Agent({
+  id: 'support-agent',
+  name: 'Support Agent',
+  instructions: 'Help the user compare options.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  memory: new Memory({
+    storage: new LibSQLStore({
+      id: 'signals-storage',
+      url: 'file:./signals.db',
+    }),
+  }),
+})
+
+const thread = {
+  resourceId: 'user_123',
+  threadId: 'thread_456',
+}
+
+const subscription = await agent.subscribeToThread(thread)
+
+const result = agent.sendMessage('Compare that with the previous option.', thread)
+await result.accepted
+
+for await (const chunk of subscription.stream) {
+  console.log(chunk)
+}
+```
+
+當Agent響應時，循環列印輸出塊。它在運行完成後保持訂閱狀態，準備將以後的消息輸出到同一線程。稱呼`subscription.unsubscribe()` when you no longer need output. [Sending signals](/docs/signals/sending-signals) explains how to send further messages and other kinds of input.
+
+### 使用客戶端SDK {/* #use-the-client-sdk */}
+
+相同的順序適用於[`client.getAgent()`](/reference/client-js/mastra-client#methods): call `subscribeToThread()` first, then send a message to the same thread. The client returns the subscription stream and leaves run ownership on the server. [Thread streams](/docs/signals/thread-streams) shows the full client example.
+
+## 訊號如何到達線程 {/* #how-signals-reach-a-thread */}
+
+將輸入傳送到活動運行並不總是立即中斷模型。 Mastra 會等待，直到運行可以接受它。如果目前的答案需要先完成，請改為排隊後續答案。您還可以儲存輸入以供以後使用，而無需開始運行，或根據線程的狀態丟棄它。
+
+[發送訊號](/docs/signals/sending-signals#when-the-agent-sees-your-input)解釋了這些交付選擇以及如何檢查輸入是否被接受。當您的應用程式在多個進程上運行時，[configure a shared backend](/docs/signals/running-across-processes) so signals reach the process running the thread.
+
+## 選擇 API 介面 {/* #choose-an-api-surface */}
+
+|表面|用它來 |規範參考 |
+| - | - | - |
+|直接的`Agent` methods | Server-side code that owns the agent instance | [Agent reference](/reference/agents/agent#thread-signals) |
+| HTTP or the JavaScript client SDK | Applications that call a running Mastra server | [Server agent routes](/reference/server/routes#agent-message-routes), [`client.getAgent()`](/reference/client-js/agents) |
+| AgentController `Session` | Long-running assistants and coding agents built on AgentController | [Agent Controller](/docs/harness/agent-controller) |
+
+開始於`Agent` methods when your code runs alongside the agent, or the client SDK when it calls a server. If you're already using [Agent Controller](/docs/harness/agent-controller), its `Session` manages the thread and subscription for you.
+
+## 後續步驟 {/* #next-steps */}
+
+使用此表尋找您下一步想要執行的操作的正確頁面：
+
+|目標|從這裡開始 |
+| - | - |
+|將執行緒的輸出和生命週期串流傳輸到您的應用程式中 |[Thread streams](/docs/signals/thread-streams) |
+| Send a user message, typed signal, state signal, or notification | [Sending signals](/docs/signals/sending-signals) |
+| Understand when a signal interrupts a run or waits for the next step | [When the agent sees your input](/docs/signals/sending-signals#when-the-agent-sees-your-input) |
+| Keep named, thread-scoped context across turns | [State signals](/docs/signals/state-signals) |
+| Deliver external events through a durable inbox | [Notifications](/docs/signals/notifications) |
+| Connect polling sources or webhooks to agents | [Signal providers](/docs/signals/signal-providers) |
+| Coordinate threads across multiple processes | [Running across processes](/docs/signals/running-across-processes) |
+| Look up notification records, priorities, and delivery policies | [Notifications reference](/reference/signals/notifications) |
+| Observe queued messages with [`subscribeThreadEvents()`](/reference/signals/thread-events) | [Thread events reference](/reference/signals/thread-events) |

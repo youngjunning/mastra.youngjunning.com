@@ -1,0 +1,247 @@
+---
+title: "iMessage | Channels"
+description: "Connect a Mastra agent to iMessage direct and group conversations with Photon or BlueBubbles adapters, agent configuration, and webhook routing."
+packages:
+  - "@mastra/core"
+---
+
+import Tabs from "@theme/Tabs";
+import TabItem from "@theme/TabItem";
+
+# 簡訊
+
+iMessage 通道允許 Mastra 客服人員從 iMessage 接收直接訊息和群組訊息。由兩個Provider維護的適配器將 Mastra 連接到 iMessage：[Photon](https://app.photon.codes)和[林克](https://linqapp.com)。 Mastra 處理Agent接線和 webhook 路由；適配器文件涵蓋號碼配置、憑證和 Webhook 註冊。
+
+## 選擇適配器 {/* #choose-an-adapter */}
+
+兩個適配器都遵循相同的 Mastra 接線，因此首先選擇提供者：
+
+* **光子**：託管或自架 iMessage 服務。支援 webhook 和[gateway listener](#gateway-listener) that streams messages over an open connection.
+* **林克**：託管 iMessage、RCS 和 SMS API。 Webhook 驅動，具有回擊反應和雙向映射媒體。
+
+## 安裝適配器 {/* #install-the-adapter */}
+
+<Tabs groupId="imessage-provider">
+  <TabItem value="photon" label="Photon">
+    安裝 Photon iMessage 適配器：
+
+    ```bash npm2yarn
+    npm install @photon-ai/chat-adapter-imessage
+    ```
+  </TabItem>
+
+  <TabItem value="linq" label="Linq">
+    安裝 Linq 聊天 SDK 轉接器：
+
+    ```bash npm2yarn
+    npm install @linqapp/chat-sdk-adapter
+    ```
+  </TabItem>
+</Tabs>
+
+## Agent配置 {/* #agent-configuration */}
+
+將適配器工廠添加到Agent的`channels.adapters` object:
+
+<Tabs groupId="imessage-provider">
+  <TabItem value="photon" label="Photon">
+    ```typescript title="src/mastra/agents/imessage-agent.ts"
+    import { Agent } from '@mastra/core/agent'
+    import { createiMessageAdapter } from '@photon-ai/chat-adapter-imessage'
+
+    export const imessageAgent = new Agent({
+      id: 'imessage-agent',
+      name: 'iMessage Agent',
+      instructions: 'Answer questions and help with tasks over iMessage.',
+      model: '__GATEWAY_OPENAI_MODEL__',
+      channels: {
+        adapters: {
+          imessage: {
+            adapter: createiMessageAdapter(),
+            toolDisplay: 'text',
+          },
+        },
+        threadContext: { maxMessages: 0 },
+      },
+    })
+    ```
+
+    `threadContext: { maxMessages: 0 }`當在群組聊天中首次提及Agent程式時，Mastra 會跳過平台歷史記錄查找，而 Photon 適配器無法執行此操作。
+  </TabItem>
+
+  <TabItem value="linq" label="Linq">
+    ```typescript title="src/mastra/agents/imessage-agent.ts"
+    import { Agent } from '@mastra/core/agent'
+    import { createLinqAdapter } from '@linqapp/chat-sdk-adapter'
+
+    export const imessageAgent = new Agent({
+      id: 'imessage-agent',
+      name: 'iMessage Agent',
+      instructions: 'Answer questions and help with tasks over iMessage.',
+      model: '__GATEWAY_OPENAI_MODEL__',
+      channels: {
+        adapters: {
+          imessage: {
+            adapter: createLinqAdapter({
+              apiKey: process.env.LINQ_API_KEY!,
+              signingSecret: process.env.LINQ_WEBHOOK_SECRET!,
+            }),
+            toolDisplay: 'text',
+          },
+        },
+      },
+    })
+    ```
+
+    `createLinqAdapter()`直接取得憑證：`apiKey` is your Linq API key and `signingSecret` comes from the [webhook subscription](#webhook-url). The Linq adapter can fetch thread history, so the default `threadContext` behavior works.
+  </TabItem>
+</Tabs>
+
+在 Mastra 實例上註冊Agent：
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { imessageAgent } from './agents/imessage-agent'
+
+export const mastra = new Mastra({
+  agents: { imessageAgent },
+})
+```
+
+使用`imessage` as the adapter key. Mastra derives the webhook path and the `platform` value on `requestContext` from this key.
+
+`toolDisplay: 'text'`描述訊息中的Tool調用，因為 iMessage 沒有用於批准和拒絕操作的交互卡。兩個適配器都需要它：Photon 沒有卡片渲染，而 Linq 將卡片展平為純文本，其中按鈕顯示其標籤但無法觸發操作。
+
+：：：警告
+
+文字渲染無法提交審批決定。一個Tool與`requireApproval: true` stays suspended until a UI or API action, such as Studio, submits an explicit approval or decline, so avoid approval-gated tools on iMessage agents unless another surface handles the decision. See [Tool approval](/docs/channels#tool-approval).
+
+:::
+
+## 適配器設定 {/* #adapter-setup */}
+
+<Tabs groupId="imessage-provider">
+  <TabItem value="photon" label="Photon">
+    遵循[Photon iMessage adapter docs](https://github.com/photon-hq/vercel-chat-adapter-imessage) for iMessage-specific setup, including number provisioning, hosted and self-hosted modes, and webhook registration. The adapter picks its mode from the environment variables you set.
+
+    對於託管服務，建立一個項目[app.photon.codes](https://app.photon.codes) and use the project credentials:
+
+    ```bash title=".env"
+    IMESSAGE_PROJECT_ID=your-project-id
+    IMESSAGE_PROJECT_SECRET=your-project-secret
+    IMESSAGE_WEBHOOK_SECRET=your-webhook-signing-secret
+    ```
+
+    對於自託管伺服器，將適配器指向其 gRPC 位址，寫入為`host:port`. The adapter strips any URL scheme and appends `:443` to a bare host:
+
+    ```bash title=".env"
+    IMESSAGE_SERVER_URL=imessage.example.com:443
+    IMESSAGE_API_KEY=your-server-token
+    IMESSAGE_PHONE=+15551234567
+    ```
+
+    `IMESSAGE_PHONE`是可選的，當自託管伺服器有多個號碼時路由訊息。您也可以將這些值傳遞給`createiMessageAdapter()` directly, including a `credentials` function that resolves the project ID and secret at first use from a secret store.
+  </TabItem>
+
+  <TabItem value="linq" label="Linq">
+    遵循[Linq API docs](https://docs.linqapp.com/) for Linq-specific setup, including phone number provisioning and API keys. Create a Linq account, copy your API key, and set the credentials the agent configuration reads:
+
+    ```bash title=".env"
+    LINQ_API_KEY=your-linq-api-key
+    LINQ_WEBHOOK_SECRET=your-webhook-signing-secret
+    ```
+
+    `LINQ_WEBHOOK_SECRET`是您在下一部分建立 Webhook 訂閱時傳回的簽章金鑰。該適配器也接受`baseURL` option to target a different Linq API base URL, such as a sandbox.
+  </TabItem>
+</Tabs>
+
+## 網路鉤子 URL {/* #webhook-url */}
+
+Mastra 根據Agent ID 和適配器金鑰產生 iMessage Webhook 路由：
+
+```text
+/api/agents/imessage-agent/channels/imessage/webhook
+```
+
+使用您的公用 Mastra 伺服器 URL 作為基本 URL：
+
+```text
+https://your-app.example.com/api/agents/imessage-agent/channels/imessage/webhook
+```
+
+<Tabs groupId="imessage-provider">
+  <TabItem value="photon" label="Photon">
+    將此 URL 註冊到[Photon dashboard](https://app.photon.codes), then set the signing secret it returns as `IMESSAGE_WEBHOOK_SECRET`. The secret is shown once at registration. The adapter verifies the signature on every delivery and rejects requests that don't match. Webhooks are available in hosted mode only.
+  </TabItem>
+
+  <TabItem value="linq" label="Linq">
+    創建一個[webhook subscription](https://docs.linqapp.com/guides/webhooks/subscriptions/) with this URL as the target and subscribe to at least these events:
+
+    * `message.received`
+    * `reaction.added`
+    * `reaction.removed`
+
+    設定`signing_secret` the subscription returns as `LINQ_WEBHOOK_SECRET`. The secret is shown once at creation and can't be retrieved later. The adapter verifies the HMAC signature on every delivery, checks for replayed requests, and rejects requests that don't match.
+  </TabItem>
+</Tabs>
+
+：：：筆記
+
+兩個提供者僅向公共 HTTPS 端點提供服務，而不向`http://` or private addresses like `localhost`. For local development, use a tunnel as described in the [Channels overview](/docs/channels#webhook-routes).
+
+:::
+
+## 重複交付 {/* #duplicate-deliveries */}
+
+Photon 和 Linq 透過退避重試失敗的傳遞並至少傳遞一次，因此同一則訊息可以到達兩次。 Chat SDK 使用通道狀態適配器刪除重複，Mastra 預設將這些重複資料刪除的金鑰保留在記憶體中。這涵蓋了單一長期運行的伺服器。
+
+重新啟動後，重複仍然可以到達Agent，或者在無伺服器上，重試被路由到不同的實例。傳遞共享狀態適配器`channels.state` so dedup keys are visible everywhere. Install one alongside the adapter:
+
+```bash npm2yarn
+npm install @chat-adapter/state-redis
+```
+
+`createRedisState()`讀到`REDIS_URL` environment variable:
+
+```typescript title="src/mastra/agents/imessage-agent.ts" oxfmt:false
+import { createRedisState } from '@chat-adapter/state-redis'
+
+channels: {
+  adapters: {
+    imessage: {
+      adapter: createiMessageAdapter(),
+      toolDisplay: 'text',
+    },
+  },
+  state: createRedisState(),
+},
+```
+
+這對於具有副作用的Tool來說最為重要，因為使用者可以看到處理相同訊息兩次。
+
+## 閱讀收據 {/* #read-receipts */}
+
+iPhone Messages 會為Agent商發布的每個訊息發送已讀回執，而 Photon 適配器將這些回執作為入站訊息傳送，不帶任何文字和配件。 Mastra 會跳過它們，因此Agent不會循環回答自己的回應。他們的訊息ID帶有`:read:` suffix, and they show up as skipped messages at `debug` log level.
+
+相同的規則適用於每個適配器：既沒有文字也沒有附件的入站訊息永遠不會啟動Agent運行。客製化`onDirectMessage`, `onMention`, or `onSubscribedMessage` handler still receives it and can act on it before calling `defaultHandler`.
+
+## 網關監聽器 {/* #gateway-listener */}
+
+Photon 適配器可以保持開放連線並即時傳輸訊息，而不是接收 Webhook。這適用於託管和自架模式。 Linq 適配器是 webhook 驅動的且沒有網關模式。
+
+Mastra 在初始化期間啟動此偵聽器，並在其斷開時重新連接它，因此在長時間運行的伺服器上不需要 cron 作業或額外的路由。放`gateway: false` on the adapter config to turn it off when you use webhooks:
+
+```typescript title="src/mastra/agents/imessage-agent.ts" oxfmt:false
+imessage: {
+  adapter: createiMessageAdapter(),
+  toolDisplay: 'text',
+  gateway: false,
+},
+```
+
+在無伺服器平台上，更喜歡 Webhook。網關偵聽器需要一個保持活動狀態的進程。看[Serverless deployment](/docs/channels#serverless-deployment).
+
+## 有關的 {/* #related */}
+
+* [頻道概覽](/docs/channels)
+* [更多的](/docs/channels#other-adapters)

@@ -1,0 +1,473 @@
+---
+title: "libSQL | Vector Stores"
+description: "Store embeddings in a local libSQL database or Turso and run similarity search with metadata filtering from Mastra."
+packages:
+  - "@mastra/libsql"
+---
+
+# libSQL 向量存儲
+
+libSQL儲存實作提供了與SQLite相容的向量搜尋[libSQL](https://github.com/tursodatabase/libsql)，具有向量擴展的 SQLite 分支，以及[圖爾索](https://turso.tech/)具有向量擴展功能，提供輕量級、高效的向量資料庫解決方案。它是的一部分`@mastra/libsql`打包並提供具有元資料過濾的高效向量相似性搜尋。
+
+## 安裝 {/* #installation */}
+
+```bash npm2yarn
+npm install @mastra/libsql@latest
+```
+
+## 用法 {/* #usage */}
+
+```typescript oxfmt:false
+import { LibSQLVector } from "@mastra/libsql";
+
+// Create a new vector store instance
+const store = new LibSQLVector({
+  id: 'libsql-vector',
+  url: process.env.DATABASE_URL,
+  // Optional: for Turso cloud databases
+  authToken: process.env.DATABASE_AUTH_TOKEN,
+});
+
+// Create an index
+await store.createIndex({
+  indexName: "myCollection",
+  dimension: 1536,
+});
+
+// Add vectors with metadata
+const vectors = [[0.1, 0.2, ...], [0.3, 0.4, ...]];
+const metadata = [
+  { text: "first document", category: "A" },
+  { text: "second document", category: "B" }
+];
+await store.upsert({
+  indexName: "myCollection",
+  vectors,
+  metadata,
+});
+
+// Query similar vectors
+const queryVector = [0.1, 0.2, ...];
+const results = await store.query({
+  indexName: "myCollection",
+  queryVector,
+  topK: 10, // top K results
+  filter: { category: "A" } // optional metadata filter
+});
+```
+
+## 建構函數選項 {/* #constructor-options */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'id',
+  type: 'string',
+  description: 'Unique identifier for this vector store instance',
+},
+{
+  name: 'url',
+  type: 'string',
+  description:
+    "libSQL database URL. Use ':memory:' for in-memory database, 'file:dbname.db' for local file, or a libSQL-compatible connection string like 'libsql://your-database.turso.io'.",
+},
+{
+  name: 'authToken',
+  type: 'string',
+  isOptional: true,
+  description: 'Authentication token for Turso cloud databases',
+},
+{
+  name: 'syncUrl',
+  type: 'string',
+  isOptional: true,
+  description: 'URL for database replication (Turso specific)',
+},
+{
+  name: 'syncInterval',
+  type: 'number',
+  isOptional: true,
+  description: 'Interval in milliseconds for database sync (Turso specific)',
+},
+{
+  name: 'maxRetries',
+  type: 'number',
+  isOptional: true,
+  defaultValue: 5,
+  description:
+    'Total attempts allowed for a write that hits a database lock (`SQLITE_BUSY`, `SQLITE_LOCKED`, or a "database is locked" error). The default of 5 means one attempt plus at most four retries. Use at least 1: with 0 the write is never attempted and the call throws',
+},
+{
+  name: 'initialBackoffMs',
+  type: 'number',
+  isOptional: true,
+  defaultValue: 100,
+  description: 'Backoff before the first retry, in milliseconds. Each later retry waits twice as long',
+},
+{
+  name: 'vectorTopKOverFetchMultiplier',
+  type: 'number',
+  isOptional: true,
+  defaultValue: 10,
+  description:
+    'Over-fetch multiplier for `vector_top_k` queries that have metadata filters. Higher values improve recall at the cost of scanning more rows. Must be a positive integer, or the constructor throws',
+},
+]}
+/>
+
+## 方法 {/* #methods */}
+
+### `createIndex()` {/* #createindex */}
+
+建立一個新的向量集合。索引名稱必須以字母或底線開頭，並且只能包含字母、數字和底線字元。維度必須是正整數。
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index to create',
+},
+{
+  name: 'dimension',
+  type: 'number',
+  description: 'Vector dimension size (must match your embedding model)',
+},
+{
+  name: 'metric',
+  type: "'cosine' | 'euclidean' | 'dotproduct'",
+  isOptional: true,
+  defaultValue: 'cosine',
+  description:
+    'Distance metric for similarity search. Note: Currently only cosine similarity is supported by libSQL.',
+},
+]}
+/>
+
+### `upsert()` {/* #upsert */}
+
+新增或更新索引中的向量及其元資料。使用事務來確保所有向量均以原子方式插入 - 如果任何插入失敗，則回滾整個操作。
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index to insert into',
+},
+{
+  name: 'vectors',
+  type: 'number[][]',
+  description: 'Array of embedding vectors',
+},
+{
+  name: 'metadata',
+  type: 'Record<string, any>[]',
+  isOptional: true,
+  description: 'Metadata for each vector',
+},
+{
+  name: 'ids',
+  type: 'string[]',
+  isOptional: true,
+  description: 'Optional vector IDs (auto-generated if not provided)',
+},
+]}
+/>
+
+### `query()` {/* #query */}
+
+使用可選的元資料過濾搜尋相似的向量。
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index to search in',
+},
+{
+  name: 'queryVector',
+  type: 'number[]',
+  description: 'Query vector to find similar vectors for',
+},
+{
+  name: 'topK',
+  type: 'number',
+  isOptional: true,
+  defaultValue: '10',
+  description: 'Number of results to return',
+},
+{
+  name: 'filter',
+  type: 'Filter',
+  isOptional: true,
+  description: 'Metadata filters',
+},
+{
+  name: 'includeVector',
+  type: 'boolean',
+  isOptional: true,
+  defaultValue: 'false',
+  description: 'Whether to include vector data in results',
+},
+{
+  name: 'minScore',
+  type: 'number',
+  isOptional: true,
+  defaultValue: '-1',
+  description: 'Minimum similarity score threshold (cosine similarity ranges from -1 to 1)',
+},
+]}
+/>
+
+### `describeIndex()` {/* #describeindex */}
+
+取得有關索引的資訊。
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index to describe',
+},
+]}
+/>
+
+返回：
+
+```typescript
+interface IndexStats {
+  dimension: number
+  count: number
+  metric: 'cosine' | 'euclidean' | 'dotproduct'
+}
+```
+
+### `deleteIndex()` {/* #deleteindex */}
+
+刪除索引及其所有資料。
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index to delete',
+},
+]}
+/>
+
+### `listIndexes()` {/* #listindexes */}
+
+列出資料庫中的所有向量索引。
+
+返回：`Promise<string[]>`
+
+### `truncateIndex()` {/* #truncateindex */}
+
+從索引中刪除所有向量，同時保留索引結構。
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index to truncate',
+},
+]}
+/>
+
+### `updateVector()` {/* #updatevector */}
+
+透過 ID 或元資料過濾器更新單一向量。任何一個`id` or `filter` must be provided, but not both.
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index containing the vector',
+},
+{
+  name: 'id',
+  type: 'string',
+  isOptional: true,
+  description: 'ID of the vector entry to update (mutually exclusive with filter)',
+},
+{
+  name: 'filter',
+  type: 'Record<string, any>',
+  isOptional: true,
+  description: 'Metadata filter to identify vector(s) to update (mutually exclusive with id)',
+},
+{
+  name: 'update',
+  type: 'object',
+  description: 'Update data containing vector and/or metadata',
+},
+{
+  name: 'update.vector',
+  type: 'number[]',
+  isOptional: true,
+  description: 'New vector data to update',
+},
+{
+  name: 'update.metadata',
+  type: 'Record<string, any>',
+  isOptional: true,
+  description: 'New metadata to update',
+},
+]}
+/>
+
+### `deleteVector()` {/* #deletevector */}
+
+按 ID 從索引中刪除特定向量條目。
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index containing the vector',
+},
+{
+  name: 'id',
+  type: 'string',
+  description: 'ID of the vector entry to delete',
+},
+]}
+/>
+
+### `deleteVectors()` {/* #deletevectors */}
+
+透過 ID 或元資料過濾器刪除多個向量。任何一個`ids` or `filter` must be provided, but not both.
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index containing the vectors to delete',
+},
+{
+  name: 'ids',
+  type: 'string[]',
+  isOptional: true,
+  description: 'Array of vector IDs to delete (mutually exclusive with filter)',
+},
+{
+  name: 'filter',
+  type: 'Record<string, any>',
+  isOptional: true,
+  description: 'Metadata filter to identify vectors to delete (mutually exclusive with ids)',
+},
+]}
+/>
+
+### `close()` {/* #close */}
+
+關閉底層 libSQL 用戶端並釋放該向量儲存已儲存的檔案句柄。多次呼叫它是無操作的。
+
+```typescript
+await store.close()
+```
+
+## 回應類型 {/* #response-types */}
+
+查詢結果以如下格式傳回：
+
+```typescript
+interface QueryResult {
+  id: string
+  score: number
+  metadata: Record<string, any>
+  vector?: number[] // Only included if includeVector is true
+}
+```
+
+## 錯誤處理 {/* #error-handling */}
+
+商店針對不同的故障情況拋出特定的錯誤：
+
+```typescript
+try {
+  await store.query({
+    indexName: 'my-collection',
+    queryVector: queryVector,
+  })
+} catch (error) {
+  // Handle specific error cases
+  if (error.message.includes('Invalid index name format')) {
+    console.error(
+      'Index name must start with a letter/underscore and contain only alphanumeric characters',
+    )
+  } else if (error.message.includes('Table not found')) {
+    console.error('The specified index does not exist')
+  } else {
+    console.error('Vector store error:', error.message)
+  }
+}
+```
+
+常見錯誤狀況包括：
+
+* 索引名稱格式無效
+* 向量尺寸無效
+* 未找到表/索引
+* 資料庫連線問題
+* 更新插入期間事務失敗
+
+## 使用範例 {/* #usage-example */}
+
+### 使用 fastembed 進行本地嵌入 {/* #local-embeddings-with-fastembed */}
+
+嵌入是記憶體使用的數字向量`semanticRecall` to retrieve related messages by meaning (not keywords). This setup uses `@mastra/fastembed` to generate vector embeddings.
+
+安裝`fastembed` to get started:
+
+```bash npm2yarn
+npm install @mastra/fastembed@latest
+```
+
+將以下內容新增至您的Agent程式：
+
+```typescript title="src/mastra/agents/example-libsql-agent.ts"
+import { Memory } from '@mastra/memory'
+import { Agent } from '@mastra/core/agent'
+import { LibSQLStore, LibSQLVector } from '@mastra/libsql'
+import { fastembed } from '@mastra/fastembed'
+
+export const libsqlAgent = new Agent({
+  id: 'libsql-agent',
+  name: 'libSQL Agent',
+  instructions:
+    'You are an AI agent with the ability to automatically recall memories from previous interactions.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  memory: new Memory({
+    storage: new LibSQLStore({
+      id: 'libsql-agent-storage',
+      url: 'file:libsql-agent.db',
+    }),
+    vector: new LibSQLVector({
+      id: 'libsql-agent-vector',
+      url: 'file:libsql-agent.db',
+    }),
+    embedder: fastembed,
+    options: {
+      lastMessages: 10,
+      semanticRecall: {
+        topK: 3,
+        messageRange: 2,
+      },
+      generateTitle: true, // Explicitly enable automatic title generation
+    },
+  }),
+})
+```
+
+## 有關的 {/* #related */}
+
+* [元資料過濾器](/reference/rag/metadata-filters)

@@ -1,0 +1,116 @@
+---
+title: "Knowledge"
+description: "Give agents shared pages and notes they search, read and write, with access decided by your configuration rather than by the model."
+packages:
+  - "@mastra/core"
+  - "@mastra/libsql"
+  - "@mastra/memory"
+  - "@mastra/server"
+---
+
+# 知識
+
+**添加於：** `@mastra/core@1.82.0`
+
+知識為Agent提供了一個共享的、有組織的地方，用於儲存任何對話之外的資訊：政策、產品文件、慣例、操作手冊以及其他Agent學到的知識。Agent使用Tool搜索、读取和写入它。您固定的頁面可透過其到達Agent的上下文[signals](/docs/signals/overview) and stay current while it runs.
+
+：：：阿爾法
+
+知識處於阿爾法階段。其 API 可能會在不同版本之間變更。每次Tool呼叫時都會檢查存取權限，但 alpha 版本尚不能保證作用域之間的隔離。不要在 Knowledge 中儲存任何絕不能到達其他客戶或使用者的內容。知識還沒有內建的導入器或保留器。
+
+:::
+
+## 什麼是知識 {/* #what-knowledge-is */}
+
+知識是頁面和註釋的圖表，分為多個範圍。
+
+* 一個**page** is a topic with a name, a short description and a markdown body. Pages nest like folders, so `org:acme#policies/refund` is the `refund` page under `policies` in the `org:acme`範圍。
+* 一個**note** is a short fact added to a page and attributed to its author. People and agents can add notes without rewriting the page.
+* 一個**link** connects pages. Page bodies and notes link to other pages as `[[org:acme#policies/refund]]`, and reading a page shows the notes that mention it. These links make Knowledge a graph rather than a list of documents.
+* 一個**scope**, such as `org:acme` or `team:acme:support`, is a separate part of the graph. You declare the kinds of scope you need, and your server says which scopes each agent call, or **run**, holds.
+* 一個**role** sets what a run can do in a scope: a viewer reads, a contributor adds pages and notes, an editor changes pages, and an owner can also delete pages and move them between scopes. Roles come from rules in your scope declarations and are worked out each time a tool runs. Nothing is stored per user.
+
+## 何時使用知識 {/* #when-to-use-knowledge */}
+
+[記憶](/docs/memory/overview)保留對話中發生的情況，以便一個Agent可以在線程中繼續其工作。知識所保存的資訊比任何對話都更持久，並且可以在執行緒、Agent和人員之間共享。
+
+當您希望Agent程式能夠執行以下操作時，請使用知識：
+
+* **遵循您更新的規則。**&#x56FA;定一個策略頁面，每個可以讀取它的Agent程式每次都會看到它。編輯它，運行Agent將在下一輪獲得新版本。
+* **由一名Agent商為多個客戶或團隊提供服務。**&#x6BCF;個客戶或團隊的頁面都位於自己的範圍內，伺服器執行時間傳遞的範圍決定了它可以讀取哪些頁面。
+* **以其他Agent商所學到的知識為基礎。**&#x4EE3;理將決策、慣例和操作手冊記錄為頁面和屬性註釋，然後其他Agent和人員可以查找並添加到其中。
+* **Agent之間的手工工作。**&#x7814;究Agent編寫結果，規劃Agent在其下方添加計劃，編碼Agent從同一範圍讀取兩者。
+* **根據您的內容回答而不是猜測。**&#x5C07;您的文件或策略載入到範圍中，並為Agent提供唯讀Tool。
+
+## 快速入門 {/* #quickstart */}
+
+建立一個 Knowledge 實例，聲明它使用的範圍類型，並將其附加到Agent。`tools: true` gives the agent the tools to search, read and write pages. Registering the instance on `Mastra` with `KNOWLEDGE_ROUTES` lets you browse it in Studio:
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { Agent } from '@mastra/core/agent'
+import { Knowledge, knowledgeMemoryScopes } from '@mastra/core/knowledge'
+import { LibSQLStore } from '@mastra/libsql'
+import { Memory } from '@mastra/memory'
+import { KNOWLEDGE_ROUTES } from '@mastra/server/server-adapter'
+
+const storage = new LibSQLStore({ id: 'storage', url: 'file:./mastra.db' })
+
+export const knowledge = new Knowledge({
+  id: 'company',
+  storage,
+  scopes: { ...knowledgeMemoryScopes() },
+  tools: true,
+})
+
+export const agent = new Agent({
+  id: 'assistant',
+  name: 'Assistant',
+  instructions: 'You help your team and keep its knowledge up to date.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  memory: new Memory({ storage }),
+  knowledge,
+})
+
+export const mastra = new Mastra({
+  agents: { agent },
+  knowledge: { company: knowledge },
+  server: { apiRoutes: [...KNOWLEDGE_ROUTES] },
+})
+```
+
+`tools`預設為關閉狀態，因此附加了知識的Agent在您將其打開之前無法獲得任何Tool。記憶體是可選的：只要每個呼叫都通過，沒有記憶體的Agent也可以工作`scopes`, but [pinned context](/docs/knowledge/pinned-context) needs Memory.
+
+`knowledgeMemoryScopes()`聲明三種範圍：每個組織一種，每個使用者一種（`resource:`) and one per conversation thread (`thread:`). Each run says which ones it holds. This script runs the agent for two users at the same org, Dana and Bea, each in their own thread:
+
+```typescript title="src/try-knowledge.ts"
+import { mastra } from './mastra'
+
+const agent = mastra.getAgent('agent')
+
+await agent.generate('Our refund window is 30 days. Save that for the team.', {
+  scopes: ['org:acme', 'resource:dana', 'thread:dana-1'],
+})
+
+const answer = await agent.generate('How long is our refund window?', {
+  scopes: ['org:acme', 'resource:bea', 'thread:bea-1'],
+})
+
+console.log(answer.text)
+```
+
+這`resource:` and `thread:` scopes also tell Memory which user and thread the conversation belongs to. In a real app, scopes come from your server code for the authenticated user, never from the model or the request body. To set them for every request, see [Set a run's scopes](/docs/knowledge/scopes-and-access#set-a-runs-scopes).
+
+達納逃跑時，特工打電話給`knowledge_page` to save a page in the `org:acme` scope and gets back a result such as `{ "page": { "name": "Refund window", "ref": "org:acme#refunds", "scope": "org:acme", "version": 1 } }`. On Bea's run, it calls `knowledge_search`, finds `org:acme#refunds`, reads it with `knowledge_read` and answers that the window is 30 days. Search only returns pages the run can read, so a run that holds a different `org:` scope doesn't find Acme's page.
+
+若要查看該頁面，請運行`mastra dev`, open Studio and select **Knowledge**. The `org:acme` scope shows the page the agent wrote.
+
+## 後續步驟 {/* #next-steps */}
+
+* [範圍和存取權限](/docs/knowledge/scopes-and-access)：聲明範圍，設定運行的範圍，並測試它可以存取的內容。
+* [Agent商和Tool](/docs/knowledge/agents-and-tools)：Agent商獲得的Tool以及他們如何讀寫頁面。
+* [固定上下文](/docs/knowledge/pinned-context)：每次都在Agent的上下文中保留一個頁面。
+* [搜尋](/docs/knowledge/search)：添加按含義搜索，並查看結果如何排名。
+* [](/docs/knowledge/load-your-content)：將您的文件或政策從您的伺服器寫入 Knowledge 中。
+* [工作室知識](/docs/studio/knowledge)：瀏覽您的Agent商所知的樹和圖。
+* [您可以建立什麼](/docs/knowledge/patterns)：九種模式，從文檔Agent到Agent交接。

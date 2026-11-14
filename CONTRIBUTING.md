@@ -1,6 +1,6 @@
 # Contributing to Mastra's documentation
 
-We welcome contributions of any size and contributors of any skill level.
+You can _best_ help by creating high-quality issues with good reproductions and descriptions. Thanks for taking the time to contribute!
 
 > **Tip for new contributors:**
 > Take a look at [GitHub's Docs](https://docs.github.com/en/get-started/quickstart/hello-world) and [https://github.com/firstcontributions/first-contributions](https://github.com/firstcontributions/first-contributions) for helpful information on working with GitHub.
@@ -22,19 +22,7 @@ cd docs
 pnpm run dev
 ```
 
-This builds and starts the complete multilingual site at `http://localhost:3000`, so the language switcher works on every route. For faster hot-reload development of only the Simplified Chinese locale, use `pnpm dev:fast`.
-
-If you're copying these instructions, remember to [configure this project as a fork](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/configuring-a-remote-repository-for-a-fork).
-
-```shell
-git remote add upstream git@github.com:mastra-ai/mastra.git
-```
-
-At any point, create a branch for your contribution. We are not strict about branch names.
-
-```shell
-git checkout -b docs/fix-agent-example-typo
-```
+This will start a local development server at `http://localhost:3000` where you can preview your changes.
 
 ### Testing your changes
 
@@ -56,7 +44,7 @@ Before submitting a PR, make sure to:
 
 4. **Verify code examples**: If you've added code examples, test them if possible to ensure they work.
 
-5. **Run linters**: Install Vale and `mdx2vast`, then run the linting and validation commands.
+5. **Run linters**: Install Vale, then run the linting and validation commands.
 
    Download Vale:
 
@@ -64,17 +52,13 @@ Before submitting a PR, make sure to:
    pnpm run vale:download
    ```
 
-   Install `mdx2vast` globally:
-
-   ```bash
-   npm install -g mdx2vast
-   ```
-
-   Run the validation scripts:
+   Run every docs check. Pass the files you changed to scope file-level checks, and `--fix` to apply safe fixes:
 
    ```shell
-   pnpm run lint:prose && pnpm run validate
+   pnpm run check
    ```
+
+   See [`styleguides/CHECKS.md`](./styleguides/CHECKS.md) for rule IDs and how to disable a rule on one page.
 
 6. **Add redirect** (optional): If you've renamed or deleted a doc, add a redirect to `vercel.redirects.json` and run `pnpm run generate-vercel-redirects` to update the generated `vercel.json`.
 
@@ -88,7 +72,7 @@ The Mastra documentation is organized into several sections:
 - **models/**: Model provider documentation (`src/content/en/models/`). These docs are auto-generated and should not be edited manually.
 - **course/**: Tutorial and course content (`src/course/`)
 
-New source documentation should be written in English and placed in the appropriate section under `src/content/en/`. The site also publishes Simplified Chinese, Japanese, Taiwan Traditional Chinese, and Hong Kong Traditional Chinese localizations.
+All documentation should be written in English and placed in the appropriate section under `src/content/en/`. English is the only supported language and there are no plans to support other languages at this time.
 
 ## Editing content
 
@@ -111,6 +95,13 @@ packages:
 - `title`: The title of the page. Used to populate the HTML `<title>` tag
 - `description`: A short description of the page's content. Used in the HTML `<meta name="description">` tag for SEO purposes.
 - `packages`: An array of npm packages that are relevant to the content on the page. Enables embedded docs, see [EMBEDDED_DOCS.md](../scripts/EMBEDDED_DOCS.md) for more details.
+
+Every listed package ships its own copy of the page, so list only the packages whose users need the page:
+
+- List the package that owns the documented API. Don't add `@mastra/core` when a dedicated package such as `@mastra/mcp` or `@mastra/evals` owns the API.
+- Add `@mastra/core` to broader framework guides, because every Mastra project installs it.
+- On overview pages that compare several adapters, list the shared interface package, not every adapter. Each adapter's own page lists the adapter package.
+- Keep the list to four packages or fewer. `pnpm check` warns above that.
 
 ### Headings
 
@@ -208,12 +199,6 @@ Some **content** with _Markdown_ `syntax`. Check [this `api`](#).
 
 :::
 
-:::info
-
-Some **content** with _Markdown_ `syntax`. Check [this `api`](#).
-
-:::
-
 :::warning
 
 Some **content** with _Markdown_ `syntax`. Check [this `api`](#).
@@ -225,7 +210,15 @@ Some **content** with _Markdown_ `syntax`. Check [this `api`](#).
 Some **content** with _Markdown_ `syntax`. Check [this `api`](#).
 
 :::
+
+:::beta
+
+Some **content** with _Markdown_ `syntax`. Check [this `api`](#).
+
+:::
 ```
+
+`info` is an alias for `note` and renders identically, so prefer `note`.
 
 ### `<Tabs>`
 

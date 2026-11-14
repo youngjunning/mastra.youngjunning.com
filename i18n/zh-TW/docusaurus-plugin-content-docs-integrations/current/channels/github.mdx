@@ -1,0 +1,157 @@
+---
+title: "GitHub | Channels"
+description: "Subscribe Mastra agents to GitHub pull requests with @mastra/github-signals, polling modes, notification signals, and subscription management tools."
+packages:
+  - "@mastra/core"
+  - "@mastra/connect"
+  - "@mastra/github-signals"
+  - "@mastra/memory"
+---
+
+import GithubConnectTools from "@site/src/components/connect/generated/github.mdx";
+
+# GitHub
+
+以兩種方式將 GitHub 與 Mastra 結合使用：
+
+* **AgentTool**讓Agent程式處理儲存庫、問題、拉取請求、發布和Workflow[Mastra Connect](/docs/mastra-platform/connect).
+* **[拉取請求訊號](#pull-request-signals)**&#x8B93;Agent遵循拉取請求 (PR) 並在它們發生變化時做出反應。
+
+## 連接 {/* #connect */}
+
+在開始之前，請完成[Connect setup](/docs/mastra-platform/connect#get-started) to install `@mastra/connect` and configure your platform project. Connect keeps GitHub credentials on the Mastra platform, so your application never stores them.
+
+<GithubConnectTools />
+
+## 拉取請求訊號 {/* #pull-request-signals */}
+
+這`@mastra/github-signals` provider polls subscribed PRs and sends [notification signals](/docs/signals/notifications) to the agent thread when relevant activity occurs. It runs on your own infrastructure and uses the GitHub CLI for access instead of a Connect connection.
+
+### 安裝 {/* #installation */}
+
+安裝 GitHub Signals 和本範例中使用的記憶體包：
+
+```bash npm2yarn
+npm install @mastra/github-signals @mastra/libsql @mastra/memory
+```
+
+### 先決條件 {/* #prerequisites */}
+
+GitHub 訊號需要：
+
+* 具有記憶體和通知支援的 Mastra 儲存適配器。Provider將每個訂閱儲存在執行緒的元資料中，因此該執行緒必須已經存在。
+* 這`gitcrawl` command on `PATH`, configured to access the repositories you want to monitor. The provider runs `gitcrawl sync` and reads its SQLite database.
+* 這`sqlite3` command on `PATH`.
+* 這[GitHub CLI](https://cli.github.com/) installed and authenticated. The provider uses real `gh api` responses to check repository permissions and GitHub App ownership before notifying the agent.
+
+`admin`, `maintain`, or `write` access can trigger notifications. CodeRabbit and Devin bot comments are explicitly allowed.
+
+機器人授權檢查`ignoredBots` first, using an exact case-insensitive login match. Other bots can trigger notifications when they're listed in `authorizedBots`, when the GitHub App is owned by a user whose repository permission is listed in `authorizedPermissions`, or when the app is owned by the organization that owns the repository. The default authorized permissions are `admin`, `maintain`, and `write`.
+
+失敗、無法存取、格式錯誤和不受支援的應用程式擁有者查找會拒絕機器人評論。成功的應用程式擁有者查找會快取 24 小時。失敗的查找不會被快取。
+
+### Agent商及訂閱 {/* #agent-and-subscription */}
+
+創建一個`GithubSignals` instance and register it on the agent. Register the agent and a storage adapter on the Mastra instance:
+
+```typescript title="src/mastra/index.ts"
+import { Agent } from '@mastra/core/agent'
+import { Mastra } from '@mastra/core/mastra'
+import { Memory } from '@mastra/memory'
+import { GithubSignals } from '@mastra/github-signals'
+import { LibSQLStore } from '@mastra/libsql'
+
+export const githubSignals = new GithubSignals()
+
+export const devAgent = new Agent({
+  id: 'dev-agent',
+  name: 'Development Agent',
+  instructions: 'Triage pull request activity and help resolve issues.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  memory: new Memory(),
+  signals: [githubSignals],
+})
+
+export const mastra = new Mastra({
+  agents: { devAgent },
+  storage: new LibSQLStore({
+    id: 'mastra-storage',
+    url: 'file:./mastra.db',
+  }),
+})
+```
+
+Agent建立記憶體線程後，為該線程訂閱 PR。選擇`review` mode when the thread only needs code revisions, authorized latest PR comments, and observable review-thread-state updates:
+
+```typescript
+await githubSignals.subscribeThreadToPR({
+  threadId: 'thread-123',
+  resourceId: 'user-123',
+  pr: {
+    owner: 'acme',
+    repo: 'web-app',
+    number: 42,
+  },
+  mode: 'review',
+})
+```
+
+Provider立即同步 PR、儲存訂閱並開始每五分鐘輪詢一次。放`pollIntervalMs` in the `GithubSignals` constructor to change the interval. If the process restarts, call `startPollingForThread()` for each persisted thread subscription to resume polling.
+
+一個線程有一個當前的 GitHub Signals 訂閱。將其訂閱到另一個 PR 會取代現有的訂閱。
+
+### 訂閱方式 {/* #subscription-modes */}
+
+GitHub Signals 支援兩種訂閱模式：
+
+* `review`：遵循新的頭部修訂、授權的最新 PR 評論以及可觀察的審核線程狀態更改，包括所有審核線程何時解決。
+* `working`：遵循所有可能觸發Provider偵測到的通知的 PR 活動。帶有評論的通知仍受現有授權門的約束。這是預設值，當`mode` is omitted and for stored subscriptions without a valid mode.
+
+下表顯示了每種模式的可觀察行為：
+
+|拉取請求活動 |`working` | `review` |
+| - | - | - |
+| First observation | Sends a baseline notification | Saves all cursors without notifying unless the PR is closed or merged; then notifies and removes the subscription |
+| New commit or force-push | Notifies when the latest comment author is authorized | Notifies without requiring a comment author |
+| New authorized latest PR comment | Notifies | Notifies |
+| Observable review-thread-state change | Notifies while unresolved threads remain | Notifies, including when all review threads become resolved |
+| Continuous integration checks start, fail, or recover | Notifies | Saves the new state without notifying |
+| Merge conflicts appear or resolve | Notifies | Saves the new state without notifying |
+| Other aggregate PR activity that can trigger a notification | Notifies when applicable authorization checks pass | Saves the new state without notifying |
+| PR closes without merging | Notifies and keeps the subscription | Notifies and removes the subscription |
+| PR reopens | Notifies | Doesn't notify because the earlier close removed the subscription |
+| PR merges | Notifies and removes the subscription | Notifies and removes the subscription |
+
+評論模式使用最新的通用公關評論`gitcrawl`, and the snapshot doesn't distinguish general PR conversation from inline review comments. Comment notifications require an authorized author because they include comment content. Review-state notifications contain only provider-generated state summaries and aren't author-gated.
+
+審閱狀態遊標包括未解析的執行緒計數和最新的未解析執行緒時間戳記。它會報告計數何時達到零，但無法報告對已解決的線程的回應。
+
+在訂閱期間，不會儲存已知已關閉或合併的 PR，也不會發送活動通知。否則，審閱模式會靜默保存其第一個可用的非終端快照，包括當訂閱時間快照失敗且稍後的輪詢提供第一個觀察結果時。如果第一個可用的輪詢快照或後續快照已關閉或合併，則Provider會傳送終端通知並刪除訂閱。除非您再次訂閱，否則它不會跟隨稍後的重新開啟。
+
+### 訂閱Tool {/* #subscription-tools */}
+
+Provider新增了`github_subscribe_pr` and `github_unsubscribe_pr` tools to the agent. Pass `mode` when subscribing:
+
+```json
+{
+  "owner": "acme",
+  "repo": "web-app",
+  "number": 42,
+  "mode": "review"
+}
+```
+
+省略`mode` selects `working`. Don't subscribe for a one-off PR inspection.
+
+### MastraCode 指令 {/* #mastracode-commands */}
+
+在 MastraCode 中，使用空格`--mode` flag with a PR number, `owner/repo#number`, or full GitHub PR URL:
+
+```text
+/github subscribe 42 --mode review
+/github acme/web-app#42 --mode working
+/github unsubscribe 42
+/github debug
+```
+
+MastraCode 拒絕`--mode=review`, missing or repeated mode values, unknown modes, and mode flags on unsubscribe. `/github debug` shows the stored mode and displays absent or invalid legacy values as `working`.

@@ -1,0 +1,245 @@
+---
+title: "Schedules | Long-running agents"
+description: "Schedule Mastra agents with cron expressions, recurring prompts, optional thread delivery, lifecycle hooks, and APIs for managing scheduled runs."
+packages:
+  - "@mastra/core"
+  - "@mastra/client-js"
+---
+
+# 时间表
+
+**添加于：** `@mastra/core@1.50.0`
+
+计划按 cron 节奏运行Agent。每次发生火灾时，Mastra 都会发送一条提示[signal](/docs/signals/sending-signals) into a thread or as a threadless [`agent.generate()`](/reference/agents/generate)跑步。使用时间表进行重复性工作，例如每日总结和定期检查，包括安排对话。
+
+计划是持久的，因此它们可以在重新启动和重新部署后继续存在。通过在运行时管理它们[`mastra.schedules`](/reference/schedules/overview), the canonical create, read, update, and delete (CRUD) surface. The same surface also manages [workflow schedules](/docs/workflows/scheduled-workflows) (pass `workflowId`而不是`agentId`安排Workflow程）。
+
+：：：笔记
+
+时间表需要[storage](/docs/storage) adapter that implements the schedules domain. See the [`mastra.schedules` reference](/reference/schedules/overview) for supported adapters and API behavior.
+
+:::
+
+保留计划并不能保证每次事件都能交付。发布是尽力而为的：调度程序最多进行三次发布尝试，但耗尽的尝试或发布者崩溃​​可以跳过一次发生。跳过的事件不会重播，而稍后重复发生的火灾可以继续。看[Schedule delivery guarantees](/reference/schedules/overview#delivery-guarantees) for failure reporting and manual rerun precautions.
+
+## 快速入门 {/* #quickstart */}
+
+以下时间表运行`pinger` agent every hour. It has no thread, so each fire is an isolated `agent.generate()` run.
+
+```typescript title="src/mastra/schedules.ts"
+import { Mastra } from '@mastra/core'
+import { Agent } from '@mastra/core/agent'
+import { LibSQLStore } from '@mastra/libsql'
+
+const pinger = new Agent({
+  id: 'pinger',
+  name: 'Pinger',
+  instructions: 'Report the current system status in one sentence.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+})
+
+const mastra = new Mastra({
+  agents: { pinger },
+  storage: new LibSQLStore({ id: 'mastra-storage', url: 'file:./mastra.db' }),
+})
+
+await mastra.schedules.create({
+  agentId: 'pinger',
+  cron: '0 * * * *',
+  prompt: 'Give me a status update.',
+})
+```
+
+仅在 Mastra 背景的进程中安排火灾[workers](/docs/deployment/workers) are running. The server that `mastra dev` and `mastra build` generate starts them for you. With a [server adapter](/docs/server/server-adapters) or your own script, call `mastra.startWorkers()` yourself, otherwise schedules are saved but never fire. See [Start background workers](/docs/server/server-adapters#start-background-workers).
+
+## 节奏 {/* #cadence */}
+
+安排在 cron 表达式上触发。这`cron` field accepts a standard 5-, 6-, or 7-part cron expression, and it's validated when you create or update the schedule.
+
+`croner`昵称也可以，例如`@hourly`, `@daily`, `@weekly`, `@monthly`, and `@midnight`. For day-and-time combinations, write the cron field directly:
+
+```typescript
+// Every weekday at 9am
+await mastra.schedules.create({
+  agentId: 'pinger',
+  cron: '0 9 * * 1-5',
+  prompt: 'Start-of-day check.',
+})
+```
+
+放`timezone` to an IANA timezone, for example `America/New_York`, so fire times don't depend on the host's locale. When omitted, the cron resolves against the host's local timezone.
+
+为了更具可读性的 cron 构造，您可以使用用户空间构建器，例如[`cron-time-generator`](https://www.npmjs.com/package/cron-time-generator) and pass its output to `cron`.
+
+## 无线程和线程调度 {/* #threadless-and-threaded-schedules */}
+
+Agent计划以两种模式之一触发，具体取决于您是否通过`threadId`.
+
+### 无螺纹 {/* #threadless */}
+
+没有一个`threadId`, each fire is an isolated `agent.generate()` run. Nothing is written to a conversation thread. This is the simplest mode and suits status checks, reports, and other work that doesn't need conversation context.
+
+### 螺纹式 {/* #threaded */}
+
+与一个`threadId`, the schedule sends a [signal](/docs/signals/sending-signals) into that thread. The prompt joins the agent's conversation. Threaded schedules require a `resourceId` alongside the `threadId`.
+
+```typescript title="src/mastra/schedules.ts"
+await mastra.schedules.create({
+  agentId: 'pinger',
+  cron: '0 9 * * *',
+  prompt: 'Summarize anything new since yesterday.',
+  threadId: 'thread-123',
+  resourceId: 'user-456',
+})
+```
+
+线程调度接受控制信号行为方式的额外字段，包括信号类型、XML 标记、标记属性和活动或空闲传递行为。它们反映了选项[`agent.sendSignal()`](/docs/signals/sending-signals) accepts and stay JSON-serializable so they persist with the schedule.
+
+这些字段需要一个`threadId`. For the full threaded input shape, see the [agent schedule input reference](/reference/schedules/overview#createinput).
+
+```typescript
+await mastra.schedules.create({
+  agentId: 'pinger',
+  cron: '0 9 * * *',
+  prompt: 'Summarize anything new since yesterday.',
+  threadId: 'thread-123',
+  resourceId: 'user-456',
+  tagName: 'check-in', // renders as <check-in>…</check-in>
+  attributes: { source: 'cron' },
+  ifActive: { behavior: 'discard' }, // skip if the thread is mid-stream
+  ifIdle: {
+    behavior: 'wake', // wake the agent if the thread is idle
+    streamOptions: { requestContext: { locale: 'en-US' } },
+  },
+})
+```
+
+`providerOptions`每次发生火灾时都会合并到信号有效负载中，并适用于线程和无线程调度。
+
+## 管理日程 {/* #managing-schedules */}
+
+使用`mastra.schedules` for all schedule operations. The service can create, read, update, pause, resume, manually run, and delete schedules.
+
+```typescript
+const schedule = await mastra.schedules.create({
+  agentId: 'pinger',
+  cron: '0 * * * *',
+  prompt: 'Status check.',
+})
+
+await mastra.schedules.pause(schedule.id)
+await mastra.schedules.resume(schedule.id)
+await mastra.schedules.run(schedule.id) // Fire once now, off-schedule
+```
+
+`pause`和`resume` are durable. `run` fires the schedule once immediately without affecting its cadence. For the complete method list, filters, and patch fields, see the [`mastra.schedules` reference](/reference/schedules/overview).
+
+### Workflow程安排 {/* #workflow-schedules */}
+
+同一服务创建运行Workflow而不是Agent的计划。经过`workflowId` and the workflow-shaped fields:
+
+```typescript
+await mastra.schedules.create({
+  workflowId: 'daily-report',
+  cron: '0 9 * * *',
+  inputData: { userId: 'system' },
+})
+```
+
+以这种方式创建的Workflow程计划独立于声明性`schedule` field on `createWorkflow`, see [scheduled workflows](/docs/workflows/scheduled-workflows) for the declarative form and Studio views.
+
+### 自定义 ID {/* #custom-ids */}
+
+经过`id` when you need a predictable handle to look up, update, or delete later.
+
+```typescript
+await mastra.schedules.create({
+  id: 'nightly-summary',
+  agentId: 'pinger',
+  cron: '0 9 * * *',
+  prompt: 'Summarize anything new since yesterday.',
+})
+```
+
+请参阅[`create(input)` reference](/reference/schedules/overview#createinput) for ID normalization rules and duplicate ID behavior.
+
+### 来自客户 {/* #from-the-client */}
+
+相同的操作可从`@mastra/client-js` over the `/api/schedules` routes, so you can manage schedules from a separate process or a UI. See the [client-js agent schedules reference](/reference/client-js/agents#agent-schedules) for the client method list.
+
+## 生命周期挂钩 {/* #lifecycle-hooks */}
+
+挂钩允许您在Agent计划生命周期的关键点运行代码，例如计算触发时间参数或对结果做出反应。将它们配置在`Mastra` constructor under `schedules`. The hooks are a single flat bundle that runs for every agent's schedules; each hook context carries the firing `agentId`, so branch on it when you need per-agent behavior. Hooks live at the `Mastra` level so they apply to both code-defined and stored agents.
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { LibSQLStore } from '@mastra/libsql'
+
+const mastra = new Mastra({
+  agents: { pinger },
+  storage: new LibSQLStore({ id: 'mastra-storage', url: 'file:./mastra.db' }),
+  schedules: {
+    prepare: async ({ agentId, schedule, trigger }) => {
+      // Return overrides, null to skip this fire, or undefined for defaults
+      return { prompt: `Status as of ${trigger.firedAt.toISOString()}` }
+    },
+    onFinish: async ({ agentId, outcome, runId }) => {
+      // Runs on any non-error, non-abort outcome. For a threaded schedule, this is the hand-off, not the end of the run
+    },
+    onError: async ({ agentId, phase, error }) => {
+      // Runs when prepare or the signal threw, or a threadless run failed without aborting
+    },
+    onAbort: async ({ agentId, runId }) => {
+      // Runs when a threadless run was aborted
+    },
+  },
+})
+```
+
+钩子是：
+
+* `prepare`：在火灾发生前运行。返回一个对象来覆盖触发时间参数，例如`prompt` or `threadId`, `null` to skip the fire, or `undefined` to use the stored defaults.
+* `onFinish`：每个触发器运行一次，达到非错误、非中止结果。当线程调度开始新的运行时，它运行`outcome: 'succeeded'` as soon as the run starts, not when it finishes.
+* `onError`：失败后运行`prepare` or the signal. For a schedule without a `threadId`, it also runs when the agent run fails with an error that isn't an abort.
+* `onAbort`：当运行没有时间表的计划时运行`threadId` was aborted.
+
+对于带有`threadId`, the worker sends the prompt to the thread and doesn't wait for the run. Errors and aborts after the run starts surface on that thread's run, not through `onError` or `onAbort`.
+
+如果您需要对已完成的运行做出反应，请使用无线程计划。对于生命周期状态、清理、重试或多步骤，请使用[scheduled workflow](/docs/workflows/scheduled-workflows).
+
+每个钩子上下文包括`agentId` (the agent the schedule fired for) alongside `schedule` and `trigger`.
+
+捕获并记录钩子异常。他们永远不会重新安排工作人员的路线或触发另一个钩子。
+
+## Mastra 代码中反复出现的提示 {/* #recurring-prompts-in-mastra-code */}
+
+Mastra 代码提供`/schedules` command, which attaches a recurring prompt to the current conversation thread. Unlike `mastra.schedules`, these schedules live only in the Mastra Code process that created them: nothing is written to storage, and each fire is sent to the thread with `agent.sendSignal()` directly.
+
+跑步`/schedules` to open a menu with **Create schedule** and one row per schedule on the current thread. Creating a schedule walks through these steps:
+
+1. 选择每次火灾发送的内容：**Prompt**, a **Prompt file** that's re-read on every fire, or a **Script** that runs on every fire.
+2. 输入提示文本或文件路径。路径从项目根解析。对于脚本，您可以添加在脚本输出后发送的提示。
+3. 选择节奏`1m` to `1d`, or type one such as `20m` or `3h`. Minute steps must divide an hour and hour steps must divide a day.
+4. 确认。
+
+脚本从项目根目录运行，超时时间为 60 秒，它们的 stdout、stderr 和退出代码将成为提示符。额外的提示永远不会传递给脚本。
+
+选择现有的时间表优惠**Run now**, **Pause** or **Resume**, and **Delete**. **Run now** fires the schedule once without changing its cadence, works on paused schedules, and is skipped while a fire of the same schedule is still running.
+
+每个火作为一个到达线程`user`-type signal and shows in the transcript as a `schedule` entry with the schedule's id, cadence, source, and script exit status. If the thread is busy, the running agent receives the prompt as its next input, the same way a message you type mid-run does. If the thread is idle, it wakes and runs. Schedules fire on any thread in the process, not only the one focused in the terminal. After `/new`, a new schedule binds to the new thread.
+
+要知道的事情：
+
+* **会话范围。**&#x65F6;间表仅存在于创建它们的 Mastra Code 进程中，并在退出时停止。共享同一数据库的其他 Mastra Code 进程永远不会看到或触发它们。
+* **时钟边界。** `5m` fires at :00, :05, :10 and so on, not five minutes after creation, and `1d` fires at local midnight. Hour and day cadences follow wall-clock time across daylight saving changes, like cron. A fire missed while the machine slept, or one whose timer runs more than a minute late, is skipped, and the schedule resumes at the next boundary.
+* **重叠的火灾会被跳过。**&#x5982;果下一个边界到达时脚本仍在运行，则该火灾不会运行。
+
+### 座席调度Tool {/* #agent-schedule-tools */}
+
+正在开启**Experimental schedule tools** in `/settings` (restart required) gives the agent tools that manage the same schedules: `schedule_create`, `schedule_list`, `schedule_update` (pause or delete), `schedule_resume`, and `schedule_run`. The tools only see and change schedules on the thread of the run that calls them. Because a schedule can run a script on every fire, `schedule_create`, `schedule_resume`, and `schedule_run` need the same approval as running a shell command unless YOLO mode is on. Schedules the agent creates are marked `created by agent` in the transcript.
+
+## 有关的 {/* #related */}
+
+* [`mastra.schedules`](/reference/schedules/overview)：用于创建和管理计划的 API 参考。
+* [信号](/docs/signals/sending-signals)：线程调度背后的交付机制。
+* [预定的Workflow程](/docs/workflows/scheduled-workflows)：在Workflow定义上声明 cron 计划。

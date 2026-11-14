@@ -1,0 +1,197 @@
+---
+title: "Tools | v1 Migration Guide"
+description: "Tool execution signatures have been updated to use separate input and context parameters with reorganized context properties."
+---
+
+# Tool
+
+Tool執行簽名已更新為使用單獨的輸入和上下文參數以及重新組織的上下文屬性。
+
+## 改變了 {/* #changed */}
+
+### `createTool`執行簽名`(inputData, context)` format {/* #createtool-execute-signature-to-inputdata-context-format */}
+
+全部`createTool` execute functions now use a signature with separate `inputData` and `context`參數而不是單一解構物件。Tool輸入和執行上下文現在是獨立傳遞的。
+
+此簽名變更僅適用於`createTool`. For workflow `createStep` calls, keep the `async (inputData, context)` signature.
+
+若要遷移，請更新`createTool` signatures to use `inputData` as the first parameter (typed from `inputSchema`) and `context` as the second parameter.
+
+```diff
+  createTool({
+    id: 'weather-tool',
+-   execute: async ({ context, requestContext, mastra }) => {
+-     const location = context.location;
+-     const userTier = requestContext.get('userTier');
+-     return getWeather(location, userTier);
+-   },
++   execute: async (inputData, context) => {
++     const location = inputData.location;
++     const userTier = context?.requestContext?.get('userTier');
++     return getWeather(location, userTier);
++   },
+  });
+```
+
+### `createTool`上下文屬性組織 {/* #createtool-context-properties-organization */}
+
+上下文屬性`createTool` are now organized into namespaces. Agent-specific properties are under `context.agent`, workflow-specific properties are under `context.workflow`, and MCP-specific properties are under `context.mcp`. The namespaces organize these properties under a clearer API surface.
+
+對於在Agent內部執行的Tool，可以透過以下方式存取特定於Agent的屬性`context.agent`.
+
+```diff
+  createTool({
+    id: 'suspendable-tool',
+    suspendSchema: z.object({ message: z.string() }),
+    resumeSchema: z.object({ approval: z.boolean() }),
+-   execute: async ({ context, suspend, resumeData }) => {
+-     if (!resumeData) {
+-       return await suspend({ message: 'Waiting for approval' });
+-     }
+-     if (resumeData.approval) {
+-       return { success: true };
+-     }
+-   },
++   execute: async (inputData, context) => {
++     if (!context?.agent?.resumeData) {
++       return await context?.agent?.suspend({
++         message: 'Waiting for approval',
++       });
++     }
++     if (context.agent.resumeData.approval) {
++       return { success: true };
++     }
++   },
+  });
+```
+
+`context.workflow`.
+
+```diff
+  createTool({
+    id: 'workflow-tool',
+-   execute: async ({ workflowId, runId, state, setState }) => {
+-     const currentState = state;
+-     setState({ step: 'completed' });
+-     return { result: 'done' };
+-   },
++   execute: async (inputData, context) => {
++     const currentState = context?.workflow?.state;
++     context?.workflow?.setState({ step: 'completed' });
++     return { result: 'done' };
++   },
+  });
+```
+
+這`suspendPayload` is validated against the `suspendSchema` when the tool is executed. What happens when the `suspendPayload` doesn't match the `suspendSchema` depends on how the tool runs:
+
+* **Agent**：驗證錯誤作為Tool輸出返回，並記錄警告，但暫停繼續。
+* **直接的`execute()` call**：驗證錯誤作為Tool輸出傳回，而不記錄警告。
+* **Workflow步驟**：此步驟因暫停資料驗證錯誤而失敗，且Workflow運行失敗。
+
+此外，當該Tool恢復時，`resumeData` gets validated against the `resumeSchema`. If the resumeData doesn't match the `resumeSchema`, the tool will return a `ValidationError`, preventing the tool resumption.
+
+要跳過`suspendSchema` or `resumeSchema` validation, don't define `suspendSchema` or `resumeSchema` in the tool creation.
+
+:::注意
+有關 MCP 特定Tool上下文更改，請參閱[MCP migration guide](/reference/migrations/upgrade-to-v1/mcp).
+:::
+
+### `RuntimeContext`到`RequestContext` {/* #runtimecontext-to-requestcontext */}
+
+這`RuntimeContext` class has been renamed to `RequestContext` throughout the tool execution context. The new name identifies the class as request-specific data.
+
+若要遷移，請更新引用`runtimeContext` to `requestContext` in tool execution functions.
+
+```diff
+  createTool({
+    id: 'my-tool',
+    execute: async (inputData, context) => {
+-     const userTier = context?.runtimeContext?.get('userTier');
++     const userTier = context?.requestContext?.get('userTier');
+      return { result: userTier };
+    },
+  });
+```
+
+:::提示\[程式碼修改]
+
+您可以使用 Mastra 的 codemod CLI 自動更新導入：
+
+```bash
+npx @mastra/codemod@latest v1/runtime-context .
+```
+
+:::
+
+這適用於所有Tool執行，無論是直接呼叫還是透過Agent和Workflow呼叫。類型縮小可確保您正確處理驗證錯誤並防止存取輸出屬性時出現執行時錯誤。
+
+### Tool輸出驗證`outputSchema` {/* #tool-output-validation-with-outputschema */}
+
+Tool帶有`outputSchema` now validate their return values at runtime. Previously, `outputSchema` was only used for type inference - the output was never validated.
+
+如果您的Tool傳回的資料與其不匹配`outputSchema`, it will now return a `ValidationError` instead of the invalid data. This is the default `outputValidation: 'strict'` behavior. With [`outputValidation: 'warn'`](/reference/tools/create-tool), Mastra logs the mismatch and returns the original output unchanged.
+
+若要修復驗證錯誤，請確保Tool的輸出與架構定義相符：
+
+```diff
+  const getUserTool = createTool({
+    id: "get-user",
+    outputSchema: z.object({
+      id: z.string(),
+      name: z.string(),
+      email: z.string().email(),
+    }),
+    execute: async (inputData) => {
+-     return { id: "123", name: "John" }; // Missing email
++     return { id: "123", name: "John", email: "john@example.com" };
+    },
+  });
+```
+
+當驗證失敗時，該Tool會傳回`ValidationError`:
+
+```diff
++ // Before v1 - invalid output would silently pass through
+  await getUserTool.execute({});
+- // { id: "123", name: "John" } - missing email
++ // {
++ //   error: true,
++ //   message: "Tool output validation failed for get-user. The tool returned invalid output:\n- email: Required\n\nReturned output: {...}",
++ //   validationErrors: { ... }
++ // }
+```
+
+### `tool.execute`返回類型包括`ValidationError` {/* #toolexecute-return-type-includes-validationerror */}
+
+返回類型為`tool.execute` now includes `ValidationError` to handle validation failures. You must narrow the result type before accessing output schema properties to satisfy TypeScript's type checking.
+
+打電話時`tool.execute`, check if the result contains an error before accessing output properties:
+
+```typescript
+const result = await getUserTool.execute({})
+
+// Type-safe check for validation errors
+if ('error' in result && result.error) {
+  console.error('Validation failed:', result.message)
+  console.error('Details:', result.validationErrors)
+  return
+}
+
+// TypeScript knows result is valid here
+console.log(result.id, result.name, result.email)
+```
+
+或者，更新`outputSchema` to match your actual output, or remove `outputSchema` entirely if you don't need validation.
+
+### 直接Tool執行 {/* #direct-tool-execution */}
+
+這`tool.execute` property is optional in the type system to support client-side tool definitions where execution logic is handled separately. When calling `execute` directly on a tool instance (rather than through agents or workflows), use optional chaining or non-null assertion:
+
+```typescript
+// Optional chaining (recommended)
+const result = await weatherTool.execute?.({ location: 'New York' }, {})
+
+// Non-null assertion (when you know execute exists)
+const result = await weatherTool.execute!({ location: 'New York' }, {})
+```

@@ -1,0 +1,572 @@
+---
+title: "CopilotKit | Agentic UI"
+description: "Connect CopilotKit to Mastra through AG-UI for generative UI, shared application state, frontend tools, human approval, and messaging channels."
+packages:
+  - '@mastra/core'
+---
+
+import Steps from "@site/src/components/Steps";
+import StepItem from "@site/src/components/StepItem";
+
+# 副驾驶套件
+
+[副驾驶套件](https://www.copilotkit.ai/)提供 React 组件，可将可定制的 AI 副驾驶快速集成到您的应用程序中。与 Mastra 结合，您可以构建具有双向状态同步和交互式 UI 的 AI 应用程序。
+
+CopilotKit 通过[AG-UI protocol](https://docs.ag-ui.com/). The `@ag-ui/mastra`包将您的 Mastra Agent公开为 AG-UI 端点，并且 CopilotKit 的 React 挂钩和组件使用它。这解锁了普通聊天之外的一系列体验：[生成式 UI、人机交互和前端Tool](#generative-ui)，再加上部署相同的Agent[Slack 等消息传递渠道](#channels).
+
+参观[CopilotKit documentation](https://docs.copilotkit.ai/) to learn more about CopilotKit concepts, components, and advanced usage patterns.
+
+：：：信息
+
+对于 Mastra 直接在 Next.js API 路由中运行的全栈集成方法，请参阅[CopilotKit Quickstart](https://docs.copilotkit.ai/mastra/quickstart) guide.
+
+:::
+
+参观马斯特拉["UI Dojo"](https://ui-dojo.mastra.ai/) to see real-world examples of CopilotKit integrated with Mastra.
+
+## 集成指南 {/* #integration-guide */}
+
+将 Mastra 作为独立服务器运行，并将 Next.js 前端（使用 CopilotKit）连接到其 API 端点。
+
+<Steps>
+  <StepItem>
+    设置您的目录结构。可能的目录结构如下所示：
+
+    ```bash
+    project-root
+    ├── mastra-server
+    │   ├── src
+    │   │   └── mastra
+    │   └── package.json
+    └── my-copilot-app
+        └── package.json
+    ```
+
+    引导您的 Mastra 服务器：
+
+    ```bash npm2yarn
+    npx create-mastra@latest
+    ```
+
+    此命令打开一个交互式向导，该向导构建一个新的 Mastra 项目。按照提示创建服务器项目。
+
+    导航到新创建的 Mastra 服务器目录：
+
+    ```bash
+    cd mastra-server # Replace with the actual directory name you provided
+    ```
+
+    您现在已经准备好了一个基本的 Mastra 服务器项目。
+
+    ：：：笔记
+
+    确保您已在中为您的 LLM Provider设置了适当的环境变量`.env` file.
+
+    :::
+  </StepItem>
+
+  <StepItem>
+    使用以下命令为 CopilotKit 前端创建聊天路由`registerCopilotKit()` helper from `@ag-ui/mastra`. Add it to your Mastra project (and its peer dependencies):
+
+    ```bash npm2yarn
+    npm install @ag-ui/mastra @mastra/client-js @mastra/core @ag-ui/core @ag-ui/client @copilotkit/runtime
+    ```
+
+    在你的`src/mastra/index.ts` file, register the chat route:
+
+    ```typescript title="src/mastra/index.ts" {2,7-19}
+    import { Mastra } from '@mastra/core/mastra'
+    import { registerCopilotKit } from '@ag-ui/mastra/copilotkit'
+    // Rest of the imports...
+
+    export const mastra = new Mastra({
+      // Rest of the configuration...
+      server: {
+        cors: {
+          origin: '*',
+          allowMethods: ['*'],
+          allowHeaders: ['*'],
+        },
+        apiRoutes: [
+          registerCopilotKit({
+            path: '/copilotkit',
+            resourceId: 'weatherAgent',
+          }),
+        ],
+      },
+    })
+    ```
+
+    这将在您的 Mastra 实例上公开Agent`/copilotkit` in a CopilotKit-compatible format. The frontend selects which agent to talk to with the `agent` prop shown below. Add the CORS configuration so the CopilotKit frontend can access the Mastra server. For production deployments, restrict CORS origins to your frontend domain.
+  </StepItem>
+
+  <StepItem>
+    使用以下命令运行 Mastra 服务器：
+
+    ```bash npm2yarn
+    npm run dev
+    ```
+
+    默认情况下，Mastra 服务器运行在`http://localhost:4111`. Keep this server running while you set up the CopilotKit frontend.
+  </StepItem>
+
+  <StepItem>
+    上一层目录到您的项目根目录。
+
+    ```bash
+    cd ..
+    ```
+
+    创建一个新的 Next.js 项目，名称为`my-copilot-app`:
+
+    ```bash npm2yarn
+    npx create-next-app@latest my-copilot-app
+    ```
+
+    导航到新创建的 Next.js 项目目录：
+
+    ```bash
+    cd my-copilot-app
+    ```
+  </StepItem>
+
+  <StepItem>
+    安装用于显示聊天界面的 CopilotKit UI 包：
+
+    ```bash npm2yarn
+    npm install @copilotkit/react-ui @copilotkit/react-core
+    ```
+
+    打开Next.js应用程序的home路由（通常是`app/page.tsx` or `src/app/page.tsx`) and replace the existing contents with the following code to set up a basic CopilotKit chat interface:
+
+    ```typescript title="app/page.tsx" oxfmt:false
+    import { CopilotChat } from '@copilotkit/react-ui'
+    import { CopilotKit } from '@copilotkit/react-core'
+    import '@copilotkit/react-ui/styles.css'
+
+    export default function Home() {
+      return (
+        <CopilotKit runtimeUrl="http://localhost:4111/copilotkit" agent="weatherAgent">
+          <CopilotChat
+            labels={{
+              title: 'Weather Agent',
+              initial: 'Hi! 👋 Ask me about the weather, forecasts, and climate.',
+            }}
+          />
+        </CopilotKit>
+      )
+    }
+    ```
+
+    这`agent` prop names the Mastra agent to route to. It must match a key in your Mastra instance's `agents` map.
+  </StepItem>
+
+  <StepItem>
+    确保 Mastra 服务器和 CopilotKit 前端都在运行。启动 Next.js 开发服务器：
+
+    ```bash npm2yarn
+    npm run dev
+    ```
+
+    在浏览器中打开应用程序并与您的Agent聊天。
+  </StepItem>
+</Steps>
+
+您的 CopilotKit 前端现在与独立的 Mastra Agent服务器进行通信。
+
+## 聊天界面选项 {/* #chat-ui-options */}
+
+`CopilotChat`呈现内联全高聊天。 CopilotKit 提供了另外两个共享相同 props 的嵌入式表面：
+
+* `CopilotSidebar`：停靠在应用程序侧面的可折叠面板。
+* `CopilotPopup`：打开聊天窗口的浮动按钮。
+
+交换组件以更改表面。所有三个都通过相同的连接`CopilotKit` provider:
+
+```typescript title="app/page.tsx" oxfmt:false
+import { CopilotSidebar } from '@copilotkit/react-ui'
+import { CopilotKit } from '@copilotkit/react-core'
+import '@copilotkit/react-ui/styles.css'
+
+export default function Home() {
+  return (
+    <CopilotKit runtimeUrl="http://localhost:4111/copilotkit" agent="weatherAgent">
+      <CopilotSidebar
+        labels={{
+          title: 'Weather Agent',
+          initial: 'Hi! 👋 Ask me about the weather.',
+        }}
+      />
+      {/* your app */}
+    </CopilotKit>
+  )
+}
+```
+
+对于完全自定义的聊天 UI（自带组件），请参阅[CopilotKit's headless UI guide](https://docs.copilotkit.ai/).
+
+## 生成式用户界面 {/* #generative-ui */}
+
+生成式 UI 描述了Agent帮助创建并且用户可以与之交互的界面。 CopilotKit 沿单个轴组织这些界面，即**generative UI spectrum**, which runs from author-controlled (you decide every pixel) to agent-invented (the agent owns the rendered surface). Your position on the axis is a trade-off between predictability and breadth.
+
+该频谱分为三层：
+
+|等级 |谁控制地表|基元 |
+| - | - | - |
+|**Controlled** | You wrote the component. The agent picks which one to use and what data to pass. | Tool call rendering, state rendering, reasoning, components as tools |
+| **Declarative** | The agent emits a structured spec. The frontend composes it from a catalog you registered. | A2UI (fixed-schema and flexible variants) |
+| **Open-ended** | The UI is invented elsewhere (an MCP server) and you sandbox it. | MCP Apps |
+
+每一层都是一个通过暴露的 Mastra 特工`registerCopilotKit()` plus the matching CopilotKit hook on the frontend. For the full concept, see CopilotKit's [generative UI spectrum](https://www.copilotkit.ai/generative-ui-spectrum) and [generative UI overview](https://docs.copilotkit.ai/concepts/generative-ui-overview).
+
+：：：提示
+
+马斯特拉的[UI Dojo](https://ui-dojo.mastra.ai/) has working CopilotKit examples. Browse the source under `src/pages/copilot-kit`.
+
+:::
+
+### 受控 {/* #controlled */}
+
+您提供一组固定的组件。Agent选择要渲染的组件并提供其数据。这种可预测的、品牌安全的方法非常适合人流量大的表面。受控原语使用 CopilotKit 的 v2 API，从`@copilotkit/react-core/v2`.
+
+#### Tool调用渲染 {/* #tool-call-rendering */}
+
+将Agent的Tool调用呈现为 React 组件。像平常一样在 Mastra 服务器上定义Agent和Tool：
+
+```typescript title="src/mastra/agents/weather-agent.ts"
+import { Agent } from '@mastra/core/agent'
+import { weatherTool } from '../tools/weather-tool'
+
+export const weatherAgent = new Agent({
+  id: 'weather-agent',
+  name: 'Weather Agent',
+  instructions: 'Use the weatherTool to fetch current weather data.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  tools: { weatherTool },
+})
+```
+
+在前端，通过名称为该Tool注册一个渲染器`useRenderTool`. It's render-only (it doesn't execute the tool); the `render` function receives the tool call's `status` and, once the agent returns, its `result`:
+
+```tsx title="app/page.tsx"
+import { z } from 'zod'
+import { CopilotChat } from '@copilotkit/react-ui'
+import { CopilotKit, useRenderTool } from '@copilotkit/react-core/v2'
+import { Weather } from '@/components/weather'
+
+function Chat() {
+  useRenderTool(
+    {
+      name: 'weatherTool',
+      parameters: z.object({ location: z.string() }),
+      render: ({ status, result }) => {
+        if (status !== 'complete') {
+          return <div>Retrieving weather...</div>
+        }
+        return <Weather {...result} />
+      },
+    },
+    [],
+  )
+
+  return <CopilotChat labels={{ title: 'Weather Assistant' }} />
+}
+
+export default function Page() {
+  return (
+    <CopilotKit runtimeUrl="http://localhost:4111/copilotkit" agent="weatherAgent">
+      <Chat />
+    </CopilotKit>
+  )
+}
+```
+
+由于 Mastra 增量地传输Tool调用参数，`render` function is called repeatedly as the arguments arrive, so the UI can paint progressively while the agent works.
+
+#### 组件作为Tool {/* #components-as-tools */}
+
+注册一个React组件并让Agent将其作为Tool来调用。 CopilotKit 将其与类型化 props 内联渲染（使用 Zod 模式定义）：
+
+```tsx title="app/page.tsx"
+import { z } from 'zod'
+import { useComponent } from '@copilotkit/react-core/v2'
+
+const schema = z.object({ text: z.string() })
+
+function Callout({ text }: z.infer<typeof schema>) {
+  return <div className="callout">{text}</div>
+}
+
+function Chat() {
+  useComponent({ name: 'callout', render: Callout, parameters: schema }, [])
+  return <CopilotChat labels={{ title: 'Assistant' }} />
+}
+```
+
+Agent调用`callout` like any other tool, and CopilotKit renders `Callout` with the props it passed.
+
+#### 状态渲染 {/* #state-rendering */}
+
+根据Agent的状态渲染 UI，并在流式传输时重新渲染。在 Mastra 上，Agent状态是Agent的工作内存，在发生变化时流式传输到客户端。阅读它与`useAgent`; `agent.state` is reactive, so the component updates automatically:
+
+```tsx title="app/page.tsx"
+import { useAgent } from '@copilotkit/react-core/v2'
+
+function TaskBoard() {
+  const { agent } = useAgent()
+  const tasks = (agent.state.tasks as any[]) ?? []
+
+  return (
+    <ul>
+      {tasks.map((task, i) => (
+        <li key={i}>
+          {task.title}: {task.status}
+        </li>
+      ))}
+    </ul>
+  )
+}
+```
+
+#### 推理 {/* #reasoning */}
+
+推理是零配置的：当您的 Mastra Agent运行具有推理功能的模型时，`CopilotChat` renders the model's thinking inline as a dedicated message type, with no extra code. To restyle it, pass your own component to the `reasoningMessage` slot on `CopilotChat`. See CopilotKit's [generative UI guides](https://docs.copilotkit.ai/) for details.
+
+### 声明式 {/* #declarative */}
+
+您无需注册每个Tool的固定组件，而是注册类型化构建块的目录，然后Agent根据请求将它们组装成 UI 树。 CopilotKit 称之为**A2UI** (Agent-to-UI), which has fixed-schema and flexible variants. It suits the long tail of secondary interactions where breadth matters more than pixel-perfection.
+
+阻力最小的方法是将您的目录传递给`<CopilotKit>` provider. That single prop enables A2UI rendering and injects the A2UI tool into your agent, so no backend change is needed:
+
+```tsx title="app/page.tsx"
+import { CopilotKit } from '@copilotkit/react-core/v2'
+import { myCatalog } from './a2ui-catalog'
+
+export default function Page() {
+  return (
+    <CopilotKit
+      runtimeUrl="http://localhost:4111/copilotkit"
+      agent="weatherAgent"
+      a2ui={{ catalog: myCatalog }}
+    >
+      {/* your app */}
+    </CopilotKit>
+  )
+}
+```
+
+该目录定义了图元（它们的模式）和渲染器（每个图元的显示方式）。在固定模式变体中，组件是预先编写的，Agent的Tool仅提供数据。灵活的变体让Agent可以更自由地构建树。请参阅 CopilotKit 的[A2UI documentation](https://docs.copilotkit.ai/a2a/generative-ui/a2ui).
+
+### 开放式 {/* #open-ended */}
+
+在光谱的远端，Agent拥有整个表面：UI 是在其他地方发明的，并在您的应用程序中Sandbox化。 CopilotKit 通过以下方式支持此功能**MCP Apps**, where an MCP server provides UI that renders inside your application. This tier trades determinism for novelty and is the most experimental point on the spectrum.
+
+阻力最小的路径使前端保持不变：您现有的`<CopilotKit>` provider is enough. On the backend, point `registerCopilotKit()` at one or more MCP servers with the `mcpApps` option (it's forwarded to the CopilotKit runtime):
+
+```typescript title="src/mastra/index.ts"
+registerCopilotKit({
+  path: '/copilotkit',
+  resourceId: 'weatherAgent',
+  mcpApps: {
+    servers: [{ type: 'http', url: 'http://localhost:3108/mcp', serverId: 'my-server' }],
+  },
+})
+```
+
+当Agent调用 MCP 应用程序Tool时，CopilotKit 会在聊天中获取并呈现该Tool的 UI，无需额外的前端代码。请参阅 CopilotKit 的[MCP Apps documentation](https://docs.copilotkit.ai/agno/generative-ui/mcp-apps).
+
+## 应用程序控制和交互 {/* #app-control-and-interactivity */}
+
+一些功能位于[generative UI](#generative-ui) spectrum rather than on it: they control your app or gate a run instead of rendering agent output. CopilotKit lets the agent act on your application and pause for the user. Both patterns run against the same Mastra setup.
+
+### 前端Tool {/* #frontend-tools */}
+
+让Agent能够对您的应用程序执行操作。在前端注册该Tool`useFrontendTool`; the `handler` runs in the browser when the agent calls it:
+
+```tsx title="app/page.tsx"
+import { CopilotChat } from '@copilotkit/react-ui'
+import { CopilotKit, useFrontendTool } from '@copilotkit/react-core'
+
+function Chat() {
+  useFrontendTool({
+    name: 'colorChangeTool',
+    description: 'Changes the background color',
+    parameters: [
+      { name: 'color', type: 'string', description: 'The color to change to', required: true },
+    ],
+    handler: ({ color }) => {
+      document.body.style.setProperty('--background', color)
+    },
+  })
+
+  return <CopilotChat labels={{ title: 'Background Color Changer' }} />
+}
+
+export default function Page() {
+  return (
+    <CopilotKit runtimeUrl="http://localhost:4111/copilotkit" agent="bgColorAgent">
+      <Chat />
+    </CopilotKit>
+  )
+}
+```
+
+匹配的 Mastra Agent是指示呼叫的普通Agent`colorChangeTool` with the requested color.
+
+CopilotKit 将前端Tool视为其独立Tool的一部分[App Control](https://docs.copilotkit.ai/) concept, alongside shared state and agent context.
+
+### 人在回路 {/* #human-in-the-loop */}
+
+在运行中暂停Agent并等待用户批准、编辑或拒绝，然后再继续。使用`useHumanInTheLoop`: its `render` function receives a `respond` callback, and the agent's run stays suspended until you call it.
+
+```tsx title="app/page.tsx"
+import { CopilotChat } from '@copilotkit/react-ui'
+import { CopilotKit, useHumanInTheLoop } from '@copilotkit/react-core'
+import { StepsFeedback } from '@/components/steps-feedback'
+
+function Chat() {
+  useHumanInTheLoop({
+    name: 'generate_task_steps',
+    description: 'Generates a list of steps for the user to perform',
+    parameters: [
+      {
+        name: 'steps',
+        type: 'object[]',
+        attributes: [
+          { name: 'description', type: 'string' },
+          { name: 'status', type: 'string', enum: ['enabled', 'disabled', 'executing'] },
+        ],
+      },
+    ],
+    available: 'enabled',
+    // `respond` resumes the agent with the user's edited selection.
+    render: ({ args, respond, status }) => (
+      <StepsFeedback args={args} respond={respond} status={status} />
+    ),
+  })
+
+  return <CopilotChat labels={{ title: 'Planning Agent' }} />
+}
+
+export default function Page() {
+  return (
+    <CopilotKit runtimeUrl="http://localhost:4111/copilotkit" agent="planningAgent">
+      <Chat />
+    </CopilotKit>
+  )
+}
+```
+
+里面`StepsFeedback`, let the user toggle steps and then call `respond({ accepted: true, steps })` to resume the agent, or `respond({ accepted: false })` to reject. The agent reads the returned value and continues accordingly. See the full component in the [UI Dojo](https://ui-dojo.mastra.ai/).
+
+上面的例子使用了客户端Tool：Agent调用`generate_task_steps` and the frontend fulfills it through `respond`. Mastra can also pause on the server, suspending a tool call before it executes so a human approves or supplies input. For that path, see Mastra's [Agent approval](/docs/agents/human-in-the-loop) guide for the backend side and CopilotKit's [`useHumanInTheLoop`](https://docs.copilotkit.ai/reference/hooks/useHumanInTheLoop) reference for the frontend.
+
+## 渠道 {/* #channels */}
+
+为您的应用程序内副驾驶提供支持的同一个 Mastra Agent也可以在消息传递平台中作为机器人运行。 CopilotKit 的 Channels SDK 将您的Agent连接到 Slack 和其他消息传递平台，并在通道中本地处理线程、Tool调用、丰富的交互式消息和人机交互批准。
+
+：：：信息
+
+完整的平台设置位于[CopilotKit Channels documentation](https://docs.copilotkit.ai/slack/mastra). This section shows how Channels fit together with a Mastra agent.
+
+:::
+
+### 它如何组合在一起 {/* #how-it-fits-together */}
+
+您的 Mastra Agent保留在部署的位置，通过 AG-UI 公开`registerCopilotKit()`. A channel is a separate long-running process built with `@copilotkit/channels`: you attach one or more platform adapters and point the channel at your agent. `createChannel` takes an array of adapters, so a single process can serve several platforms at once.
+
+安装 SDK（每个适配器均包含电池）：
+
+```bash npm2yarn
+npm install @copilotkit/channels
+```
+
+```typescript title="channel.ts"
+import { createChannel, Message, Section } from '@copilotkit/channels'
+import { slack } from '@copilotkit/channels/slack'
+import { mastraAgent } from './agent' // your AG-UI Mastra agent
+
+const channel = createChannel({
+  // Point the channel at your Mastra agent (an AbstractAgent, or a per-thread factory).
+  agent: mastraAgent,
+  adapters: [
+    slack({
+      botToken: process.env.SLACK_BOT_TOKEN!,
+      appToken: process.env.SLACK_APP_TOKEN!,
+    }),
+  ],
+})
+
+channel.onMention(async ({ thread }) => {
+  await thread.runAgent()
+})
+
+await channel.start()
+```
+
+Agent接收普通 AG-UI 输入并发出普通 AG-UI 事件；平台机制位于适配器后面，因此同一个 Mastra Agent在每个通道上运行不变。丰富的消息被编写为 JSX 并呈现为每个平台的本机格式（例如 Slack 上的 Block Kit），因此交互式卡在没有同等平台的情况下可以优雅地降级。
+
+### 松弛 {/* #slack */}
+
+这[Slack quickstart](https://docs.copilotkit.ai/slack/mastra) takes you from zero to a bot you can `@`-mention in a channel, then adds an interactive button card. Slack runs over Socket Mode, which opens an outbound WebSocket to Slack, so no public URL or tunnel is required during development.
+
+在您的环境中设置 Slack 凭据：
+
+* `SLACK_BOT_TOKEN`：机器人用户 OAuth 令牌（`xoxb-...`)
+* `SLACK_APP_TOKEN`：应用程序级令牌`connections:write` scope (`xapp-...`)
+
+### 其他平台 {/* #other-platforms */}
+
+Channels SDK 不仅限于 Slack。 Microsoft Teams 等其他平台也通过相同的方式运行`@copilotkit/channels` API: add the matching adapter to the `adapters` array and the rest of your agent code stays the same. See the [CopilotKit Channels documentation](https://docs.copilotkit.ai/slack/mastra) for the current platform list and per-platform setup.
+
+### 消息管道和架构 {/* #message-pipeline-and-architecture */}
+
+托管通道会故意进行凭证分割，当您的 Mastra Agent使用单独的模型密钥和Tool时，这一点很重要：
+
+* **你保留**Agent逻辑、模型凭证、Tool和渠道流程。
+* **CopilotKit 情报持有**平台凭证、消息传递、注册、运行状况和重新连接。
+
+当用户向应用程序发送消息时，回合就开始了。智能接收平台事件，网关将轮流交给您正在运行的通道进程。您的 Mastra Agent运行并给出答复。然后，智能将回复作为本机平台内容返回。平台凭证永远不会进入Agent进程，企业智能可以自行托管数据驻留。
+
+：：：笔记
+
+默认情况下，交互操作存在于内存中并在重新启动时重置。使用持久操作和状态存储（Redis 或 Postgres）支持通道，以便按钮和每线程状态在重新启动后仍然存在并跨越多个实例。
+
+:::
+
+## 配置选项 {/* #configuration-options */}
+
+使用这些`registerCopilotKit()` options for the common integration points:
+
+|选项 |用它来 |
+| - | - |
+|`path` | Set the route path, such as `/copilotkit`. |
+| `resourceId` | Scope Mastra memory for conversations. |
+| `cors` | Configure per-route CORS in addition to `server.cors`. |
+| `setContext` | Populate request context before agents run, such as auth or per-user resource IDs. |
+| `agents` | Provide pre-constructed AG-UI agents instead of the agents registered on the Mastra instance. |
+| `tracingOptions` | Forward Mastra tracing options to each agent run. |
+
+默认情况下，端点公开在 Mastra 实例上注册的每个Agent，前端选择一个具有`agent` prop. Other CopilotKit runtime options are forwarded to the underlying runtime. For example, see [Open-ended generative UI](#open-ended) for `mcpApps`.
+
+## 部署 {/* #deployment */}
+
+使用 CopilotKit 部署 Mastra 服务器时，必须排除`@copilotkit/runtime` from the bundle. This package contains dependencies that aren't compatible with bundling and will cause 500 errors if included.
+
+：：：笔记
+
+开发过程中不会出现此问题`mastra dev` since it doesn't require bundling. However, anyone running `mastra build` for deployment will encounter this issue.
+
+:::
+
+添加`@copilotkit/runtime` package to your bundler externals configuration:
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core/mastra'
+
+export const mastra = new Mastra({
+  bundler: {
+    externals: ['@copilotkit/runtime'],
+  },
+})
+```

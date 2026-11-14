@@ -1,187 +1,411 @@
 ---
-title: "參考：MCPClient | Tools 與 MCP"
-description: MCPClient API 參考——用於管理多個 Model Context Protocol 伺服器及其 Tool 的類別。
+title: "Reference: MCPClient | Tools and MCP"
+description: "The MCPClient class provides a way to manage multiple MCP server connections and their tools in a Mastra application."
 packages:
-  - "@mastra/core"
   - "@mastra/mcp"
 ---
 
-# MCPClient
+# MCP客戶端
 
-`MCPClient` 類別讓你在 Mastra 應用程式中管理多個 MCP 伺服器連線及其 Tool。它會處理連線生命週期及 Tool 命名空間，並讓你存取所有已設定伺服器的 Tool。
+這`MCPClient`類別提供了一種在 Mastra 應用程式中管理多個 MCP 伺服器連接及其Tool的方法。它處理連接生命週期和Tool命名空間，同時提供對所有已配置伺服器上的Tool的存取。
+
+:::注意
+升級自`@mastra/mcp` 1.x? See the [migration guide](/reference/migrations/mcp-v2).
+:::
 
 ## 建構函數 {/* #constructor */}
 
 建立 MCPClient 類別的新實例。
 
-```typescript prettier:false
+```typescript oxfmt:false
 constructor({
   id?: string;
   servers: Record<string, MastraMCPServerDefinition>;
   timeout?: number;
+  typegen?: { outFile: string };
+  clientInfo?: { name?: string; version?: string };
+  registerProcessHooks?: boolean;
 }: MCPClientOptions)
 ```
 
-### MCPClientOptions {/* #mcpclientoptions */}
+### MCP客戶端選項 {/* #mcpclientoptions */}
 
 <br />
 
 <PropertiesTable
   content={[
-  {
-    name: 'id',
-    type: 'string',
-    isOptional: true,
-    description: '設定實例的選用獨有標識符。建立多個設定相同的實例時，可用它防止記憶體洩漏。',
-  },
-  {
-    name: 'servers',
-    type: 'Record<string, MastraMCPServerDefinition>',
-    description: '伺服器設定的 map；每個 key 都是獨有的伺服器標識符，而 value 則是伺服器設定。',
-  },
-  {
-    name: 'timeout',
-    type: 'number',
-    isOptional: true,
-    defaultValue: '60000',
-    description: '所有伺服器的全域逾時值（毫秒）；個別伺服器設定可覆寫此值。',
-  },
+{
+  name: 'id',
+  type: 'string',
+  isOptional: true,
+  description:
+    'Optional unique identifier for the configuration instance. Use this to prevent memory leaks when creating multiple instances with identical configurations.',
+},
+{
+  name: 'servers',
+  type: 'Record<string, MastraMCPServerDefinition>',
+  description:
+    'A map of server configurations, where each key is a unique server identifier and the value is the server configuration.',
+},
+{
+  name: 'timeout',
+  type: 'number',
+  isOptional: true,
+  defaultValue: '60000',
+  description: 'Global timeout value in milliseconds for all servers unless overridden in individual server configs.',
+},
+{
+  name: 'typegen',
+  type: '{ outFile: string }',
+  isOptional: true,
+  description:
+    'Enables optional CLI generation for this client. outFile must be a nonempty path, resolved from the command working directory. Construction stores readonly metadata and does not generate files.',
+},
+{
+  name: 'clientInfo',
+  type: '{ name?: string; version?: string }',
+  isOptional: true,
+  description:
+    "Client name and version every server receives on connect and with each request, so servers can attribute traffic to your application. Defaults to the server key as `name` and `'1.0.0'` as `version`. Individual server configs can override either field with their own `clientInfo`. Doesn't change tool name prefixes, which always use the server key.",
+},
+{
+  name: 'registerProcessHooks',
+  type: 'boolean',
+  isOptional: true,
+  defaultValue: 'true',
+  description:
+    'Install process exit and signal hooks that disconnect servers and end the process. Set to false when your application handles shutdown, and call disconnect() from that handler. See [Handle shutdown yourself](#handle-shutdown-yourself).',
+},
+{
+  name: 'webhook',
+  type: 'MCPClientWebhookOptions',
+  isOptional: true,
+  description:
+    'Experimental. Enables webhook delivery for [MCP events](#webhook-delivery). Servers POST occurrences to `webhook.url`, which must route to `events.handleWebhook()`.',
+},
 ]}
 />
+
+### 鍵入客戶合約 {/* #typed-client-contracts */}
+
+將顯式伺服器映射類型傳遞給`MCPClient<TServers>` to check configured server names, discovered tool names, and direct-call arguments. `MCPClientOptions<TServers>` accepts the same map. All declared servers are required. Use `Pick<TServers, 'weather'>` to configure a subset. Without a type argument, discovery keeps its existing broad types.
+
+地圖描述了每個伺服器的`tools`, with `input` and `output` types for each tool. This example assumes a running weather server at `WEATHER_MCP_URL`:
+
+```typescript
+import { MCPClient } from '@mastra/mcp'
+
+interface MCPServers {
+  weather: {
+    tools: {
+      get_weather: {
+        input: { location: string }
+        output: { temperature: number; conditions: string }
+      }
+    }
+  }
+}
+
+const mcp = new MCPClient<MCPServers>({
+  servers: { weather: { url: new URL(process.env.WEATHER_MCP_URL!) } },
+})
+
+try {
+  const tools = await mcp.listTools()
+  const weather = tools.weather_get_weather
+  if (weather?.execute) {
+    const result = await weather.execute({ location: 'Paris' })
+    if (result && 'temperature' in result && typeof result.temperature === 'number') {
+      console.log(result.temperature)
+    }
+  }
+} finally {
+  await mcp.disconnect()
+}
+```
+
+`listTools()`和`listToolsWithErrors().tools` expose exact `server_tool` keys. `listToolsets()` and `listToolsetsWithErrors().toolsets` expose server keys containing raw tool names. Both forms are partial: a server or tool can be absent. Check availability before calling a tool. Error maps, error details, and optional discovery durations keep their existing types.
+
+執行可以傳回結構化輸出、協定結果信封、驗證錯誤或`undefined`. Check the shape and property types before reading success fields. Protocol envelopes can have additional properties. Set `output: unknown` for tools without an output schema.
+
+這些契約描述了模式快照。實時伺服器可能與該快照不同。當伺服器架構更改時，使用等效權限更新它們。額外的即時Tool在運行時仍然可用，但不包含在快照的已知鍵中。運行時發現、驗證和執行保持不變。
+
+### 產生客戶端類型 {/* #generate-client-types */}
+
+使用包含在中的命令從實時Tool輸入和輸出模式生成具體的 TypeScript 接口`@mastra/mcp`. Export your existing client and set `typegen.outFile`:
+
+```typescript title="src/mcp/client.ts"
+import { MCPClient } from '@mastra/mcp'
+import type { MCPServers } from './mcp-types.generated'
+
+export const mcp = new MCPClient<MCPServers>({
+  id: 'weather-client',
+  servers: { weather: { url: new URL(process.env.WEATHER_MCP_URL!) } },
+  typegen: { outFile: 'src/mcp/mcp-types.generated.ts' },
+})
+```
+
+設定模組所需的環境變數和驗證憑證，然後從專案根目錄執行以下命令：
+
+```bash npm2yarn
+npx @mastra/mcp generate ./src/mcp/client.ts
+```
+
+第一次執行時產生的僅類型匯入可能會遺失。載入器無需類型檢查即可處理 TypeScript 和傳遞導入。產生後運行類型檢查。
+
+`get_weather` with a required string `location` and a numeric `temperature` output:
+
+```typescript title="src/mcp/call-weather.ts"
+import { mcp } from './client'
+
+try {
+  const tools = await mcp.listTools()
+  const weather = tools.weather_get_weather
+  if (weather?.execute) {
+    const result = await weather.execute({ location: 'Paris' })
+    if (result && 'temperature' in result && typeof result.temperature === 'number') {
+      console.log(result.temperature)
+    }
+  }
+} finally {
+  await mcp.disconnect()
+}
+```
+
+該命令接受一個或多個檔案路徑。輸入檔和`outFile` paths are relative to the command's working directory. It selects direct named and default exports of typegen-enabled clients. It doesn't scan your source tree, invoke factories, or inspect nested exported objects. Repeated files, symlink aliases, and exports of the same client are processed once. A file without an eligible client fails.
+
+對於具有相同伺服器配置的獨立用戶端，請使用不同的 ID 和輸出路徑：
+
+```typescript title="src/mcp/clients.ts"
+import { MCPClient } from '@mastra/mcp'
+
+const servers = { weather: { url: new URL(process.env.WEATHER_MCP_URL!) } }
+export const first = new MCPClient({
+  id: 'first',
+  servers,
+  typegen: { outFile: 'first.generated.ts' },
+})
+export const second = new MCPClient({
+  id: 'second',
+  servers,
+  typegen: { outFile: 'second.generated.ts' },
+})
+```
+
+```bash npm2yarn
+npx @mastra/mcp generate ./src/mcp/clients.ts
+```
+
+現有實例快取仍然適用。使用相同的明確 ID、伺服器配置和`typegen.outFile` returns the existing object. A different server configuration or `outFile` replaces the cached instance instead, so a later constructor never silently keeps an output file it wasn't given.
+
+產生列出Tool定義而不呼叫Tool。它会因发现错误、缺少身份验证、超时、输出冲突、覆盖提供的输入文件的输出以及根本无法表示的模式（例如引用循环、深度过大或未解析的本地引用）而失败。每個故障都會命名它所涉及的客戶端文件、伺服器或Tool。它在替換文件之前準備好所有來源，並在成功或失敗時斷開選定的客戶端。發現和預檢失敗會保留現有輸出。每個替換都是原子的，但多個替換不是一個事務。替換期間的檔案系統故障可能會使較早的檔案更新。
+
+使用沒有輸出模式的Tool`unknown`. Constraints such as string formats, length limits, and numeric bounds retain their base TypeScript types and remain runtime validation rules. Unsupported schema portions, including conditional schemas and `prefixItems` tuples, widen to `unknown` with a warning. A keyword whose value is outside its allowed shape widens that schema to `unknown` with a warning too, so one unusable tool doesn't stop generation for other servers. Warnings name the server, tool, and schema position they concern. External schema references aren't fetched. Unresolved local references and reference cycles fail generation. Schemas nested deeper than 128 levels fail generation too, matching the protocol depth limit. A schema that exceeds the protocol node budget of 10,000 widens to `unknown` with a warning, as does any schema or catalogue that exceeds the larger budgets generation applies to raw JSON values. Generation measures those budgets before it copies or converts a schema, so a server that advertises large schemas can't stall the command.
+
+:::note 模組執行與憑證
+
+此命令執行提供的模組及其導入。使用可信任模組，不會對應用程式啟動產生副作用。在呼叫命令之前提供憑證。它不會載入 dotenv 檔案或啟動互動式身份驗證。現有的客戶端逾時和發現設定適用。
+
+生成器診斷忽略原始模式、傳輸錯誤和憑證。由匯入的應用程式、自訂日誌處理程序或伺服器子程序發出的日誌仍不受此保證。
+
+:::
 
 ### `MastraMCPServerDefinition` {/* #mastramcpserverdefinition */}
 
-`servers` map 中的每個伺服器都使用 `MastraMCPServerDefinition` 類型設定。系統會根據提供的參數判斷傳輸類型：
+中的每個伺服器`servers` map is configured using the `MastraMCPServerDefinition` type. The transport type is detected based on the provided parameters:
 
-- 如提供 `command`，便會使用 Stdio 傳輸。
-- 如提供 `url`，系統會先嘗試使用 Streamable HTTP 傳輸；若初次連線失敗，則改用舊版 SSE 傳輸。
+* 如果`command` is provided, it uses the Stdio transport.
+* 如果`url` is provided, it uses the Streamable HTTP transport.
+
+客戶端講 MCP`2026-07-28` revision. On connect it asks the server which revisions it offers (`server/discover`) and falls back to the pre-2026 `initialize` handshake for servers that haven't upgraded, so tools, resources and prompts keep working against either. Features the older revisions lack (`resources.subscribe()`, `inputRequests`) fail with an error naming the negotiated revision. `onListChanged()` handlers work against either revision, since older servers send list-changed notifications without a `subscriptions/listen` stream. Set `protocolVersion` to skip the probe.
 
 <br />
 
 <PropertiesTable
   content={[
-  {
-    name: 'command',
-    type: 'string',
-    isOptional: true,
-    description: '適用於 Stdio 伺服器：要執行的指令。',
-  },
-  {
-    name: 'args',
-    type: 'string[]',
-    isOptional: true,
-    description: '適用於 Stdio 伺服器：要傳入指令的引數。',
-  },
-  {
-    name: 'env',
-    type: 'Record<string, string>',
-    isOptional: true,
-    description: '適用於 Stdio 伺服器：為指令設定的環境變數。',
-  },
-  {
-    name: 'inheritDefaultEnv',
-    type: 'boolean',
-    isOptional: true,
-    defaultValue: 'true',
-    description:
-      '適用於 Stdio 伺服器：子程序環境是否以 MCP SDK 的預設繼承環境為基礎。預設值是精選的允許清單，而非完整程序環境：在 POSIX 上會繼承 HOME、LOGNAME、PATH、SHELL、TERM 及 USER；在 Windows 上會繼承 APPDATA、HOMEDRIVE、HOMEPATH、LOCALAPPDATA、PATH、PROCESSOR_ARCHITECTURE、SYSTEMDRIVE、SYSTEMROOT、TEMP、USERNAME 及 USERPROFILE。設為 `false` 時，只會把 `env` 明確列出的變數傳至子程序。請注意，沒有 PATH 的子程序可能無法啟動並非絕對路徑的指令。',
-  },
-  {
-    name: 'url',
-    type: 'URL',
-    isOptional: true,
-    description: '適用於 HTTP 伺服器（Streamable HTTP 或 SSE）：伺服器的 URL。',
-  },
-  {
-    name: 'requestInit',
-    type: 'RequestInit',
-    isOptional: true,
-    description: '適用於 HTTP 伺服器：fetch API 的要求設定。',
-  },
-  {
-    name: 'eventSourceInit',
-    type: 'EventSourceInit',
-    isOptional: true,
-    description: '適用於 SSE fallback：SSE 連線的自訂 fetch 設定。SSE 使用自訂 header 時必須提供。',
-  },
-  {
-    name: 'fetch',
-    type: 'MastraFetchLike',
-    isOptional: true,
-    description:
-      '適用於 HTTP 伺服器：供所有網絡要求使用的自訂 fetch 實作。它會收到選用的第三個 `requestContext` 參數，當中包含傳入要求的 request scope 資料（例如驗證 cookie、bearer token）。提供此函數後，所有 HTTP 要求都會使用它，讓你加入動態驗證 header、把 request scope credential 轉送至 MCP 伺服器、按要求自訂要求行為，或攔截及修改要求／回應。提供 `fetch` 後，`requestInit`、`eventSourceInit` 及 `authProvider` 會變為選用，因為你可在自訂 fetch 函數內處理這些事項。',
-  },
-  {
-    name: 'allowedHosts',
-    type: 'string[]',
-    isOptional: true,
-    description:
-      '適用於 HTTP 伺服器：選擇啟用的主機允許清單，限制用戶端可代表此伺服器聯絡的主機。每個項目會與 URL host 比對（hostname；如 URL 使用非預設連接埠，則加上連接埠），例如 `"api.example.com"` 或 `"localhost:8080"`。比對必須完全相符，hostname 不分大小寫；不支援萬用字元，亦不檢查 URL scheme。空陣列會拒絕所有要求。如未設定，則不設限制。執行細節請參閱下方「安全性」章節。',
-  },
-  {
-    name: 'logger',
-    type: 'LogHandler',
-    isOptional: true,
-    description: '用於記錄 log 的額外選用 handler。',
-  },
-  {
-    name: 'timeout',
-    type: 'number',
-    isOptional: true,
-    description: '伺服器專用的逾時值（毫秒）。',
-  },
-  {
-    name: 'capabilities',
-    type: 'ClientCapabilities',
-    isOptional: true,
-    description: '伺服器專用的 capabilities 設定。',
-  },
-  {
-    name: 'authProvider',
-    type: 'OAuthClientProvider',
-    isOptional: true,
-    description:
-      '適用於 HTTP 伺服器：用於自動更新 token 及管理 OAuth 流程的 OAuth 驗證 Provider。可使用 MCPOAuthClientProvider 作為即用實作。',
-  },
-  {
-    name: 'enableServerLogs',
-    type: 'boolean',
-    isOptional: true,
-    defaultValue: 'true',
-    description: '是否為此伺服器啟用記錄 log。',
-  },
-  {
-    name: 'forwardInstructions',
-    type: 'boolean',
-    isOptional: true,
-    defaultValue: 'false',
-    description:
-      '當 Agent 使用此伺服器的 Tool 時，是否把該 MCP 伺服器公佈的 instructions 附加至 Agent 的 system prompt。預設停用；由於 instructions 會注入 Agent 的 system prompt，因此只應為你信任的伺服器啟用。',
-  },
-  {
-    name: 'instructionsMaxLength',
-    type: 'number',
-    isOptional: true,
-    defaultValue: '512',
-    description: '可附加至 Agent system prompt 的伺服器 instruction 字元數上限。',
-  },
-  {
-    name: 'requireToolApproval',
-    type: 'boolean | (params: RequireToolApprovalContext) => boolean | Promise<boolean>',
-    isOptional: true,
-    description:
-      '執行此伺服器的 Tool 前要求人工核准。設為 `true` 時，所有 Tool 均須核准。設為函數時，系統會以 Tool 名稱、引數、request context，以及伺服器公佈的任何 Tool annotations 呼叫該函數，動態判斷是否需要核准。',
-  },
+{
+  name: 'command',
+  type: 'string',
+  isOptional: true,
+  description: 'For Stdio servers: The command to execute.',
+},
+{
+  name: 'args',
+  type: 'string[]',
+  isOptional: true,
+  description: 'For Stdio servers: Arguments to pass to the command.',
+},
+{
+  name: 'env',
+  type: 'Record<string, string>',
+  isOptional: true,
+  description: 'For Stdio servers: Environment variables to set for the command.',
+},
+{
+  name: 'inheritDefaultEnv',
+  type: 'boolean',
+  isOptional: true,
+  defaultValue: 'true',
+  description:
+    "For Stdio servers: Whether the subprocess environment starts from the MCP SDK's default inherited environment. The default is a curated whitelist, not the full process environment: on POSIX it inherits HOME, LOGNAME, PATH, SHELL, TERM, and USER; on Windows it inherits APPDATA, HOMEDRIVE, HOMEPATH, LOCALAPPDATA, PATH, PROCESSOR_ARCHITECTURE, SYSTEMDRIVE, SYSTEMROOT, TEMP, USERNAME, and USERPROFILE. When set to `false`, only the variables explicitly listed in `env` are passed to the subprocess. Note that a subprocess without PATH may fail to spawn commands that are not absolute paths.",
+},
+{
+  name: 'url',
+  type: 'URL',
+  isOptional: true,
+  description: 'For HTTP servers: The URL of the server.',
+},
+{
+  name: 'requestInit',
+  type: 'RequestInit',
+  isOptional: true,
+  description: 'For HTTP servers: Request configuration for the fetch API.',
+},
+{
+  name: 'fetch',
+  type: 'MastraFetchLike',
+  isOptional: true,
+  description:
+    'For HTTP servers: Custom fetch implementation used for all network requests. Receives an optional third `requestContext` parameter containing request-scoped data (e.g., authentication cookies, bearer tokens) from the incoming request. When provided, this function will be used for all HTTP requests, allowing you to add dynamic authentication headers, forward request-scoped credentials to the MCP server, customize request behavior per-request, or intercept and modify requests/responses. When `fetch` is provided, `requestInit` and `authProvider` become optional, as you can handle these concerns within your custom fetch function.',
+},
+{
+  name: 'allowedHosts',
+  type: 'string[]',
+  isOptional: true,
+  description:
+    'For HTTP servers: Opt-in allowlist of hosts the client may contact on behalf of this server. Each entry is matched against the URL host (hostname plus port when the URL carries a non-default port), for example `"api.example.com"` or `"localhost:8080"`. Matching is exact and case-insensitive on the hostname; wildcards are not supported and the URL scheme is not checked. An empty array denies all requests. When unset, no restriction is applied. See the Security section below for enforcement details.',
+},
+{
+  name: 'logger',
+  type: 'LogHandler',
+  isOptional: true,
+  description: 'Optional additional handler for logging.',
+},
+{
+  name: 'protocolVersion',
+  type: "'2026-07-28' | 'legacy'",
+  isOptional: true,
+  description:
+    "Pins the protocol revision instead of probing for it. `'2026-07-28'` connects only to servers that offer the current revision. `'legacy'` uses the pre-2026 `initialize` handshake without probing, for servers known not to have upgraded. When omitted the client probes with `server/discover` and speaks whichever revision the server offers.",
+},
+{
+  name: 'timeout',
+  type: 'number',
+  isOptional: true,
+  description: 'Server-specific timeout in milliseconds. Falls back to the client-level `timeout` when omitted.',
+},
+{
+  name: 'clientInfo',
+  type: '{ name?: string; version?: string }',
+  isOptional: true,
+  description:
+    'Overrides the top-level `clientInfo` for this server. Fields you set replace the top-level values; fields you omit keep them.',
+},
+{
+  name: 'capabilities',
+  type: 'MCPClientCapabilities',
+  isOptional: true,
+  description:
+    'Client capabilities to advertise: `elicitation` and `extensions`. `elicitation` is only accepted together with an `inputRequests` handler and defaults to form support when a handler is configured. Roots and sampling are not supported.',
+},
+{
+  name: 'inputRequests',
+  type: 'MCPInputRequestHandler',
+  isOptional: true,
+  description:
+    'Answers input requests from this server. When a tool, resource or prompt call ends as `input_required`, the handler is called with each embedded request and the client retries the call with the answers. Without a handler an `input_required` result surfaces as an error. See Answering input requests below.',
+},
+{
+  name: 'tasks',
+  type: 'boolean | MCPClientTasksOptions',
+  isOptional: true,
+  description:
+    'Experimental. Lets this server answer tool calls with an MCP task, which the client waits for. `pollIntervalMs` (default `5000`) is used when the server suggests no interval. The client waits at least 100 ms and at most 1 hour between polls, whatever the server suggests. Both values must be at most `2147483647` (about 24.8 days), the longest delay a timer allows. `maxWaitMs` stops waiting and cancels the task after that long; by default only the server TTL applies. See the `tasks` property below.',
+},
+{
+  name: 'authProvider',
+  type: 'OAuthClientProvider',
+  isOptional: true,
+  description:
+    'For HTTP servers: OAuth authentication provider for automatic token refresh and OAuth flow management. Use MCPOAuthClientProvider for a ready-to-use implementation.',
+},
+{
+  name: 'enableServerLogs',
+  type: 'boolean',
+  isOptional: true,
+  defaultValue: 'true',
+  description:
+    'Whether to request per-request server logs. Attaches the `io.modelcontextprotocol/logLevel` metadata key to every request so the server delivers `notifications/message` for it, and forwards delivered messages to `logger`.',
+},
+{
+  name: 'serverLogLevel',
+  type: 'LoggingLevel',
+  isOptional: true,
+  defaultValue: "'info'",
+  description: 'Minimum severity requested from the server for per-request logs.',
+},
+{
+  name: 'enableProgressTracking',
+  type: 'boolean',
+  isOptional: true,
+  defaultValue: 'false',
+  description:
+    'Whether to send a `progressToken` with tool calls so the server can report progress. See the `progress` property.',
+},
+{
+  name: 'traceContext',
+  type: '() => MCPTraceContext | undefined',
+  isOptional: true,
+  description:
+    'Returns the W3C `traceparent`, optional `tracestate` and `baggage` to send as request `_meta` on every call to this server. Called when each request is sent so it can read a request-local carrier. Without this option, a tool call made by a traced agent or workflow sends the `traceparent` of its tool call span. When the reply names the server span that handled the call, as `MCPServer` does, the tool call span links to it. Set this option to send your own trace context, or return `undefined` to send none. Explicit `_meta` keys on a tool call take precedence. Servers built with `MCPServer` link their request span to the span the `traceparent` names and expose the received values to tools as `requestContext.get("traceContext")`; they are observability data and are never used for authorization.',
+},
+{
+  name: 'forwardInstructions',
+  type: 'boolean',
+  isOptional: true,
+  defaultValue: 'false',
+  description:
+    "Whether to append instructions advertised by this MCP server to an agent's system prompt when the agent uses this server's tools. Disabled by default; enable it only for servers you trust, since the instructions are injected into the agent's system prompt.",
+},
+{
+  name: 'instructionsMaxLength',
+  type: 'number',
+  isOptional: true,
+  defaultValue: '512',
+  description: "Maximum number of server instruction characters to append to an agent's system prompt.",
+},
+{
+  name: 'requireToolApproval',
+  type: 'boolean | (params: RequireToolApprovalContext) => boolean | Promise<boolean>',
+  isOptional: true,
+  description:
+    'Require human approval before executing tools from this server. When set to `true`, all tools require approval. When set to a function, the function is called with the tool name, arguments, request context, and any tool annotations advertised by the server to dynamically decide whether approval is needed.',
+},
+{
+  name: 'onToolError',
+  type: "'throw' | 'return'",
+  isOptional: true,
+  defaultValue: "'throw'",
+  description:
+    "How to handle tool execution failures the server reports in-band with `isError: true`. `'throw'` raises a `MastraError` carrying the server's error text, so the failure reaches tool spans, stream chunks, scorers, and the model. Any `structuredContent` is kept on `error.details.structuredContent` as a JSON string. `'return'` resolves with the full `CallToolResult` (`isError`, `content`, and `structuredContent`) instead of throwing.",
+},
+{
+  name: 'jsonSchemaValidator',
+  type: 'JsonSchemaValidator',
+  isOptional: true,
+  description:
+    'Validator used for MCP tool schemas and structured results. The default supports JSON Schema 2020-12. Provide a compatible validator such as CfWorkerJsonSchemaValidator in runtimes that disallow dynamic code generation.',
+},
 ]}
 />
 
-## Tool 核准 {/* #tool-approval */}
+## Tool審批 {/* #tool-approval */}
 
-在伺服器定義中使用 `requireToolApproval`，即可要求該伺服器的任何 Tool 在執行前先取得人工核准。這可配合現有的 [human-in-the-loop](/docs/workflows/human-in-the-loop) 核准流程使用。
+使用`requireToolApproval` on a server definition to require human approval before any tool from that server is executed. This works with the existing [human-in-the-loop](/docs/workflows/human-in-the-loop) approval flow.
 
-### 所有 Tool 均須核准 {/* #require-approval-for-all-tools */}
+### 所有Tool都需要批准 {/* #require-approval-for-all-tools */}
 
-將 `requireToolApproval` 設為 `true`，即可要求伺服器上的每個 Tool 都須取得核准：
+放`requireToolApproval` to `true` to require approval for every tool on the server:
 
 ```typescript
 const mcp = new MCPClient({
@@ -194,9 +418,9 @@ const mcp = new MCPClient({
 })
 ```
 
-### 使用函數動態核准 {/* #dynamic-approval-with-a-function */}
+### 動態審核功能 {/* #dynamic-approval-with-a-function */}
 
-傳入函數以逐次呼叫判斷是否需要核准。函數會收到 Tool 名稱、模型傳入的引數、傳入要求中的任何 request context，以及 Tool 的 MCP `annotations`（如伺服器有公佈）：
+傳遞一個函數來決定每次呼叫是否需要批准。此函數接收Tool名稱、模型傳遞的參數、傳入請求的任何請求上下文以及Tool的 MCP`annotations` (when the server advertises them):
 
 ```typescript
 const mcp = new MCPClient({
@@ -216,11 +440,11 @@ const mcp = new MCPClient({
 })
 ```
 
-函數亦可為非同步。它會收到傳入要求的 `requestContext`，你可用它進行驗證檢查或其他按要求執行的邏輯。
+該函數也可以是異步的。它接收`requestContext` from the incoming request, which you can use for auth checks or other per-request logic.
 
-### 使用受信任伺服器的 Tool annotations {/* #use-tool-annotations-from-a-trusted-server */}
+### 使用來自受信任伺服器的Tool註釋 {/* #use-tool-annotations-from-a-trusted-server */}
 
-如你信任該 MCP 伺服器，可使用其 [Tool annotations](https://modelcontextprotocol.io/specification/2025-11-25/server/tools#tool-annotations)（`readOnlyHint`、`destructiveHint`、`idempotentHint`、`openWorldHint`、`title`）來決定是否核准：
+如果您信任 MCP 伺服器，您可以使用它[tool annotations](https://modelcontextprotocol.io/specification/2025-11-25/server/tools#tool-annotations) (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`, `title`) to drive approval decisions:
 
 ```typescript
 const mcp = new MCPClient({
@@ -239,15 +463,17 @@ const mcp = new MCPClient({
 })
 ```
 
-根據 MCP 規格：**除非 Tool annotations 來自受信任的伺服器，否則用戶端必須視其為不受信任**。Annotations 只屬提示性質，並不構成安全邊界。惡意或有錯誤的伺服器可聲稱某個 Tool 是唯讀，即使實際並非如此。只應對你信任的伺服器使用 annotations 來放寬核准要求。
+根據 MCP 規範：**clients MUST consider tool annotations to be untrusted unless they come from trusted servers**. Annotations are advisory hints and provide no security boundary. A malicious or buggy server can claim a tool is read-only when it isn't. Only use annotations to relax approval requirements for servers you trust.
 
-`listTools()` 與 `listToolsets()` 傳回的 Tool 亦會在 `tool.mcp.annotations` 下提供相同 annotations，讓你在把 Tool 接入 Agent 時檢查。
+相同的註釋也暴露在返回的Tool上`listTools()` and `listToolsets()` under `tool.mcp.annotations`, so you can inspect them when wiring tools into an agent.
 
-## 伺服器 instructions {/* #server-instructions */}
+每個Tool還附帶`tool.title`, set from the server's tool `title` and falling back to `annotations.title`. When the server provides neither, `tool.title` is `undefined` and the tool name is the display fallback, matching the MCP display-name precedence.
 
-當 MCP 伺服器在初始化期間公佈 instructions，`MCPClient` 會為該伺服器儲存它們。把這些 instructions 轉送至 Agent 的 system prompt 屬於**選擇啟用**功能：在伺服器上設定 `forwardInstructions: true`，使用其 Tool（透過 `listTools()` 或 `listToolsets()`）的 Agent 便會自動收到其 instructions。
+## 伺服器說明 {/* #server-instructions */}
 
-指引會按伺服器名稱分組，並將每個伺服器的內容截短至 `instructionsMaxLength` 個字元。
+當MCP伺服器在初始化期間通告指令時，`MCPClient` stores them for that server. Forwarding those instructions into an agent's system prompt is **opt-in**: set `forwardInstructions: true` on a server to have agents that use its tools (via `listTools()` or `listToolsets()`) receive its instructions automatically.
+
+該指南按伺服器名稱分組並截斷為`instructionsMaxLength` characters per server.
 
 ```typescript
 const mcp = new MCPClient({
@@ -269,17 +495,17 @@ const agent = new Agent({
 })
 ```
 
-省略 `forwardInstructions`（預設值）時，instructions 仍會快取並可透過 [`getServerInstructions()`](#getserverinstructions) 檢查，但不會加入任何 Agent 的 system prompt。
+什麼時候`forwardInstructions` is omitted (the default), instructions are still cached and can be inspected via [`getServerInstructions()`](#getserverinstructions), but aren't added to any agent's system prompt.
 
-> \*\*安全提示：\*\*伺服器 instructions 會逐字轉送至 Agent 的 system prompt（只受長度截短限制）。惡意或已被入侵的 MCP 伺服器可藉此注入 Agent 會視為受信任系統指引的 instructions。只應為你信任的伺服器啟用 `forwardInstructions`，並建議先以 `getServerInstructions()` 檢視第三方伺服器的 instructions，再作轉送。
+> **安全說明：**&#x4F3A;服器指令被逐字轉送（僅受長度截斷）到Agent的系統提示符號。惡意或受損的 MCP 伺服器可以使用它們注入指令，Agent將其視為可信任的系統指導。僅啟用`forwardInstructions` for servers you trust, and prefer reviewing instructions with `getServerInstructions()` before forwarding instructions from third-party servers.
 
-## 安全性 {/* #security */}
+## 安全 {/* #security */}
 
-### Stdio 伺服器的子程序環境 {/* #subprocess-environment-for-stdio-servers */}
+### Stdio 伺服器的子進程環境 {/* #subprocess-environment-for-stdio-servers */}
 
-Stdio 子程序不會繼承完整的父程序環境。子程序環境預設以 MCP SDK 精選的允許清單為基礎（POSIX：`HOME`、`LOGNAME`、`PATH`、`SHELL`、`TERM`、`USER`；Windows：`APPDATA`、`HOMEDRIVE`、`HOMEPATH`、`LOCALAPPDATA`、`PATH`、`PROCESSOR_ARCHITECTURE`、`SYSTEMDRIVE`、`SYSTEMROOT`、`TEMP`、`USERNAME`、`USERPROFILE`），再合併你在 `env` 設定的變數。除非明確傳入，否則不會繼承 API key 等敏感變數。
+Stdio 子行程不會繼承完整的父行程環境。預設情況下，子進程環境從 MCP SDK 的策劃白名單（POSIX：`HOME`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, `USER`; Windows: `APPDATA`, `HOMEDRIVE`, `HOMEPATH`, `LOCALAPPDATA`, `PATH`, `PROCESSOR_ARCHITECTURE`, `SYSTEMDRIVE`, `SYSTEMROOT`, `TEMP`, `USERNAME`, `USERPROFILE`), merged with any variables you set in `env`. Sensitive variables such as API keys aren't inherited unless you pass them explicitly.
 
-如要更嚴格地隔離，可設定 `inheritDefaultEnv: false`，令只有已設定的 `env` 項目傳至子程序：
+為了更嚴格的隔離，設置`inheritDefaultEnv: false` so only your configured `env` entries reach the subprocess:
 
 ```typescript
 const mcp = new MCPClient({
@@ -293,11 +519,11 @@ const mcp = new MCPClient({
 })
 ```
 
-放入 `env` 的變數會逐字轉送，因此來自不受信任來源（例如使用者提供的設定檔）的伺服器設定，應視為不受信任的輸入。
+您放入的變數`env` are forwarded verbatim, so treat server configurations that come from untrusted sources (for example, user-supplied config files) as untrusted input.
 
-### 使用 `allowedHosts` 限制對外連線的主機 {/* #restricting-outbound-hosts-with-allowedhosts */}
+### 限制出站主機`allowedHosts` {/* #restricting-outbound-hosts-with-allowedhosts */}
 
-當 HTTP 伺服器 URL 來自不受信任的設定時，攻擊者控制的 URL 可把用戶端指向內部服務（伺服器端要求偽造）。請在這類伺服器設定 `allowedHosts`，限制用戶端可聯絡的主機：
+當 HTTP 伺服器 URL 來自不受信任的配置時，攻擊者控制的 URL 可以將用戶端指向內部服務（伺服器端請求偽造）。放`allowedHosts` on such servers to restrict which hosts the client will contact:
 
 ```typescript
 const mcp = new MCPClient({
@@ -310,45 +536,57 @@ const mcp = new MCPClient({
 })
 ```
 
-執行細節：
+執行詳情：
 
-- 在預設 fetch 路徑上，傳送至不允許主機的要求（包括每次重新導向）會在**傳送前**被封鎖。系統會手動跟隨重新導向（最多 5 次）以驗證每一步；`Authorization` header 不會跨越至不同來源（scheme、主機或連接埠如有任何變更便會移除，與標準 fetch 行為一致）。
-- 如提供自訂 `fetch`（或自訂 `eventSourceInit.fetch`），初始 URL 仍會在要求前檢查，但重新導向會使用 `response.url` 在**事後**驗證：對外要求可能已發生，而當最終 URL 指向不允許的主機時，回應會被捨棄。自行建立且 `response.url` 為空的 `Response` 會略過此事後檢查。
-- 透過 `authProvider` 發出的 OAuth 要求（授權伺服器 metadata 探索、token 交換及更新）亦會驗證。如授權伺服器與 MCP 伺服器位於不同主機，也請把該主機加入 `allowedHosts`。
-- 主機被封鎖時，連線會以清楚的錯誤結束，重新連線邏輯不會重試。
+* 在預設取得路徑上，對不允許的主機的請求（包括每個重定向躍點）都會被阻止**before** they're sent. Redirects are followed manually (up to 5 hops) so each hop is validated, and the `Authorization` header isn't carried across hops to a different origin (any scheme, host, or port change drops it, matching standard fetch behavior).
+* 當您提供客製化`fetch`, the initial URL is still checked before the request, but redirect hops are validated **after the fact** using `response.url`: the outbound hop may occur, and the response is discarded when its final URL points at a disallowed host. A hand-built `Response` with an empty `response.url` skips this post-hoc check.
+* 透過以下方式發出 OAuth 請求`authProvider` (authorization server metadata discovery, token exchange, refresh) are also validated. If your authorization server runs on a different host than the MCP server, add that host to `allowedHosts` too.
+* 被封鎖的主機會因明顯錯誤而導致連線失敗，重新連線邏輯永遠不會重試。
 
-`allowedHosts` 刻意保持精簡：只精確比對主機，不支援萬用字元或 scheme 檢查。如需更完整的政策（scheme 檢查、IP 範圍規則），請提供自訂 `fetch` 實作；用戶端每次發出要求時都會呼叫它。
+`allowedHosts`有意最小化：它匹配精確的主機並且不支援通配符或方案檢查。如果您需要更豐富的策略（方案檢查、IP 範圍規則），請提供自訂`fetch` implementation, which is invoked for every request the client makes.
 
-### 將 Tool 回應視為不受信任的輸入 {/* #treat-tool-responses-as-untrusted-input */}
+### 將Tool回應視為不受信任的輸入 {/* #treat-tool-responses-as-untrusted-input */}
 
-MCP 伺服器傳回的 Tool 結果會以模型輸入形式進入 Agent context。惡意或已被入侵的伺服器可利用 Tool 輸出進行 prompt injection。傳輸用戶端不會清理 Tool 回應；清理政策應設於 Agent 層，Mastra 的[輸入及輸出 processor](/docs/agents/processors) 可讓你在內容送達模型前後檢查、轉換或封鎖內容。使用第三方伺服器時，請一併採用 `requireToolApproval` 及上方的 `forwardInstructions` 安全提示。
+MCP 伺服器傳回的Tool結果會作為模型輸入流入Agent的上下文中。惡意或受感染的伺服器可以使用Tool輸出進行提示注入。傳輸客戶端不會清理Tool回應：清理策略屬於Agent層，其中 Mastra 的[input and output processors](/docs/agents/processors) let you inspect, transform, or block content before and after it reaches the model. Combine this with `requireToolApproval` and the `forwardInstructions` security note above when working with third-party servers.
 
 ## 方法 {/* #methods */}
 
 ### `listTools()` {/* #listtools */}
 
-擷取所有已設定伺服器的全部 Tool，並以伺服器名稱為 Tool 名稱加上命名空間（格式為 `serverName_toolName`），以避免衝突。
-適合傳入 Agent 定義。
+從所有配置的伺服器中檢索所有Tool，Tool名稱按其伺服器名稱命名（格式為`serverName_toolName`) to prevent conflicts.
+Intended to be passed onto an Agent definition.
+
+僅限應用程式的Tool，其`_meta.ui.visibility` omits `"model"`, are left out. `listToolsets()` and `listToolDefinitions()` leave them out too.
+
+伺服器名稱和Tool名稱都可以包含`_`, so two different pairs can produce the same key. For example, server `local` with tool `x_status` and server `local_x` with tool `status` both produce `local_x_status`. The tool from the server listed later in `servers` keeps the key, and the client logs a warning that names both pairs. Rename one of the servers to keep both tools.
 
 ```ts
 new Agent({ id: 'agent', tools: await mcp.listTools() })
 ```
 
-### `listToolsWithErrors()` {/* #listtoolswitherrors */}
+### `listToolsWithErrors(options?)` {/* #listtoolswitherrorsoptions */}
 
-擷取所有已設定伺服器的全部 Tool，並以伺服器名稱為 Tool 名稱加上命名空間。對於無法連線或列出 Tool 的伺服器，亦會分別傳回錯誤。
+從所有已配置的伺服器檢索所有Tool，Tool名稱按其伺服器名稱命名。對於無法連接或列出Tool的伺服器，也會傳回每個伺服器的錯誤。
+
+放`perServerTimeoutMs` to limit how long discovery waits for each server. Servers that finish within the limit remain in `tools`. Timed-out servers appear in `errors`, and `durations` reports each server's discovery time in milliseconds.
 
 ```typescript
-const { tools, errors } = await mcp.listToolsWithErrors()
+const { tools, errors, errorDetails, durations } = await mcp.listToolsWithErrors({
+  perServerTimeoutMs: 3_000,
+})
 
 new Agent({ id: 'agent', tools })
-console.log(errors)
+console.log(errors, errorDetails, durations)
 ```
+
+`errors`保留字串映射以實現向後相容性。`errorDetails` provides the same message plus machine-readable `httpStatus` and transport `code` fields when the underlying error exposes them. When an HTTP status is available, the legacy message also includes an `(HTTP nnn)` suffix.
+
+當不帶選項呼叫時，該方法僅省略`durations`; `tools`, `errors`, and `errorDetails` are always returned.
 
 ### `listToolsets()` {/* #listtoolsets */}
 
-傳回一個物件，把具命名空間的 Tool 名稱（格式為 `serverName.toolName`）對應至其 Tool 實作。
-適合在 runtime 傳入 generate 或 stream 方法。
+傳回一個對象，該對象將每個伺服器名稱對應到該伺服器的Tool。Tool保留其原始名稱，沒有伺服器前綴。
+旨在在運行時傳遞到生成或流方法。
 
 ```typescript
 const res = await agent.stream(prompt, {
@@ -356,15 +594,140 @@ const res = await agent.stream(prompt, {
 })
 ```
 
+此Agent程式按Tool名稱組合Tool集。當兩個伺服器暴露同名的Tool時，例如`search`, only the tool from the server listed later in `servers` reaches the model, and the agent logs a warning. To keep both tools, pass the prefixed tools from `listTools()` as a single toolset:
+
+```typescript
+const res = await agent.stream(prompt, {
+  toolsets: { mcp: await mcp.listTools() }, // docs_search, tickets_search
+})
+```
+
+### `listToolsetsWithErrors(options?)` {/* #listtoolsetswitherrorsoptions */}
+
+傳回按伺服器名稱分組的Tool集以及每個伺服器的發現錯誤。放`perServerTimeoutMs` to limit each server independently and include per-server `durations` in milliseconds.
+
+```typescript
+const { toolsets, errors, errorDetails, durations } = await mcp.listToolsetsWithErrors({
+  perServerTimeoutMs: 3_000,
+})
+
+const res = await agent.stream(prompt, { toolsets })
+console.log(errors, errorDetails, durations)
+```
+
+當不帶選項呼叫時，該方法僅省略`durations`; `toolsets`, `errors`, and `errorDetails` are always returned.
+
+#### 報告每台伺服器的穩定狀態 {/* #report-each-server-as-it-settles */}
+
+傳回的承諾只有在每台伺服器完成後才會解析，因此一台速度較慢的伺服器會延遲整個結果。經過`onServerSettled` to handle each server as soon as its discovery succeeds, fails, or times out. The callback receives the server name and either `value` (that server's tools, keyed by the server's own tool names) or `error`, plus `duration` in milliseconds. This option is also available on `listToolsWithErrors()` and `listToolDefinitionsWithErrors()`.
+
+```typescript
+await mcp.listToolsetsWithErrors({
+  perServerTimeoutMs: 60_000,
+  onServerSettled: (serverName, { value, error, duration }) => {
+    if (error) {
+      console.error(`${serverName} failed after ${duration}ms: ${error.message}`)
+    } else {
+      console.log(`${serverName} ready with ${Object.keys(value).length} tools`)
+    }
+  },
+})
+```
+
+回調拋出的錯誤會被記錄下來，並且不會影響發現。對於一個來說也是如此`async` callback that rejects: the rejection is logged and never becomes an unhandled rejection.
+
+#### 僅發現部分伺服器 {/* #discover-only-some-servers */}
+
+經過`serverNames` to discover only the named servers, for example to retry the ones that timed out without starting every other server again. Names that aren't configured are ignored. This option is also available on `listToolsWithErrors()` and `listToolDefinitionsWithErrors()`.
+
+```typescript
+const { errorDetails } = await mcp.listToolsetsWithErrors({ perServerTimeoutMs: 3_000 })
+
+// Only servers that timed out are worth retrying. A server that failed for
+// another reason (bad config, auth refused) will just fail again.
+const timedOut = Object.entries(errorDetails)
+  .filter(([, details]) => details.code === MCP_DISCOVERY_TIMEOUT_CODE)
+  .map(([serverName]) => serverName)
+
+const retry = await mcp.listToolsetsWithErrors({ serverNames: timedOut })
+```
+
+`MCP_DISCOVERY_TIMEOUT_CODE`導出自`@mastra/mcp`. It marks the errors that `perServerTimeoutMs` produced, so you can tell a slow server apart from a broken one.
+
+### `listToolDefinitions()` {/* #listtooldefinitions */}
+
+以簡單的、可序列化的定義形式傳回每個伺服器的Tool，按伺服器名稱分組並按伺服器自己的Tool名稱鍵入（不含`serverName_toolName` namespacing that `listTools()` applies).
+
+喜歡`listTools()`, it leaves out app-only tools, whose `_meta.ui.visibility` omits `"model"`. An MCP App calls those through its host, so they never reach an agent.
+
+不像`listTools()`, the result contains no functions or references to a live client, so it can be passed through `JSON.stringify` and cached in Redis or a database, as well as a build artifact. Each definition holds the data from the MCP `tools/list` response (name, title, description, input schema, output schema, annotations, and `_meta`), plus the server name, version, and instructions captured at discovery time.
+
+```typescript
+const definitions = await mcp.listToolDefinitions()
+
+await cache.set('mcp-tools', JSON.stringify(definitions))
+```
+
+### `listToolDefinitionsWithErrors(options?)` {/* #listtooldefinitionswitherrorsoptions */}
+
+喜歡`listToolDefinitions()`, but also returns per-server errors for servers that failed to connect. Use this when caching a catalog, so you don't persist a partial manifest that omits a server that was down at discovery time.
+
+放`perServerTimeoutMs` to limit each server independently. When options are provided, `durations` reports each server's discovery time in milliseconds.
+
+```typescript
+const { definitions, errors, errorDetails, durations } = await mcp.listToolDefinitionsWithErrors({
+  perServerTimeoutMs: 3_000,
+})
+
+if (Object.keys(errors).length === 0) {
+  await cache.set('mcp-tools', JSON.stringify(definitions))
+}
+
+console.log(errorDetails, durations)
+```
+
+當不帶選項呼叫時，該方法僅省略`durations`; `definitions`, `errors`, and `errorDetails` are always returned.
+
+### `toolFromDefinition()` {/* #toolfromdefinition */}
+
+從快取的定義重建單一可執行Tool。這裡沒有打開連接。第一次執行該Tool時，客戶端會延遲連線。
+
+返回的Tool的行為與來自的Tool完全相同`listTools()`, with the same strict-mode metadata, approval policy, structured content handling, tool error handling, and reconnect behavior. Successful structured results are validated against the advertised `outputSchema` on both paths. Invalid results reject the tool call. MCP error results skip output validation.
+
+沒有 MCP 模式`$schema` declaration use JSON Schema 2020-12. Local `$ref` and `$defs` references, composition keywords, and boolean subschemas are supported. To bound validation work from untrusted tool catalogs, input and output schemas are limited to 128 nested subschema levels and 10,000 subschema nodes.
+
+`structuredContent`可以是任何 JSON 值，包括字串、數字、布林值和`null`. Object and array results also expose the MCP content and `_meta` envelopes through non-enumerable Mastra metadata properties. Scalar and `null` results can't carry those properties and remain unchanged rather than being wrapped.
+
+```typescript
+const definitions = JSON.parse(await cache.get('mcp-tools'))
+
+const tool = await mcp.toolFromDefinition({
+  serverName: 'weather',
+  definition: definitions.weather.getForecast,
+})
+```
+
+### `toolsFromDefinitions()` {/* #toolsfromdefinitions */}
+
+將整個快取目錄重建為命名空間Tool映射，無需連接。這是快取的對應項`listTools()`. It produces the same `serverName_toolName` keys, so you can reconstruct an agent's tool map on a cold start, and connections only open for the servers whose tools are actually called.
+
+目錄中存在但不再在客戶端上配置的伺服器將被跳過，因此陳舊的快取清單會正常降級。
+
+```typescript
+const definitions = JSON.parse(await cache.get('mcp-tools'))
+
+new Agent({ id: 'agent', tools: await mcp.toolsFromDefinitions({ definitions }) })
+```
+
 ### `getServerInstructions()` {/* #getserverinstructions */}
 
-傳回目前已知的各個已設定 MCP 伺服器 instructions。尚未連線或沒有公佈 instructions 的伺服器會傳回 `undefined`。
+傳回每個配置的 MCP 伺服器目前已知的指令。尚未連接或未通告指令的伺服器返回`undefined`.
 
-```typescript prettier:false
+```typescript oxfmt:false
 getServerInstructions(): Record<string, string | undefined>
 ```
 
-範例：
+例子：
 
 ```typescript
 await mcp.listTools()
@@ -373,51 +736,68 @@ const instructionsByServer = mcp.getServerInstructions()
 console.log(instructionsByServer.db)
 ```
 
+### `getServerInfo()` {/* #getserverinfo */}
+
+傳回每個配置的 MCP 伺服器在連線時宣布的身份（其`serverInfo`, from the `server/discover` result or, for servers on an older revision, the `initialize` handshake): `name` and `version`, plus `title`, `description`, `websiteUrl`, and `icons` when the server provides them. A server's entry is `undefined` if it hasn't connected yet, or if it connected over the `2026-07-28` revision without announcing an identity, which that revision allows. Don't use it to check whether a server is connected. The values come from the remote server and aren't validated, so treat icon and website URLs as untrusted.
+
+```typescript oxfmt:false
+getServerInfo(): Record<string, MCPServerImplementation | undefined>
+```
+
+例子：
+
+```typescript
+await mcp.listTools()
+
+const info = mcp.getServerInfo()
+console.log(info.myServer?.title, info.myServer?.version)
+```
+
 ### `authenticate()` {/* #authenticate */}
 
-為已設定 `MCPOAuthClientProvider` 且重新導向 URL 指向 loopback 位址的伺服器，執行互動式 OAuth authorization-code 流程。它會啟動本機 callback 伺服器，透過 Provider 的 `onRedirectToAuthorization` callback 傳送授權 URL，等待瀏覽器傳回授權碼，將其交換成 token，然後重新連線。請參閱[互動式瀏覽器驗證](#interactive-browser-authentication)。
+為伺服器運行互動式 OAuth 授權程式碼流`MCPOAuthClientProvider` uses a loopback redirect URL. A local callback server passes the authorization URL to the provider's `onRedirectToAuthorization` callback and waits for the browser to return the code. It then exchanges the code for tokens and reconnects. See [Interactive browser authentication](#interactive-browser-authentication).
 
-選用的 `timeoutMs` 會限制流程等待瀏覽器傳回授權碼的時間，逾時即拒絕；預設為 5 分鐘。
+可選的`timeoutMs` bounds how long the flow waits for the browser to return the authorization code before rejecting, and defaults to 5 minutes.
 
-```typescript prettier:false
+```typescript oxfmt:false
 async authenticate(serverName: string, options?: { timeoutMs?: number }): Promise<void>
 ```
 
 ### `getServerAuthState()` {/* #getserverauthstate */}
 
-傳回已設定伺服器的 OAuth 授權狀態：連線嘗試因授權錯誤被拒後為 `'needs-auth'`；伺服器接受 Provider credential 後為 `'authorized'`；沒有 `authProvider` 或尚未嘗試連線的伺服器則為 `undefined`。
+傳回已設定伺服器的 OAuth 授權狀態：`'needs-auth'` after a connection attempt was rejected with an authorization error, `'authorized'` once the server accepted the provider's credentials, or `undefined` for servers without an `authProvider` or that haven't attempted a connection yet.
 
-```typescript prettier:false
+```typescript oxfmt:false
 getServerAuthState(serverName: string): 'needs-auth' | 'authorized' | undefined
 ```
 
 ### `cancelAuthentication()` {/* #cancelauthentication */}
 
-取消伺服器正在進行的 `authenticate()` 流程，避免已放棄的瀏覽器授權令用戶端無限期等候。它會中止流程（包括 callback 伺服器綁定前的設定階段）、關閉正在監聽的本機 callback 伺服器，而待處理的 `authenticate()` 呼叫會被拒絕。成功取消流程時傳回 `true`；沒有流程正在進行時傳回 `false`。
+取消正在進行的操作`authenticate()` flow for a server, so an abandoned browser authorization doesn't leave the client waiting indefinitely. It aborts the flow (including its setup phase, before the callback server binds), closes the local callback server if one is listening, and the pending `authenticate()` call rejects. Returns `true` if a flow was cancelled, or `false` when no flow was in progress.
 
-之後的 `getServerAuthState()` 結果取決於流程進度。在 `401` 拒絕後取消的流程會維持 `'needs-auth'`，並可立即重試。如未嘗試連線，在設定期間取消會令狀態保持不變（通常為 `undefined`）。
+由此產生的`getServerAuthState()` depends on how far the flow progressed. A flow cancelled after a `401` rejection stays at `'needs-auth'` and can be retried immediately. Cancellation during setup leaves the state unchanged (typically `undefined`) if no connection was attempted.
 
-```typescript prettier:false
+```typescript oxfmt:false
 async cancelAuthentication(serverName: string): Promise<boolean>
 ```
 
 ### `disconnect()` {/* #disconnect */}
 
-中斷所有 MCP 伺服器連線並清理資源。
+中斷與所有 MCP 伺服器的連線並清理資源。
 
-```typescript prettier:false
+```typescript oxfmt:false
 async disconnect(): Promise<void>
 ```
 
 ### `toMCPServerProxies()` {/* #tomcpserverproxies */}
 
-傳回 `MCPClientServerProxy` 實例的 map，每個已設定伺服器各有一個。每個 proxy 都會把底層用戶端連線包裝為 `MCPServerBase` 實例，讓外部（非 Mastra）MCP 伺服器可在 `mcpServers` 中註冊並顯示於 Studio。
+返回一個地圖`MCPClientServerProxy` instances, one per configured server. Each proxy wraps the underlying client connection as an `MCPServerBase` instance, allowing external (non-Mastra) MCP servers to be registered in `mcpServers` and appear in Studio.
 
-```typescript prettier:false
+```typescript oxfmt:false
 async toMCPServerProxies(): Promise<Record<string, MCPClientServerProxy>>
 ```
 
-把結果展開至 `Mastra` 的 `mcpServers` 設定：
+將結果傳播到`mcpServers` config on `Mastra`:
 
 ```typescript title="src/mastra/index.ts"
 import { Mastra } from '@mastra/core/mastra'
@@ -439,11 +819,11 @@ export const mastra = new Mastra({
 })
 ```
 
-這適合把實作 MCP Apps extension 或其他功能的外部 MCP 伺服器連接至 Studio，而毋須用 Mastra `MCPServer` 包裝。
+這對於將實現 MCP Apps 擴充功能或其他功能的外部 MCP 伺服器連接到 Studio 非常有用，而無需將它們包裝在 Mastra 中`MCPServer`.
 
-### `resources` 屬性 {/* #resources-property */}
+### `resources`財產 {/* #resources-property */}
 
-`MCPClient` 實例有一個 `resources` 屬性，可用來存取資源相關操作。
+這`MCPClient` instance has a `resources` property that provides access to resource-related operations.
 
 ```typescript
 const mcpClient = new MCPClient({/* ...servers configuration... */})
@@ -456,13 +836,13 @@ const templatesByServer = await mcpClient.resources.templates()
 
 #### `resources.list()` {/* #resourceslist */}
 
-擷取所有已連線 MCP 伺服器的全部可用資源，並按伺服器名稱分組。
+從所有連接的 MCP 伺服器檢索所有可用資源（按伺服器名稱分組）。
 
-```typescript prettier:false
+```typescript oxfmt:false
 async list(): Promise<Record<string, Resource[]>>
 ```
 
-範例：
+例子：
 
 ```typescript
 const resourcesByServer = await mcpClient.resources.list()
@@ -471,15 +851,27 @@ for (const serverName in resourcesByServer) {
 }
 ```
 
+#### `resources.listWithErrors(options?)` {/* #resourceslistwitherrorsoptions */}
+
+保留成功的資源，同時透過舊字串報告失敗的伺服器`errors` and structured `errorDetails`. Pass `perServerTimeoutMs` to bound each server independently and include `durations`.
+
+```typescript
+const { resources, errors, errorDetails, durations } = await mcpClient.resources.listWithErrors({
+  perServerTimeoutMs: 3_000,
+})
+
+console.log(resources, errors, errorDetails, durations)
+```
+
 #### `resources.templates()` {/* #resourcestemplates */}
 
-擷取所有已連線 MCP 伺服器的全部可用資源範本，並按伺服器名稱分組。
+從所有連接的 MCP 伺服器檢索所有可用資源模板（按伺服器名稱分組）。
 
-```typescript prettier:false
+```typescript oxfmt:false
 async templates(): Promise<Record<string, ResourceTemplate[]>>
 ```
 
-範例：
+例子：
 
 ```typescript
 const templatesByServer = await mcpClient.resources.templates()
@@ -488,18 +880,27 @@ for (const serverName in templatesByServer) {
 }
 ```
 
+#### `resources.templatesWithErrors(options?)` {/* #resourcestemplateswitherrorsoptions */}
+
+傳回成功的資源模板以及每個伺服器的字串`errors`, structured `errorDetails`, and optional `durations`.
+
+```typescript
+const { templates, errors, errorDetails } = await mcpClient.resources.templatesWithErrors()
+console.log(templates, errors, errorDetails)
+```
+
 #### `resources.read(serverName: string, uri: string)` {/* #resourcesreadservername-string-uri-string */}
 
-讀取伺服器上指定資源的內容。
+從伺服器讀取特定資源的內容。
 
-```typescript prettier:false
+```typescript oxfmt:false
 async read(serverName: string, uri: string): Promise<ReadResourceResult>
 ```
 
-- `serverName`：伺服器的標識符（`servers` 建構函數選項所用的 key）。
-- `uri`：要讀取資源的 URI。
+* `serverName`：伺服器的識別碼（在`servers` constructor option).
+* `uri`
 
-範例：
+例子：
 
 ```typescript
 const content = await mcpClient.resources.read('myWeatherServer', 'weather://current')
@@ -508,13 +909,15 @@ console.log('Current weather:', content.contents[0].text)
 
 #### `resources.subscribe(serverName: string, uri: string)` {/* #resourcessubscribeservername-string-uri-string */}
 
-訂閱伺服器上指定資源的更新。
+訂閱伺服器上特定資源的更新。 Mastra 將 URI 新增至單一託管`subscriptions/listen` stream per server. Subscribing to the same URI more than once has no effect while the stream is active. Mastra restores the stream after a reconnect and closes it when the client disconnects.
 
-```typescript prettier:false
-async subscribe(serverName: string, uri: string): Promise<object>
+如果伺服器不接受請求的 URI，則該方法將拒絕。如果重新連接後流恢復失敗，連接仍然可用並調用`subscribe()` again retries the stream.
+
+```typescript oxfmt:false
+async subscribe(serverName: string, uri: string): Promise<void>
 ```
 
-範例：
+例子：
 
 ```typescript
 await mcpClient.resources.subscribe('myWeatherServer', 'weather://current')
@@ -522,13 +925,13 @@ await mcpClient.resources.subscribe('myWeatherServer', 'weather://current')
 
 #### `resources.unsubscribe(serverName: string, uri: string)` {/* #resourcesunsubscribeservername-string-uri-string */}
 
-取消訂閱伺服器上指定資源的更新。
+取消訂閱伺服器上特定資源的更新。 Mastra 從託管中刪除 URI`subscriptions/listen` filter and replaces the stream. When nothing remains to listen for, Mastra closes the stream.
 
-```typescript prettier:false
-async unsubscribe(serverName: string, uri: string): Promise<object>
+```typescript oxfmt:false
+async unsubscribe(serverName: string, uri: string): Promise<void>
 ```
 
-範例：
+例子：
 
 ```typescript
 await mcpClient.resources.unsubscribe('myWeatherServer', 'weather://current')
@@ -536,13 +939,13 @@ await mcpClient.resources.unsubscribe('myWeatherServer', 'weather://current')
 
 #### `resources.onUpdated(serverName: string, handler: (params: { uri: string }) => void)` {/* #resourcesonupdatedservername-string-handler-params--uri-string---void */}
 
-設定通知 handler；指定伺服器上已訂閱的資源更新時便會呼叫。
+設定一個通知處理程序，當更新特定伺服器上的訂閱資源時將呼叫該通知處理程序。
 
-```typescript prettier:false
+```typescript oxfmt:false
 async onUpdated(serverName: string, handler: (params: { uri: string }) => void): Promise<void>
 ```
 
-範例：
+例子：
 
 ```typescript
 mcpClient.resources.onUpdated('myWeatherServer', params => {
@@ -554,13 +957,13 @@ mcpClient.resources.onUpdated('myWeatherServer', params => {
 
 #### `resources.onListChanged(serverName: string, handler: () => void)` {/* #resourcesonlistchangedservername-string-handler---void */}
 
-設定通知 handler；指定伺服器的可用資源清單有變時便會呼叫。
+設定通知處理程序，當特定伺服器上的可用資源清單發生變更時將呼叫該通知處理程序。
 
-```typescript prettier:false
+```typescript oxfmt:false
 async onListChanged(serverName: string, handler: () => void): Promise<void>
 ```
 
-範例：
+例子：
 
 ```typescript
 mcpClient.resources.onListChanged('myWeatherServer', () => {
@@ -570,148 +973,9 @@ mcpClient.resources.onListChanged('myWeatherServer', () => {
 })
 ```
 
-### `elicitation` 屬性 {/* #elicitation-property */}
+### `prompts`財產 {/* #prompts-property */}
 
-`MCPClient` 實例有一個 `elicitation` 屬性，可用來存取 elicitation 相關操作。Elicitation 讓 MCP 伺服器向使用者要求結構化資料。
-
-```typescript
-const mcpClient = new MCPClient({/* ...servers configuration... */})
-
-// Set up elicitation handler
-mcpClient.elicitation.onRequest('serverName', async request => {
-  // Handle elicitation request from server
-  console.log('Server requests:', request.message)
-  console.log('Schema:', request.requestedSchema)
-
-  // Return user response
-  return {
-    action: 'accept',
-    content: { name: 'John Doe', email: 'john@example.com' },
-  }
-})
-```
-
-#### `elicitation.onRequest(serverName: string, handler: ElicitationHandler)` {/* #elicitationonrequestservername-string-handler-elicitationhandler */}
-
-設定 handler 函數；任何已連線 MCP 伺服器傳送 elicitation 要求時便會呼叫。Handler 會收到要求，並必須傳回回應。
-
-##### `ElicitationHandler` 函數 {/* #elicitationhandler-function */}
-
-Handler 函數會收到包含以下內容的要求物件：
-
-- `message`：以人類可讀形式說明所需資料的訊息
-- `requestedSchema`：定義預期回應結構的 JSON schema
-
-Handler 必須傳回包含以下內容的 `ElicitResult`：
-
-- `action`：`'accept'`、`'decline'` 或 `'cancel'` 其中之一
-- `content`：使用者資料（只在 action 為 `'accept'` 時）
-
-**範例：**
-
-```typescript
-mcpClient.elicitation.onRequest('serverName', async request => {
-  console.log(`Server requests: ${request.message}`)
-
-  // Example: Simple user input collection
-  if (request.requestedSchema.properties.name) {
-    // Simulate user accepting and providing data
-    return {
-      action: 'accept',
-      content: {
-        name: 'Alice Smith',
-        email: 'alice@example.com',
-      },
-    }
-  }
-
-  // Simulate user declining the request
-  return { action: 'decline' }
-})
-```
-
-**完整互動範例：**
-
-```typescript
-import { MCPClient } from '@mastra/mcp'
-import { createInterface } from 'readline'
-
-const readline = createInterface({
-  input: process.stdin,
-  output: process.stdout,
-})
-
-function askQuestion(question: string): Promise<string> {
-  return new Promise(resolve => {
-    readline.question(question, answer => resolve(answer.trim()))
-  })
-}
-
-const mcpClient = new MCPClient({
-  servers: {
-    interactiveServer: {
-      url: new URL('http://localhost:3000/mcp'),
-    },
-  },
-})
-
-// Set up interactive elicitation handler
-await mcpClient.elicitation.onRequest('interactiveServer', async request => {
-  console.log(`\n📋 Server Request: ${request.message}`)
-  console.log('Required information:')
-
-  const schema = request.requestedSchema
-  const properties = schema.properties || {}
-  const required = schema.required || []
-  const content: Record<string, any> = {}
-
-  // Collect input for each field
-  for (const [fieldName, fieldSchema] of Object.entries(properties)) {
-    const field = fieldSchema as any
-    const isRequired = required.includes(fieldName)
-
-    let prompt = `${field.title || fieldName}`
-    if (field.description) prompt += ` (${field.description})`
-    if (isRequired) prompt += ' *required*'
-    prompt += ': '
-
-    const answer = await askQuestion(prompt)
-
-    // Handle cancellation
-    if (answer.toLowerCase() === 'cancel') {
-      return { action: 'cancel' }
-    }
-
-    // Validate required fields
-    if (answer === '' && isRequired) {
-      console.log(`❌ ${fieldName} is required`)
-      return { action: 'decline' }
-    }
-
-    if (answer !== '') {
-      content[fieldName] = answer
-    }
-  }
-
-  // Confirm submission
-  console.log('\n📝 You provided:')
-  console.log(JSON.stringify(content, null, 2))
-
-  const confirm = await askQuestion('\nSubmit this information? (yes/no/cancel): ')
-
-  if (confirm.toLowerCase() === 'yes' || confirm.toLowerCase() === 'y') {
-    return { action: 'accept', content }
-  } else if (confirm.toLowerCase() === 'cancel') {
-    return { action: 'cancel' }
-  } else {
-    return { action: 'decline' }
-  }
-})
-```
-
-### `prompts` 屬性 {/* #prompts-property */}
-
-`MCPClient` 實例有一個 `prompts` 屬性，可用來存取 prompt 相關操作。
+這`MCPClient` instance has a `prompts` property that provides access to prompt-related operations.
 
 ```typescript
 const mcpClient = new MCPClient({/* ...servers configuration... */})
@@ -726,13 +990,13 @@ const { prompt, messages } = await mcpClient.prompts.get({
 
 #### `prompts.list()` {/* #promptslist */}
 
-擷取所有已連線 MCP 伺服器的全部可用 prompt，並按伺服器名稱分組。
+從所有連接的 MCP 伺服器檢索所有可用提示（按伺服器名稱分組）。
 
-```typescript prettier:false
+```typescript oxfmt:false
 async list(): Promise<Record<string, Prompt[]>>
 ```
 
-範例：
+例子：
 
 ```typescript
 const promptsByServer = await mcpClient.prompts.list()
@@ -741,45 +1005,51 @@ for (const serverName in promptsByServer) {
 }
 ```
 
-#### `prompts.get({ serverName, name, args?, version? })` {/* #promptsget-servername-name-args-version- */}
+#### `prompts.listWithErrors(options?)` {/* #promptslistwitherrorsoptions */}
 
-從伺服器擷取指定 prompt 及其訊息。
+傳回成功的提示以及每個伺服器的字串`errors`, structured `errorDetails`, and optional `durations`.
 
-```typescript prettier:false
+```typescript
+const { prompts, errors, errorDetails } = await mcpClient.prompts.listWithErrors()
+console.log(prompts, errors, errorDetails)
+```
+
+#### `prompts.get({ serverName, name, args? })` {/* #promptsget-servername-name-args- */}
+
+從伺服器檢索特定提示及其訊息。
+
+```typescript oxfmt:false
 async get({
   serverName,
   name,
   args?,
-  version?,
 }: {
   serverName: string;
   name: string;
   args?: Record<string, any>;
-  version?: string;
-}): Promise<{ prompt: Prompt; messages: PromptMessage[] }>
+}): Promise<GetPromptResult>
 ```
 
-範例：
+例子：
 
 ```typescript
-const { prompt, messages } = await mcpClient.prompts.get({
+const { messages } = await mcpClient.prompts.get({
   serverName: 'myWeatherServer',
   name: 'current',
   args: { location: 'London' },
 })
-console.log(prompt)
 console.log(messages)
 ```
 
 #### `prompts.onListChanged(serverName: string, handler: () => void)` {/* #promptsonlistchangedservername-string-handler---void */}
 
-設定通知 handler；指定伺服器的可用 prompt 清單有變時便會呼叫。
 
-```typescript prettier:false
+
+```typescript oxfmt:false
 async onListChanged(serverName: string, handler: () => void): Promise<void>
 ```
 
-範例：
+例子：
 
 ```typescript
 mcpClient.prompts.onListChanged('myWeatherServer', () => {
@@ -789,19 +1059,19 @@ mcpClient.prompts.onListChanged('myWeatherServer', () => {
 })
 ```
 
-### `tools` 屬性 {/* #tools-property */}
+### `tools`財產 {/* #tools-property */}
 
-`MCPClient` 實例有一個 `tools` 屬性，用於訂閱 Tool 清單變更通知。如要擷取 Tool，請使用 `listTools()` 或 `listToolsets()`。
+這`MCPClient` instance has a `tools` property for subscribing to tool list change notifications. To fetch tools, use `listTools()` or `listToolsets()`.
 
 #### `tools.onListChanged(serverName: string, handler: () => void)` {/* #toolsonlistchangedservername-string-handler---void */}
 
-設定通知 handler；指定伺服器的可用 Tool 清單有變時（例如伺服器在 runtime 新增或移除 Tool）便會呼叫。
+設定通知處理程序，當特定伺服器上的可用Tool清單發生變更時（例如，當伺服器在執行時間新增或刪除Tool時），將會呼叫該通知處理程序。
 
-```typescript prettier:false
+```typescript oxfmt:false
 async onListChanged(serverName: string, handler: () => void): Promise<void>
 ```
 
-範例：
+例子：
 
 ```typescript
 await mcpClient.tools.onListChanged('myWeatherServer', async () => {
@@ -811,16 +1081,16 @@ await mcpClient.tools.onListChanged('myWeatherServer', async () => {
 })
 ```
 
-### `progress` 屬性 {/* #progress-property */}
+### `progress`財產 {/* #progress-property */}
 
-`MCPClient` 實例有一個 `progress` 屬性，用於訂閱 MCP 伺服器在 Tool 執行期間發出的進度通知。
+這`MCPClient` instance has a `progress` property for subscribing to progress notifications emitted by MCP servers while tools execute.
 
 ```typescript
 const mcpClient = new MCPClient({
   servers: {
     myServer: {
       url: new URL('http://localhost:4111/api/mcp/myServer/mcp'),
-      // Enabled by default; set to false to disable
+      // Off by default: opt in so tool calls carry a progressToken
       enableProgressTracking: true,
     },
   },
@@ -836,9 +1106,9 @@ await mcpClient.progress.onUpdate('myServer', params => {
 
 #### `progress.onUpdate(serverName: string, handler)` {/* #progressonupdateservername-string-handler */}
 
-註冊 handler 函數，以接收指定伺服器的進度更新。
+註冊一個處理函數以從指定伺服器接收進度更新。
 
-```typescript prettier:false
+```typescript oxfmt:false
 async onUpdate(
   serverName: string,
   handler: (params: {
@@ -850,39 +1120,473 @@ async onUpdate(
 ): Promise<void>
 ```
 
-注意事項：
+筆記：
 
-- 當 `enableProgressTracking` 為 true（預設值）時，Tool 呼叫會包含 `progressToken`，讓你把更新與指定 run 關聯。
-- 如在執行 Tool 時傳入 `runId`，它會用作 `progressToken`。
+* 什麼時候`enableProgressTracking` is true, tool calls include a `progressToken` so you can correlate updates to a specific run. Servers only send progress for requests that carry a token.
+* 如果你通過了`runId` when executing a tool, it will be used as the `progressToken`.
 
-如要停用伺服器的進度追蹤：
+### `events`性質（實驗） {/* #events-property-experimental */}
+
+這`events` property lists and subscribes to server events from servers that implement the [MCP Events extension (SEP-3415)](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/3415). Use it to react to things that happen on the server, such as a push to a repository, without polling a tool. Delivery is at least once. After a reconnect or a resume, the server can resend an occurrence, and the client drops repeats by `eventId` within `dedupWindow` of recent ids.
+
+有關端對端演練，請參閱[MCP events](/docs/connections/mcp#mcp-events).
+
+:::警告
+SEP-3415 是草案。此 API 可能會在任何版本中發生變更。
+:::
+
+```typescript
+const events = await mcpClient.events.list('github')
+
+const subscription = await mcpClient.events.subscribe(
+  'github',
+  'repo.push',
+  { repo: 'mastra-ai/mastra' },
+  { cursor: await loadCursor() },
+)
+
+for await (const event of subscription) {
+  await handlePush(event.data)
+  // Safe to persist after each handled occurrence
+  await saveCursor(subscription.cursor)
+}
+```
+
+不做廣告的伺服器`io.modelcontextprotocol/events` extension receive no `events/*` requests. `list()` rejects with a `MastraError` whose id is `MCP_CLIENT_LIST_EVENTS_FAILED`, and `subscribe()` rejects with `MCP_CLIENT_SUBSCRIBE_EVENT_FAILED`. In both cases `error.cause.id` is `MCP_EVENTS_NOT_SUPPORTED`. Other `list()` and `subscribe()` failures use the same two ids, with the specific reason in `error.cause`.
+
+#### `events.list(serverName: string)` {/* #eventslistservername-string */}
+
+分頁後傳回伺服器提供的每種事件類型。每個描述符都有一個`name`, an optional `description`, the `delivery` modes the server supports, and optional `inputSchema` and `payloadSchema`.
+
+```typescript oxfmt:false
+async list(serverName: string): Promise<MCPEventDescriptor[]>
+```
+
+當伺服器的事件清單發生變更時，客戶端不會收到通知。稱呼`list()` again to pick up new event types.
+
+#### `events.subscribe(serverName, eventName, args?, options?)` {/* #eventssubscribeservername-eventname-args-options */}
+
+启动订阅并在服务器确认后解析。未知事件、無效參數或禁止訂閱等錯誤會拒絕傳回的 Promise。新的訂閱從伺服器接受它的那一刻開始，因此不會傳遞該點之前的事件，除非`options.cursor` resumes from an earlier position. Under webhook delivery the promise can resolve after that point: the client answers `503` for a delivery it can't route yet, and the server retries it.
+
+```typescript oxfmt:false
+async subscribe(
+  serverName: string,
+  eventName: string,
+  args?: Record<string, unknown>,
+  options?: MCPEventSubscribeOptions,
+): Promise<MCPEventSubscription>
+```
+
+客戶端按以下順序選擇事件提供的第一個模式：`webhook` (only when the client has [`webhook` settings](#webhook-delivery)), `push` (a long-lived `events/stream` request), then `poll` (repeated `events/poll` requests). Pass `options.delivery` to force a mode.
+
+<PropertiesTable
+  content={[
+{
+  name: 'delivery',
+  type: "'webhook' | 'push' | 'poll'",
+  isOptional: true,
+  description:
+    "Forces a delivery mode. When the event doesn't offer it, or for `webhook` without client `webhook` settings, `subscribe()` rejects with `MCP_CLIENT_SUBSCRIBE_EVENT_FAILED` and `error.cause.id` is `MCP_EVENTS_NO_COMPATIBLE_DELIVERY_MODE` or `MCP_EVENTS_WEBHOOK_NOT_CONFIGURED`.",
+},
+{
+  name: 'cursor',
+  type: 'string | null',
+  isOptional: true,
+  description: 'Resumes from a cursor saved earlier. Omit or pass `null` to start from now.',
+},
+{
+  name: 'maxAgeMs',
+  type: 'number',
+  isOptional: true,
+  description: 'Asks the server not to replay occurrences older than this.',
+},
+{
+  name: 'maxEvents',
+  type: 'number',
+  isOptional: true,
+  description: 'Maximum occurrences per poll response. Poll mode only.',
+},
+{
+  name: 'minPollIntervalMs',
+  type: 'number',
+  isOptional: true,
+  defaultValue: '1000',
+  description: 'Lower bound for the wait between polls, applied to the server-suggested `nextPollMs`.',
+},
+{
+  name: 'heartbeatTimeoutMs',
+  type: 'number',
+  isOptional: true,
+  defaultValue: '60000',
+  description:
+    'Push mode reopens the stream from the last cursor after this long without any message from the server.',
+},
+{
+  name: 'streamOpenTimeoutMs',
+  type: 'number',
+  isOptional: true,
+  description: 'How long to wait for the server to confirm a push stream. Defaults to the server request timeout.',
+},
+{
+  name: 'dedupWindow',
+  type: 'number',
+  isOptional: true,
+  defaultValue: '1000',
+  description: 'Number of recent event ids remembered to drop duplicate occurrences.',
+},
+{
+  name: 'maxBufferedEvents',
+  type: 'number',
+  isOptional: true,
+  defaultValue: '1000',
+  description:
+    "Most occurrences held while your loop isn't reading. When full, the oldest unread occurrence is dropped, the next one has `truncated` set, and `onError` receives `MCP_EVENTS_BUFFER_OVERFLOW`.",
+},
+{
+  name: 'retry',
+  type: '{ initialDelayMs?: number; maxDelayMs?: number; factor?: number; maxAttempts?: number }',
+  isOptional: true,
+  description:
+    'Backoff with full jitter for transient failures. Defaults to 1000 ms initial delay, 30000 ms maximum, factor 2, unlimited retries.',
+},
+{
+  name: 'signal',
+  type: 'AbortSignal',
+  isOptional: true,
+  description: 'Aborting it cancels the subscription.',
+},
+]}
+/>
+
+返回的`MCPEventSubscription` is an async iterable of occurrences (`eventId`, `name`, `timestamp`, `data`) with these members:
+
+* `cursor`：可以安全堅持的最新立場。它永遠不會越過循環尚未收到的事件。它是`null` when the event type doesn't support replay.
+* `truncated`: `true` when the server reported a gap right before the occurrence your loop received last, for example because the saved cursor was older than its retention window. Read it inside the loop: it's `true` for the first occurrence after the gap and `false` for the ones after it.
+* `mode`：正在使用的交付模式，`'webhook'`, `'push'`, or `'poll'`.
+* `deliveryStatus`：僅限 Webhook 模式。伺服器關於傳送到您的 webhook URL 的最新報告 (`active`, `lastDeliveryAt`, `lastError`, `failedSince`), updated on each refresh.
+* `onError(handler)`：接收可恢復的錯誤，例如用戶端重新開啟已刪除的流。傳回一個刪除處理程序的函數。
+* `cancel()`：停止訂閱並結束迭代器。突破一個`for await` loop also cancels it.
+
+迭代器拋出一個`MastraError` directly (not wrapped) when the subscription can't continue: `MCP_EVENTS_SUBSCRIPTION_FAILED` for a non-retryable server error, `MCP_EVENTS_SUBSCRIPTION_TERMINATED` when the server ends a push or webhook subscription, or `MCP_EVENTS_RETRIES_EXHAUSTED` after `retry.maxAttempts` failed attempts in a row. The client reopens dropped streams and resumes polling from the last cursor after a reconnect, including after `reconnectServer()`. `disconnect()` ends all subscriptions.
+
+#### `events.handleWebhook(request: Request)` {/* #eventshandlewebhookrequest-request */}
+
+處理一個 Webhook 傳遞並傳回要傳回的回應。將其安裝在以下路線上`webhook.url` points at.
+
+```typescript oxfmt:false
+async handleWebhook(request: Request): Promise<Response>
+```
+
+它在解析原始主體之前驗證標準 Webhooks 簽名，應答伺服器的驗證握手，並將事件路由到其訂閱`X-MCP-Subscription-Id` header. It responds with:
+
+* `200`在事件交給其訂閱之後，或帶有驗證請求的回顯質詢。
+* `401`當簽名無效或時間戳超過 5 分鐘。
+* `503`當訂閱 ID 還不知道。在這種情況下，伺服器會重試，覆蓋在訂閱回應之前到達的交付。
+* `400`對於一個簽名但畸形的身體，以及`405` for methods other than `POST`.
+* `413`對於超過 1 MiB 的主體。在進行任何其他檢查之前，主體只能讀取該限制。
+* `404`當客戶沒有`webhook` settings.
+
+#### Webhook 交付 {/* #webhook-delivery */}
+
+和`webhook` settings, the client registers each subscription with `events/subscribe` and the server POSTs occurrences to your URL. The server must authenticate the client, and the URL must be publicly reachable over `https`.
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { registerApiRoute } from '@mastra/core/server'
+import { MCPClient } from '@mastra/mcp'
+
+export const mcpClient = new MCPClient({
+  servers: {
+    github: {
+      url: new URL('https://mcp.example.com/mcp'),
+      requestInit: { headers: { Authorization: `Bearer ${process.env.GITHUB_MCP_TOKEN}` } },
+    },
+  },
+  webhook: { url: 'https://agent.example.com/mcp/webhook' },
+})
+
+export const mastra = new Mastra({
+  server: {
+    apiRoutes: [
+      registerApiRoute('/mcp/webhook', {
+        method: 'POST',
+        // Deliveries are authenticated by their signature, not by Mastra auth
+        requiresAuth: false,
+        handler: c => mcpClient.events.handleWebhook(c.req.raw),
+      }),
+    ],
+  },
+})
+```
+
+<PropertiesTable
+  content={[
+{
+  name: 'url',
+  type: 'string',
+  description: 'Public `https` URL that routes to `events.handleWebhook()`.',
+},
+{
+  name: 'secret',
+  type: 'string',
+  isOptional: true,
+  description:
+    "A `whsec_` signing secret used for every subscription. By default the client generates a fresh secret for each subscription, so one server can't sign deliveries for another server's subscriptions.",
+},
+{
+  name: 'ttlMs',
+  type: 'number | null',
+  isOptional: true,
+  description:
+    'Suggested subscription lifetime. `null` asks for no expiry, which the server may decline. Defaults to the server default.',
+},
+{
+  name: 'refreshMarginMs',
+  type: 'number',
+  isOptional: true,
+  description:
+    'How long before the server-granted `refreshBefore` time to refresh the subscription. Defaults to the smaller of 60 seconds and 20% of the grant.',
+},
+]}
+/>
+
+客戶端透過重複在過期之前刷新每個訂閱`events/subscribe` with the latest cursor. When the server reports failing delivery in `deliveryStatus`, for example because your endpoint timed out, `onError` receives `MCP_EVENTS_WEBHOOK_DELIVERY_FAILING` with `lastError` in its details. The `cursor` in each webhook delivery only covers occurrences your endpoint has acknowledged, so resuming from a saved cursor can deliver the last handled occurrence again. The next refresh resumes a suspended subscription. `cancel()` sends `events/unsubscribe`.
+
+Webhook 狀態存在於這個進程中：在與接收路由相同的進程中執行接收路由`MCPClient` that subscribed.
+
+Webhook 傳遞需要與伺服器建立經過驗證的 HTTP 連接，因為伺服器將每個 Webhook 訂閱與呼叫者綁定在一起。透過 stdio 或未經身份驗證透過 HTTP，伺服器拒絕`events/subscribe`. It also rejects new subscriptions once its webhook subscription cap is reached (`-32025`). A subscription that didn't force a mode then falls back to `push` or `poll`, and the first `onError` handler receives `MCP_EVENTS_WEBHOOK_UNAVAILABLE` with the rejection `code` and the `fallback` mode in its details. Forcing `delivery: 'webhook'` rejects instead.
+
+一台伺服器上具有相同事件名稱和參數的訂閱共用單一伺服器端 Webhook 訂閱。每個都透過自己的迭代器獲取每一次出現的情況，然後客戶端發送`events/unsubscribe` only when the last of them is cancelled.
+
+### Agent和Workflow中的事件（實驗） {/* #events-in-agents-and-workflows-experimental */}
+
+`MCPEventsSignalProvider`將 MCP 伺服器事件作為通知傳遞給Agent線程。將其添加到Agent中`signals`, then subscribe threads to events. The agent needs a notifications storage domain, which `InMemoryStore` and the standard storage adapters provide.
+
+:::警告
+SEP-3415 是草案。此 API 可能會在任何版本中發生變更。
+:::
+
+```typescript title="src/mastra/agents/repo-agent.ts"
+import { Agent } from '@mastra/core/agent'
+import { MCPClient, MCPEventsSignalProvider } from '@mastra/mcp'
+
+const mcp = new MCPClient({
+  servers: { github: { url: new URL('https://example.com/mcp') } },
+})
+
+export const repoEvents = new MCPEventsSignalProvider({
+  client: mcp,
+  subscribeOptions: { maxAgeMs: 60 * 60 * 1000 },
+})
+
+export const repoAgent = new Agent({
+  id: 'repo-agent',
+  name: 'Repo Agent',
+  instructions: 'Triage repository activity.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  signals: [repoEvents],
+})
+
+await repoEvents.subscribeThread(
+  { resourceId: 'user-1', threadId: 'thread-1' },
+  { server: 'github', event: 'repo.push', args: { repo: 'mastra-ai/mastra' } },
+)
+```
+
+訂閱同一伺服器、事件和參數的執行緒共用一個 MCP 訂閱，無論參數鍵順序為何。每次發生都會成為一個通知`kind: 'mcp-event'` and `attributes: { server, event }`. The raw occurrence is in `payload`. The notification `summary`, which is the only part the model reads, labels the event as untrusted and wraps its data, together with the server-advertised event name, in an `<untrusted-mcp-event-data>` block that the content can't close. When the server reports a gap, `attributes.truncated` is `true` and the summary says that events may have been skipped.
+
+如果訂閱結束，例如因為伺服器終止它，則每個訂閱執行緒都會收到一個`high` priority notification with `kind: 'mcp-event-subscription-ended'` and the threads are unsubscribed.
+
+<PropertiesTable
+  content={[
+{
+  name: 'client',
+  type: "Pick<MCPClient, 'events'>",
+  description: 'The client used to list and subscribe to events.',
+},
+{
+  name: 'id',
+  type: 'string',
+  isOptional: true,
+  defaultValue: "'mcp-events'",
+  description: 'Provider id, used as the notification `source`.',
+},
+{
+  name: 'name',
+  type: 'string',
+  isOptional: true,
+  defaultValue: "'MCP Events'",
+  description: 'Display name.',
+},
+{
+  name: 'cursorStore',
+  type: 'MCPEventCursorStore',
+  isOptional: true,
+  defaultValue: 'InMemoryMCPEventCursorStore',
+  description:
+    'Stores the resume cursor for each subscription. Implement `get(key)`, `set(key, cursor)` and `delete(key)` with durable storage so a subscription continues from its last cursor when a thread is subscribed again after a restart. Only cursors are stored, not which threads are subscribed. Only non-null cursors are stored.',
+},
+{
+  name: 'subscribeOptions',
+  type: "Omit<MCPEventSubscribeOptions, 'cursor' | 'signal'>",
+  isOptional: true,
+  description: 'Options for every MCP subscription, for example `maxAgeMs` to bound the backlog replayed on resume.',
+},
+{
+  name: 'priority',
+  type: 'NotificationPriority',
+  isOptional: true,
+  defaultValue: "'medium'",
+  description: 'Priority of event notifications.',
+},
+{
+  name: 'coalesce',
+  type: 'boolean',
+  isOptional: true,
+  defaultValue: 'false',
+  description:
+    "Sets `coalesceKey: 'mcp-events:<key>'` on event notifications, whatever the provider `id`. Pending notifications from one subscription then merge, so a burst that arrives before the agent reads its inbox keeps only the latest occurrence. When off, every occurrence is its own notification.",
+},
+{
+  name: 'tools',
+  type: 'boolean | { servers: string[] }',
+  isOptional: true,
+  defaultValue: 'false',
+  description:
+    'Gives the agent the `mcp_events_list`, `mcp_events_subscribe` and `mcp_events_unsubscribe` tools, which act on the current thread and require memory. Event descriptions and error messages from the server reach the model inside the same untrusted-data block as event data. Subscriptions made through the tools are lost on restart. Pass `servers` to limit them to those servers.',
+},
+{
+  name: 'onError',
+  type: '(error: unknown, info: { server: string; event: string; key: string }) => void',
+  isOptional: true,
+  description: 'Receives delivery, cursor store and subscription errors.',
+},
+]}
+/>
+
+提供者有以下方法：
+
+* `subscribeThread(thread, { server, event, args? })`：訂閱一個線程，並在 MCP 訂閱確認後解析。它從儲存的遊標恢復。如果伺服器拒絕訂閱，則該線程不會被訂閱並且 Promise 會被拒絕。線程訂閱僅保存在記憶體中：重啟後，調用`subscribeThread()` again for each thread that should keep receiving events.
+* `unsubscribeThread(thread, { server, event, args? })`: 決定`true` when the thread was subscribed. When the last thread leaves, the MCP subscription is cancelled and its stored cursor is deleted.
+* `stop()`：取消每個 MCP 訂閱並保留儲存的遊標，因此新的提供者俱有相同的`cursorStore` resumes where this one stopped.
+* `MCPEventsSignalProvider.key({ server, event, args? })`：傳回遊標儲存使用的訂閱金鑰。
+
+交貨至少一次。提供者在通知執行緒後儲存遊標，因此在重新啟動後會重播在當機之前通知的事件。該通知的`dedupeKey` includes the event id: if the first notification is still pending, the replay merges into it. If it was already delivered, the thread is notified again.
+
+若要為每個事件啟動Workflow運行，請直接迭代訂閱：
+
+```typescript title="src/mastra/triggers/repo-push.ts"
+const subscription = await mcp.events.subscribe(
+  'github',
+  'repo.push',
+  { repo: 'mastra-ai/mastra' },
+  { cursor: await loadCursor() },
+)
+
+process.once('SIGTERM', () => void subscription.cancel())
+
+for await (const event of subscription) {
+  const run = await triagePushWorkflow.createRun()
+  await run.start({ inputData: { eventId: event.eventId, push: event.data } })
+  if (subscription.cursor) await saveCursor(subscription.cursor)
+}
+```
+
+### `tasks`性質（實驗） {/* #tasks-property-experimental */}
+
+有些Tool需要比一個 HTTP 請求保持開啟狀態更長的時間。一個伺服器實作了[MCP Tasks extension (SEP-2663)](https://modelcontextprotocol.github.io/ext-tasks/specification/2026-07-28/tasks.html) can answer such a call with a task, and the client fetches the result later. Set `tasks` on a server to accept them:
 
 ```typescript
 const mcpClient = new MCPClient({
   servers: {
-    myServer: {
-      url: new URL('http://localhost:4111/api/mcp/myServer/mcp'),
-      enableProgressTracking: false,
+    reports: {
+      url: new URL('https://reports.example.com/mcp'),
+      tasks: { maxWaitMs: 30 * 60_000 },
+      inputRequests: async ({ params }) => askUser(params),
     },
   },
 })
 ```
 
-## Elicitation {/* #elicitation */}
+:::警告
+此 API 可能會在任何版本中發生變更。
+:::
 
-Elicitation 是一項讓 MCP 伺服器向使用者要求結構化資料的功能。伺服器需要其他資料時，可傳送 elicitation 要求，由用戶端提示使用者處理。Tool 呼叫期間便是常見例子。
+和`tasks` set, the client tells the server it accepts tasks. The server decides per call whether to answer directly or with a task. Without `tasks`, the client never receives one and tool calls behave as before.
 
-### Elicitation 的運作方式 {/* #how-elicitation-works */}
+當Tool呼叫返回任務時，該Tool會保持其通常的形狀：
 
-1. **伺服器要求**：MCP 伺服器 Tool 以訊息及 schema 呼叫 `server.elicitation.sendRequest()`
-1. **用戶端 Handler**：系統以該要求呼叫你的 elicitation handler 函數
-1. **使用者互動**：Handler 收集使用者輸入（透過 UI、CLI 等）
-1. **回應**：Handler 傳回使用者的回應（accept/decline/cancel）
-1. **Tool 繼續執行**：伺服器 Tool 收到回應並繼續執行
+* 客戶端依照伺服器建議的時間間隔輪詢任務，直到任務完成，然後傳回Tool結果。
+* 需要輸入的任務透過以下方式回答`inputRequests`, once per request key. The client sends the answers with `tasks/update` and keeps polling the same task. It never sends `tools/call` again. Without a handler, a tool call from an agent or workflow suspends so the user can answer (see [Answering task input from the agent chat](#answering-task-input-from-the-agent-chat)). A direct `tool.execute()` call fails with `MCP_CLIENT_TOOL_TASK_INPUT_UNHANDLED`, and the task stays open on the server until its TTL ends.
+* 中止Tool呼叫發送`tasks/cancel`. Reaching `maxWaitMs` sends it too, and fails the call with `MCP_CLIENT_TOOL_TASK_TIMEOUT`. Both end the call right away, even while a poll or your input handler is still running. A late answer from either is dropped.
+* 客戶端輪詢時斷開連線結束呼叫`MCP_CLIENT_TOOL_TASK_POLL_FAILED` and doesn't reconnect.
+* 如果在用戶端輪詢期間（例如在重新啟動或部署期間）無法存取伺服器，用戶端會重新連線並繼續輪詢，延遲會不斷增加，最多可達 30 秒。来自Agent的拒绝连接以及 HTTP 502、503 和 504 被视为无法访问。 5 分鐘後沒有得到答复，或者當`maxWaitMs` or the task's TTL ends first, the call fails with `MCP_CLIENT_TOOL_TASK_POLL_FAILED`. The task may still finish on the server. The TTL counts from the task's `createdAt`. If the client can't read that timestamp, it counts from when it started waiting.
+* Tool呼叫跨度得到`mcpTaskKey` metadata: a SHA-256 hash of the task id. A Mastra server tags its spans for the task with the same key, so you can match both sides and the task id stays out of both traces.
+* `onToolError`. A task the server cancelled fails with `MCP_CLIENT_TOOL_TASK_CANCELLED`, and a task the server marked `failed` fails with `MCP_CLIENT_TOOL_TASK_FAILED`.
+* 返回任務的呼叫永遠不會重試，因為重試將啟動第二個任務。
+* 當呼叫繼續作為任務時，並且只要任務的狀態發生變化，該Tool就會寫入一個`MCPTaskProgress` entry (`{ type: 'mcp-task', taskId, status, createdAt, serverName }`) to its output stream. Studio's tool-call card uses it to show the task's status, elapsed time and MCP task id while it runs. Tool output isn't saved with the thread. After a reload, the card shows only the result.
 
-### 設定 Elicitation {/* #setting-up-elicitation */}
+在Agent商上[background tasks](/docs/harness/background-tasks) enabled, tools from a server with `tasks` set run as deferred background tasks with no retries. The agent keeps working while the remote task runs, and cancelling the background task cancels the remote task. Override this per tool with the agent's `backgroundTasks.tools`.
 
-你必須在呼叫使用 elicitation 的 Tool 前設定 elicitation handler：
+#### 回答客服人員聊天中輸入的任務 {/* #answering-task-input-from-the-agent-chat */}
+
+當任務需要輸入時，不`inputRequests` handler is configured, and the tool runs in an agent or workflow, the tool call suspends like any tool that calls `suspend()`. The remote task stays open on the server. The suspend payload (`MCPInputRequestSuspendPayload`) carries the requests still waiting for an answer:
+
+```typescript
+const payload: MCPInputRequestSuspendPayload = {
+  type: 'mcp-input-request',
+  serverName: 'reports',
+  toolName: 'approve_and_send',
+  taskId: 'Zx81…', // the MCP task the answers go to
+  createdAt: '2026-10-30T10:00:00.000Z', // when the task was created
+  requestedAt: '2026-10-30T10:00:04.000Z', // when the call suspended; new each time the task asks again
+  requests: {
+    approve: {
+      method: 'elicitation/create',
+      params: {
+        mode: 'form',
+        message: 'Send it?',
+        requestedSchema: {
+          type: 'object',
+          properties: { ok: { type: 'boolean' } },
+          required: ['ok'],
+        },
+      },
+    },
+  },
+}
+```
+
+使用每個請求密鑰一個答案來恢復Tool呼叫 (`MCPInputRequestResumeData`), for example through `agent.resumeStream()` in the foreground, or `backgroundTaskManager.resume()` for a deferred background task:
+
+```typescript
+await agent.resumeStream(
+  { inputResponses: { approve: { action: 'accept', content: { ok: true } } } },
+  { runId, toolCallId },
+)
+```
+
+在恢復時，客戶端發送相同任務的答案`tasks/update` and keeps polling it. It never sends `tools/call` again. If the server asks again, the call suspends again with the new requests. If the task ended meanwhile, the call fails with the usual task error, such as `MCP_CLIENT_TOOL_TASK_CANCELLED`, or `MCP_CLIENT_TOOL_TASK_POLL_FAILED` when the server no longer knows the task. Resume data that isn't `{ inputResponses: { [key]: { action: 'accept' | 'decline' | 'cancel', content? } } }`, or that leaves a request unanswered, fails with `MCP_CLIENT_TOOL_TASK_RESUME_INVALID` without contacting the server.
+
+已配置的`inputRequests` handler takes precedence: the call then never suspends.
+
+有效負載保存 MCP 任務 ID，該 ID 授予對任務的存取權限。它與掛起的Tool呼叫一起存儲，因此請像對待線程的其餘資料一樣對待它。
+
+#### `tasks.get(serverName: string, taskId: string)` {/* #tasksgetservername-string-taskid-string */}
+
+返回任務的目前狀態（`MCPDetailedTask`), including `result` once it's `completed` and `inputRequests` while it's `input_required`. Fails with `MCP_CLIENT_GET_TASK_FAILED`; an unknown task, or one created by another caller, has `error.cause.code` `-32602`.
+
+#### `tasks.update(serverName: string, taskId: string, inputResponses: MCPTaskInputResponses)` {/* #tasksupdateservername-string-taskid-string-inputresponses-mcptaskinputresponses */}
+
+回答了`inputRequests` of an `input_required` task, keyed like the requests. The server ignores keys it didn't ask for or that are already answered. Fails with `MCP_CLIENT_UPDATE_TASK_FAILED`.
+
+#### `tasks.cancel(serverName: string, taskId: string)` {/* #taskscancelservername-string-taskid-string */}
+
+要求伺服器停止任務。伺服器可能仍會完成它。失敗與`MCP_CLIENT_CANCEL_TASK_FAILED`.
+
+## 回答輸入請求 {/* #answering-input-requests */}
+
+需要使用者提供某些資訊的伺服器Tool、資源或提示以`input_required` result instead of a value. The result carries one or more embedded requests, each with a server-chosen `key` and either a form (`requestedSchema`) or a URL the user must visit. Configure `inputRequests` on the server definition to answer them: the client calls the handler once per embedded request, retries the original call with the answers, and resolves the tool call with the final result. Without a handler an `input_required` result surfaces as an error.
 
 ```typescript
 import { MCPClient } from '@mastra/mcp'
@@ -891,30 +1595,33 @@ const mcpClient = new MCPClient({
   servers: {
     interactiveServer: {
       url: new URL('http://localhost:3000/mcp'),
+      inputRequests: async ({ key, params, signal }) => {
+        if (params.mode === 'url') {
+          return { action: 'decline' }
+        }
+        const content = await collectUserInput(params.message, params.requestedSchema, { signal })
+        return { action: 'accept', content }
+      },
     },
   },
 })
-
-// Set up elicitation handler
-mcpClient.elicitation.onRequest('interactiveServer', async request => {
-  // Handle the server's request for user input
-  console.log(`Server needs: ${request.message}`)
-
-  // Your logic to collect user input
-  const userData = await collectUserInput(request.requestedSchema)
-
-  return {
-    action: 'accept',
-    content: userData,
-  }
-})
 ```
+
+### `MCPInputRequest` {/* #mcpinputrequest */}
+
+處理程序接收：
+
+* `key`：伺服器選擇的密鑰，答案被歸檔。當一輪中有多個請求到達時，請將其傳遞到您的 UI。
+* `params`: 請求。在表單模式下它有`message` and `requestedSchema`, a flat JSON Schema object of primitive fields. In url mode it has `message` and `url`.
+* `signal`：當發起呼叫取消或逾時時中止。
+
+配置處理程序向伺服器通告表單支援。若要同時接受 url 模式請求，請擴大`capabilities.elicitation` on the same server definition.
 
 ### 回應類型 {/* #response-types */}
 
-Elicitation handler 必須傳回以下三種回應類型之一：
+返回一個`ElicitResult`:
 
-- **接受**：使用者已提供資料並確認提交
+* **接受**：用戶提供數據並確認提交。`content` must match `requestedSchema`.
 
   ```typescript
   return {
@@ -923,39 +1630,36 @@ Elicitation handler 必須傳回以下三種回應類型之一：
   }
   ```
 
-- **拒絕**：使用者明確拒絕提供資料
+* **衰退**：用戶明確拒絕提供該資訊。
 
   ```typescript
   return { action: 'decline' }
   ```
 
-- **取消**：使用者關閉或取消要求
+* **取消**：用戶拒絕了請求。
   ```typescript
   return { action: 'cancel' }
   ```
 
-### 根據 Schema 收集輸入 {/* #schema-based-input-collection */}
+拒絕或取消的請求會結束Tool呼叫並出現錯誤。伺服器可以在接受答案後再次詢問，因此處理程序可能會針對一個Tool呼叫運行多次。
 
-`requestedSchema` 為伺服器所需資料提供結構：
+### 基於模式的輸入收集 {/* #schema-based-input-collection */}
+
+走`requestedSchema` to prompt for each field:
 
 ```typescript
-await mcpClient.elicitation.onRequest('interactiveServer', async request => {
-  const { properties, required = [] } = request.requestedSchema
-  const content: Record<string, any> = {}
+inputRequests: async ({ params }) => {
+  if (params.mode === 'url') return { action: 'decline' }
 
-  for (const [fieldName, fieldSchema] of Object.entries(properties || {})) {
-    const field = fieldSchema as any
-    const isRequired = required.includes(fieldName)
+  const { properties, required = [] } = params.requestedSchema
+  const content: Record<string, string | number | boolean> = {}
 
-    // Collect input based on field type and requirements
+  for (const [fieldName, fieldSchema] of Object.entries(properties)) {
     const value = await promptUser({
       name: fieldName,
-      title: field.title,
-      description: field.description,
-      type: field.type,
-      required: isRequired,
-      format: field.format,
-      enum: field.enum,
+      title: fieldSchema.title,
+      description: fieldSchema.description,
+      required: required.includes(fieldName),
     })
 
     if (value !== null) {
@@ -964,28 +1668,32 @@ await mcpClient.elicitation.onRequest('interactiveServer', async request => {
   }
 
   return { action: 'accept', content }
-})
+}
 ```
 
-### 最佳做法 {/* #best-practices */}
+### 最佳實踐 {/* #best-practices */}
 
-- **始終處理 elicitation**：呼叫可能使用 elicitation 的 Tool 前，先設定 handler
-- **驗證輸入**：檢查是否已提供必填欄位
-- **尊重使用者選擇**：妥善處理拒絕及取消回應
-- **清晰的 UI**：清楚顯示所要求的資料及原因
-- **安全性**：切勿自動接受索取敏感資料的要求
+* **預先配置處理程序**：它是伺服器定義的一部分，因此要求輸入的Tool永遠不會在沒有輸入的情況下運作。
+* **驗證輸入**：檢查是否提供了必填欄位。
+* **尊重用戶選擇**：優雅地處理拒絕和取消回覆。
+* **清晰的使用者介面**：明確要求提供哪些資訊以及原因。
+* **安全**：永遠不要自動接受敏感資訊的請求，並將 url 模式請求視為指向不受信任網站的連結。
 
-## OAuth 驗證 {/* #oauth-authentication */}
+## OAuth認證 {/* #oauth-authentication */}
 
-如要連接依照 [MCP Auth Specification](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization) 要求 OAuth 驗證的 MCP 伺服器，請使用 `MCPOAuthClientProvider`：
+用於連線到需要 OAuth 驗證的 MCP 伺服器[MCP 2026-07-28 authorization specification](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization), use the `MCPOAuthClientProvider`. The provider never registers a client at runtime: give it either `clientInformation` for a client pre-registered with the authorization server, or a [Client ID Metadata Document](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization/client-registration#client-id-metadata-documents) URL as `clientMetadataUrl`:
 
 ```typescript
 import { MCPClient, MCPOAuthClientProvider } from '@mastra/mcp'
 
 // Create an OAuth provider
+const clientMetadataUrl = 'https://app.example.com/oauth/client-metadata.json'
+
 const oauthProvider = new MCPOAuthClientProvider({
   redirectUrl: 'http://localhost:3000/oauth/callback',
+  clientMetadataUrl,
   clientMetadata: {
+    client_id: clientMetadataUrl,
     redirect_uris: ['http://localhost:3000/oauth/callback'],
     client_name: 'My MCP Client',
     grant_types: ['authorization_code', 'refresh_token'],
@@ -1008,18 +1716,26 @@ const client = new MCPClient({
 })
 ```
 
-每個伺服器均須使用各自的 `MCPOAuthClientProvider` 實例。Provider 在授權期間保留各伺服器的 session 及 credential 狀態，因此多個伺服器共用一個實例會令其流程互相覆寫。設定多個受保護伺服器時，請分別建立 Provider。
+該文件送達於`clientMetadataUrl` must contain the same `client_id`, `client_name`, and `redirect_uris`. For loopback callbacks, include every fallback URL returned by `getCallbackUrlCandidates()` in the hosted document. The URL is sent as the `client_id`; the provider never calls a registration endpoint, so an authorization server that accepts neither the metadata document nor a pre-registered `clientInformation` fails the flow explicitly. Configure exactly one identity: the constructor throws when both `clientInformation` and `clientMetadataUrl` are set.
 
-### 互動式瀏覽器驗證 {/* #interactive-browser-authentication */}
+保存的令牌`MCPOAuthClientProvider` are bound to the authorization server's validated `issuer`, and discovery state is persisted so the code exchange is only sent to the server that issued the redirect. The loopback callback also forwards the RFC 9207 `iss` parameter to the SDK, which rejects a mismatch before exchanging the authorization code.
 
-當伺服器因需要授權而拒絕連線時，用戶端會記錄 `'needs-auth'` 狀態，而非直接失敗。呼叫 `authenticate()` 即可完成流程。它會在 Provider 的 loopback 重新導向 URL 啟動一次性 callback 伺服器；如連接埠正在使用，便依序改用下一個連接埠。SDK 隨後在 runtime 執行探索及用戶端註冊。`onRedirectToAuthorization` 會收到授權 URL，讓應用程式在使用者的瀏覽器開啟。瀏覽器傳回授權碼後，token 交換便會完成：
+給每個伺服器自己的`MCPOAuthClientProvider` instance. A provider holds per-server session and credential state during authorization, so sharing one instance across multiple servers lets their flows overwrite each other. When configuring several protected servers, construct a separate provider for each. If those providers use the same persistent backend, give each provider a separate `OAuthStorage` namespace because storage mutation ordering is coordinated only within one provider instance.
+
+### 互動式瀏覽器身份驗證 {/* #interactive-browser-authentication */}
+
+當伺服器因為需要授權而拒絕連線時，客戶端會記錄一個`'needs-auth'` state instead of failing outright. Calling `authenticate()` completes the flow. It starts a one-shot callback server on the provider's loopback redirect URL, falling back to the next sequential ports when it's in use. The SDK then performs discovery and uses the configured client identity. `onRedirectToAuthorization` receives the authorization URL so your application can open it in the user's browser. The token exchange finishes after the browser returns the authorization code:
 
 ```typescript
 import { MCPClient, MCPOAuthClientProvider } from '@mastra/mcp'
 
+const clientMetadataUrl = 'https://app.example.com/oauth/client-metadata.json'
+
 const oauthProvider = new MCPOAuthClientProvider({
   redirectUrl: 'http://127.0.0.1:5533/oauth/callback',
+  clientMetadataUrl,
   clientMetadata: {
+    client_id: clientMetadataUrl,
     redirect_uris: ['http://127.0.0.1:5533/oauth/callback'],
     client_name: 'My MCP Client',
     grant_types: ['authorization_code', 'refresh_token'],
@@ -1049,15 +1765,15 @@ try {
 }
 ```
 
-同一伺服器的並行 `authenticate()` 呼叫會加入待處理流程。不同伺服器會各自驗證。如已儲存有效 token，呼叫會直接重新連線而不開啟瀏覽器。
+並行`authenticate()` calls for the same server join the pending flow. Different servers authenticate independently. With valid stored tokens the call reconnects without opening a browser.
 
-自行驅動流程的 host 可使用匯出的 `createOAuthCallbackServer` helper 擷取授權碼；它會綁定一次性 loopback 伺服器、驗證 OAuth `state` 參數，並以授權碼完成。由於它建立普通 HTTP 伺服器，因此只適用於本機 loopback 重新導向。使用 HTTPS 重新導向 URL 的 Web 應用程式必須自行託管 callback endpoint 並直接驅動 Provider，不應使用此 helper：
+驅動流量的主機可以透過匯出的內容來擷取授權程式碼`createOAuthCallbackServer` helper. It creates a one-shot loopback server that validates the OAuth `state` parameter before resolving with the code. Because the server uses plain HTTP, use it only for local loopback redirects. Web applications with an HTTPS redirect URL must host their own callback endpoint and drive the provider directly:
 
 ```typescript
 import { createOAuthCallbackServer, getCallbackUrlCandidates } from '@mastra/mcp'
 
-// getCallbackUrlCandidates() lists every URL the helper may bind, so register
-// all of them as redirect_uris during client registration to cover port fallback.
+// getCallbackUrlCandidates() lists every URL the helper may bind, so list all
+// of them as redirect_uris in your pre-registration or metadata document.
 const redirectUris = getCallbackUrlCandidates('http://127.0.0.1:5533/oauth/callback').map(url =>
   url.toString(),
 )
@@ -1069,16 +1785,16 @@ const server = await createOAuthCallbackServer({
 
 // server.url reflects the port actually bound — use it as the redirect_uri.
 try {
-  const { code } = await server.waitForCode()
-  // Exchange the code here.
+  const { code, iss } = await server.waitForCode()
+  // Exchange the code here, passing `iss` so the SDK validates the issuer.
 } finally {
   await server.close()
 }
 ```
 
-### 快速 Token Provider {/* #quick-token-provider */}
+### 快速代幣提供商 {/* #quick-token-provider */}
 
-如要測試，或你已有有效的 access token：
+用於測試或當您已經擁有有效的存取權杖時：
 
 ```typescript
 import { MCPClient, createSimpleTokenProvider } from '@mastra/mcp'
@@ -1089,6 +1805,7 @@ const provider = createSimpleTokenProvider('your-access-token', {
     redirect_uris: ['http://localhost:3000/callback'],
     client_name: 'Test Client',
   },
+  clientInformation: { client_id: 'test-client' },
 })
 
 const client = new MCPClient({
@@ -1101,9 +1818,9 @@ const client = new MCPClient({
 })
 ```
 
-### 自訂 Token 儲存空間 {/* #custom-token-storage */}
+### 自訂令牌存儲 {/* #custom-token-storage */}
 
-如要跨 session 持久儲存 token，請實作 `OAuthStorage` interface：
+對於跨會話的持久性令牌存儲，實現`OAuthStorage` interface. The provider stores tokens (both the latest set and one entry per authorization-server issuer), discovery state, and the PKCE verifier under string keys. The backend only needs a key-value contract:
 
 ```typescript
 import { MCPOAuthClientProvider, OAuthStorage } from '@mastra/mcp'
@@ -1140,15 +1857,16 @@ class DatabaseOAuthStorage implements OAuthStorage {
 const provider = new MCPOAuthClientProvider({
   redirectUrl: 'http://localhost:3000/callback',
   clientMetadata: {/* ... */},
+  clientInformation: { client_id: 'my-registered-client' },
   storage: new DatabaseOAuthStorage(db, 'user-123'),
 })
 ```
 
 ## 範例 {/* #examples */}
 
-### 靜態 Tool 設定 {/* #static-tool-configuration */}
+### 靜態Tool配置 {/* #static-tool-configuration */}
 
-如整個應用程式只會為這些 Tool 建立一個 MCP 伺服器連線，請使用 `listTools()` 並把 Tool 傳入 Agent：
+對於整個應用程式與 MCP 伺服器有單一連接的Tool，請使用`listTools()` and pass the tools to your agent:
 
 ```typescript
 import { MCPClient } from '@mastra/mcp'
@@ -1162,12 +1880,12 @@ const mcp = new MCPClient({
       env: {
         API_KEY: 'your-api-key',
       },
-      log: logMessage => {
+      logger: logMessage => {
         console.log(`[${logMessage.level}] ${logMessage.message}`)
       },
     },
     weather: {
-      url: new URL('http://localhost:8080/sse'),
+      url: new URL('http://localhost:8080/mcp'),
     },
   },
   timeout: 30000, // Global 30s timeout
@@ -1216,9 +1934,9 @@ async function checkWeatherPrompt() {
 checkWeatherPrompt()
 ```
 
-### 動態 toolset {/* #dynamic-toolsets */}
+### 動態Tool集 {/* #dynamic-toolsets */}
 
-如每位使用者都需要新的 MCP 連線，請使用 `listToolsets()`，並在呼叫 stream 或 generate 時加入 Tool：
+當您需要為每個使用者建立新的 MCP 連線時，請使用`listToolsets()` and add the tools when calling stream or generate:
 
 ```typescript
 import { Agent } from '@mastra/core/agent'
@@ -1244,7 +1962,7 @@ const mcp = new MCPClient({
       timeout: 20000, // Server-specific timeout
     },
     weather: {
-      url: new URL('http://localhost:8080/sse'),
+      url: new URL('http://localhost:8080/mcp'),
       requestInit: {
         headers: {
           Authorization: `Bearer user-123-token`,
@@ -1262,14 +1980,14 @@ const response = await agent.stream('How is AAPL doing and what is the weather?'
 
 ## 實例管理 {/* #instance-management */}
 
-`MCPClient` 類別內置記憶體洩漏防護，用於管理多個實例：
+這`MCPClient` class includes built-in memory leak prevention for managing multiple instances:
 
-1. 如建立多個設定相同但沒有 `id` 的實例，系統會拋出錯誤以防止記憶體洩漏
-1. 如需要多個設定相同的實例，請為每個實例提供獨有的 `id`
-1. 以相同設定重新建立實例前，請呼叫 `await configuration.disconnect()`
-1. 如只需要一個實例，可考慮把設定移至更高 scope，以免重複建立
+1. 建立具有相同配置的多個實例，無需`id` will throw an error to prevent memory leaks
+2. 如果您需要具有相同配置的多個實例，請提供唯一的`id` for each instance
+3. 稱呼`await configuration.disconnect()` before recreating an instance with the same configuration
+4. 如果您只需要一個實例，請考慮將配置移至更高的範圍以避免重新建立
 
-例如，如嘗試建立多個設定相同但沒有 `id` 的實例：
+例如，如果您嘗試建立具有相同配置的多個實例而不使用`id`:
 
 ```typescript
 // First instance - OK
@@ -1298,19 +2016,46 @@ const mcp4 = new MCPClient({
 
 ## 伺服器生命週期 {/* #server-lifecycle */}
 
-MCPClient 會妥善處理伺服器連線：
+MCPClient 優雅地處理伺服器連線：
 
-1. 自動管理多個伺服器的連線
-1. 妥善關閉伺服器，避免在開發期間出現錯誤訊息
-1. 中斷連線時妥善清理資源
+1. 多伺服器自動連線管理
+2.
+3. 斷開連線時正確清理資源
 
-## 使用自訂 fetch 處理 runtime 定義的驗證 {/* #using-custom-fetch-for-runtime-defined-authentication */}
+### 自行處理關機 {/* #handle-shutdown-yourself */}
 
-對於 HTTP 伺服器，你可提供自訂 `fetch` 函數來處理 runtime 定義的驗證或攔截要求，亦可處理其他自訂行為。需要在每個要求更新 token，或把傳入要求中的使用者 credential 轉送至 MCP 伺服器時，這尤其有用。
+`SIGINT`, `SIGTERM`, `SIGHUP`, and `beforeExit` that disconnect its servers and end the process. These hooks can interrupt your application's awaited cleanup, such as draining HTTP requests.
 
-自訂 `fetch` 函數會收到選用的第三個 `requestContext` 參數，讓你存取由 middleware 設定或在 Agent／Tool 執行期間傳入的 request scope 資料（例如驗證 cookie、bearer token）。初次連線 handshake 期間，`requestContext` 為 `null`。
+放`registerProcessHooks: false` to let your application own shutdown. Call `disconnect()` after requests that use the client have finished:
 
-提供 `fetch` 後，`requestInit`、`eventSourceInit` 及 `authProvider` 會變為選用，因為你可在自訂 fetch 函數內處理這些事項。
+```typescript
+import { MCPClient } from '@mastra/mcp'
+
+const mcp = new MCPClient({
+  servers: { weather: { url: new URL('https://example.com/mcp') } },
+  registerProcessHooks: false,
+})
+
+process.once('SIGTERM', async () => {
+  // Finish your application's cleanup before disconnecting the client.
+  await mcp.disconnect()
+  process.exit(0)
+})
+```
+
+設定每個選項`MCPClient` in the process before connecting. Once any client registers the default hooks, the global `SIGINT` and `SIGTERM` listeners remain until the process exits, even after `disconnect()`.
+
+禁用掛鉤後，您的應用程式負責關閉 MCP 連線。在 Mastra 伺服器中，協調`disconnect()` with your server's shutdown lifecycle so in-flight requests can finish using the client.
+
+## 使用自訂取得進行運行時定義的身份驗證 {/* #using-custom-fetch-for-runtime-defined-authentication */}
+
+對於 HTTP 伺服器，您可以提供自訂`fetch` function to handle runtime-defined authentication or request interception. It can also handle other custom behavior. This is particularly useful when you need to refresh tokens on each request or forward user credentials from the incoming request to the MCP server.
+
+習俗`fetch` function receives an optional third `requestContext` parameter, which provides access to request-scoped data (e.g., authentication cookies, bearer tokens) set by middleware or passed during agent/tool execution. The `requestContext` is `null` for requests that no tool call sends, such as `listTools()` and the connection handshake it opens. When a tool call opens the connection, either because a tool rebuilt with `toolsFromDefinitions()` or `toolFromDefinition()` connects on its first execution or because the call reconnects, the handshake receives that call's `requestContext`. Streams the connection keeps open afterward, such as the server-to-client event stream, keep using that same `requestContext`, and so do the client's replies to server requests on them, such as an answer to an input request. A request your own code starts from a server log or notification on those streams gets `null`.
+
+因此，對每個請求進行身份驗證的伺服器需要一個用於發現和Tool呼叫的憑證。以下範例在Tool呼叫提供以下資訊時轉送使用者的 cookie`requestContext`, and sends the app's own token when there's none, as in `listTools()`. Any request without a `requestContext` gets that token, so have the server limit it to discovery, for example listing tools but not calling them.
+
+什麼時候`fetch` is provided, `requestInit` and `authProvider` become optional, as you can handle these concerns within your custom fetch function.
 
 ```typescript
 const mcpClient = new MCPClient({
@@ -1319,10 +2064,15 @@ const mcpClient = new MCPClient({
       url: new URL('https://api.example.com/mcp'),
       fetch: async (url, init, requestContext) => {
         const headers = new Headers(init?.headers)
-        // Forward auth cookie from the incoming request
-        const cookie = requestContext?.get('cookie')
-        if (cookie) {
-          headers.set('cookie', cookie)
+        if (requestContext) {
+          // A tool call: forward the auth cookie from the incoming request
+          const cookie = requestContext.get('cookie')
+          if (cookie) {
+            headers.set('cookie', cookie)
+          }
+        } else {
+          // No requestContext, as in listTools(): a token the server only accepts for discovery
+          headers.set('authorization', `Bearer ${process.env.MCP_DISCOVERY_TOKEN}`)
         }
         return fetch(url, { ...init, headers })
       },
@@ -1344,13 +2094,11 @@ await agent.generate('Hello!', {
 })
 ```
 
-## 在自訂 fetch 內處理驗證失敗 {/* #handling-auth-failures-inside-custom-fetch */}
+如果伺服器僅接受每個使用者憑證，請跳過`listTools()` at startup. Build the catalog with [`listToolDefinitions()`](#listtooldefinitions) from a client that has a credential of its own, for example in a build step with a static `requestInit` header, and store it. At runtime, rebuild the tools with [`toolsFromDefinitions()`](#toolsfromdefinitions). Each rebuilt tool opens the connection on its first call, so the handshake carries that call's `requestContext`.
 
-驗證無法使用時，自訂 `fetch` 不應 `throw`。MCP SDK 的 Streamable HTTP 傳輸會在背景開啟長時間運行的 `GET /mcp`「獨立 listener」stream，以接收伺服器推送的通知。該 stream 上的錯誤會以指數退避重試；拋出錯誤的 `fetch` 或正常關閉的 stream 可能導致無限重新連線循環，約每秒嘗試一次。
+## 處理自訂取得中的身份驗證失敗 {/* #handling-auth-failures-inside-custom-fetch */}
 
-請改為傳回合成的 `Response`。[MCP Streamable HTTP specification](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports) 把 `405 Method Not Allowed` 定義為伺服器不提供 GET SSE stream 時傳回的訊號，而 SDK 會將它視為終止狀態，以正常停止 listener。伺服器不推送通知時，可藉此停用 listener。
-
-以下模式會在 POST 要求等待 auth token，將其附加至傳出 header，並以合成的 405 提前終止 GET listener：
+客製化`fetch` shouldn't `throw` when authentication is unavailable. JSON-RPC requests such as `tools/call` are `POST`s, and the SDK surfaces a non-2xx response as an error to the caller of `listTools()`, `tools/call` and so on, which is the behavior you want. A thrown `fetch` is reported the same way but loses the server's status and body. On a 2025-11-25 server, the client also sends a `GET` with no body after the handshake to open the server-to-client event stream, so check `init.method` rather than assuming a `POST` body. Long-lived streams are reopened after a failure: the `subscriptions/listen` `POST` the client opens for `resources.subscribe()` and the `GET` event stream if it drops. An unauthenticated `subscriptions/listen` stream can loop. Wait for the token, then forward the request:
 
 ```typescript
 async function waitForToken(timeoutMs = 5000): Promise<string | null> {
@@ -1363,20 +2111,9 @@ const mcpClient = new MCPClient({
     apiServer: {
       url: new URL('https://api.example.com/mcp'),
       fetch: async (url, init) => {
-        const method = (init?.method || 'GET').toUpperCase()
-
-        // The SDK opens a background GET stream for server-pushed notifications.
-        // If your server does not use it, short-circuit with 405 to stop reconnect attempts.
-        if (method === 'GET') {
-          return new Response(null, { status: 405, statusText: 'Method Not Allowed' })
-        }
-
-        // POST: wait for the token, then forward the request with an Authorization header.
         const token = await waitForToken()
         if (!token) {
           // Forward the request without a token and let the server reject it.
-          // The SDK surfaces non-2xx POST responses as errors to the caller of
-          // tools/list, tools/call, etc., which is the desired behavior here.
           return fetch(url, init)
         }
 
@@ -1389,58 +2126,29 @@ const mcpClient = new MCPClient({
 })
 ```
 
-只應在伺服器不向用戶端推送通知時，才為 GET listener 傳回 `405`。如伺服器使用獨立 GET stream，亦應在 `GET` 要求附加 auth token，並讓要求通過。
+## 發送請求標頭 {/* #sending-request-headers */}
 
-## 使用 SSE 要求 header {/* #using-sse-request-headers */}
-
-使用舊版 SSE MCP 傳輸時，由於 MCP SDK 的一項程式錯誤，你必須同時設定 `requestInit` 及 `eventSourceInit`。你亦可改用自訂 `fetch` 函數；POST 要求及 SSE 連線都會自動使用它：
+靜態標頭進入`requestInit`. They're sent on every request, including the `subscriptions/listen` stream:
 
 ```ts
-// Option 1: Using requestInit and eventSourceInit (required for SSE)
-const sseClient = new MCPClient({
+const client = new MCPClient({
   servers: {
     exampleServer: {
-      url: new URL('https://your-mcp-server.com/sse'),
-      // Note: requestInit alone isn't enough for SSE
+      url: new URL('https://your-mcp-server.com/mcp'),
       requestInit: {
         headers: {
           Authorization: 'Bearer your-token',
         },
-      },
-      // This is also required for SSE connections with custom headers
-      eventSourceInit: {
-        fetch(input: Request | URL | string, init?: RequestInit) {
-          const headers = new Headers(init?.headers || {})
-          headers.set('Authorization', 'Bearer your-token')
-          return fetch(input, {
-            ...init,
-            headers,
-          })
-        },
-      },
-    },
-  },
-})
-
-// Option 2: Using custom fetch (simpler, works for both Streamable HTTP and SSE)
-const sseClientWithFetch = new MCPClient({
-  servers: {
-    exampleServer: {
-      url: new URL('https://your-mcp-server.com/sse'),
-      fetch: async (url, init) => {
-        const headers = new Headers(init?.headers || {})
-        headers.set('Authorization', 'Bearer your-token')
-        return fetch(url, {
-          ...init,
-          headers,
-        })
       },
     },
   },
 })
 ```
 
-## 相關資料 {/* #related-information */}
+使用自訂`fetch` when the value changes per request.
 
-- 如要建立 MCP 伺服器，請參閱 [MCPServer 文件](./mcp-server)。
-- 如要進一步了解 Model Context Protocol，請參閱 [@modelcontextprotocol/sdk 文件](https://github.com/modelcontextprotocol/typescript-sdk)。
+## 相關資訊 {/* #related-information */}
+
+* 有關建立 MCP 伺服器的信息，請參閱[MCPServer documentation](./mcp-server).
+* 遷移自`@mastra/mcp` 1.x: [Migrate @mastra/mcp from v1 to v2](/reference/migrations/mcp-v2).
+* 有關模型上下文協議的更多信息，請參閱[@modelcontextprotocol/sdk documentation](https://github.com/modelcontextprotocol/typescript-sdk).

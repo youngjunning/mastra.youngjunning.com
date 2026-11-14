@@ -14,7 +14,7 @@ export default defineConfig({
     timeout: 10_000,
   },
   use: {
-    baseURL: `http://127.0.0.1:${PORT}`,
+    baseURL: `http://localhost:${PORT}`,
     trace: 'on-first-retry',
   },
   projects: [
@@ -42,8 +42,8 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: `node scripts/serve-build.mjs --port ${PORT} --host 0.0.0.0`,
-    url: `http://127.0.0.1:${PORT}/docs/`,
+    command: `pnpm serve --port ${PORT} --host 0.0.0.0`,
+    url: `http://localhost:${PORT}/docs/`,
     reuseExistingServer: true,
     timeout: 120_000,
   },

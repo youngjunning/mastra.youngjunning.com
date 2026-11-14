@@ -1,0 +1,591 @@
+---
+title: "Custom auth provider | Auth"
+description: "Create a custom Mastra authentication provider by extending MastraAuthProvider, with token validation and user authorization protecting selected server routes."
+packages:
+  - "@mastra/core"
+  - "@mastra/auth"
+---
+
+# 自定义身份验证提供者
+
+自定义身份验证提供程序允许您对内置提供程序未涵盖的身份系统实施身份验证。延长`MastraAuthProvider`与任何身份验证系统集成的基类。
+
+## 概述 {/* #overview */}
+
+身份验证提供程序处理传入请求的身份验证和授权：
+
+* 令牌验证和用户提取
+* 用户授权逻辑
+* 基于路径的访问控制（公共/受保护的路由）
+
+创建自定义身份验证提供程序以支持：
+
+* 自托管身份系统
+* 自定义令牌格式或验证逻辑
+* 专业授权规则
+* 企业 SSO 集成
+
+## 创建自定义身份验证提供程序 {/* #creating-a-custom-auth-provider */}
+
+延长`MastraAuthProvider` class and implement the required methods:
+
+```typescript
+import { MastraAuthProvider } from '@mastra/core/server'
+import type { MastraAuthProviderOptions, MastraAuthRequest } from '@mastra/core/server'
+
+// Define your user type
+type MyUser = {
+  id: string
+  email: string
+  roles: string[]
+}
+
+// Define options for your provider
+interface MyAuthOptions extends MastraAuthProviderOptions<MyUser> {
+  apiUrl?: string
+  apiKey?: string
+}
+
+export class MyAuthProvider extends MastraAuthProvider<MyUser> {
+  protected apiUrl: string
+  protected apiKey: string
+
+  constructor(options?: MyAuthOptions) {
+    // Call super with a name for logging/debugging
+    super({ name: options?.name ?? 'my-auth' })
+
+    const apiUrl = options?.apiUrl ?? process.env.MY_AUTH_API_URL
+    const apiKey = options?.apiKey ?? process.env.MY_AUTH_API_KEY
+
+    if (!apiUrl || !apiKey) {
+      throw new Error(
+        'Auth API URL and API key are required. Provide them in options or set MY_AUTH_API_URL and MY_AUTH_API_KEY environment variables.',
+      )
+    }
+
+    this.apiUrl = apiUrl
+    this.apiKey = apiKey
+
+    // Register any custom options (authorizeUser override, public/protected paths)
+    this.registerOptions(options)
+  }
+
+  /**
+   * Verify the token and return the user
+   * Return null if authentication fails
+   */
+  async authenticateToken(token: string, request: MastraAuthRequest): Promise<MyUser | null> {
+    try {
+      const response = await fetch(`${this.apiUrl}/verify`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-API-Key': this.apiKey,
+        },
+        body: JSON.stringify({ token }),
+      })
+
+      if (!response.ok) {
+        return null
+      }
+
+      const user = await response.json()
+      return user
+    } catch (error) {
+      console.error('Token verification failed:', error)
+      return null
+    }
+  }
+
+  /**
+   * Check if the authenticated user is authorized
+   * Return true to allow access, false to deny
+   */
+  async authorizeUser(user: MyUser, request: MastraAuthRequest): Promise<boolean> {
+    // Basic authorization: user must exist and have an ID
+    return !!user?.id
+  }
+}
+```
+
+## 所需方法 {/* #required-methods */}
+
+### `authenticateToken()` {/* #authenticatetoken */}
+
+验证传入的令牌并返回用户对象（如果有效），或者`null` if authentication fails.
+
+```typescript oxfmt:false
+async authenticateToken(token: string, request: MastraAuthRequest): Promise<TUser | null>
+```
+
+|参数|类型 |描述 |
+| - | - | - |
+|`token` | `string` | The bearer token extracted from the `Authorization` header |
+| `request` | `MastraAuthRequest` | The incoming request. Read headers with `getRequestHeader()` and the underlying web `Request` with `getWebRequest()`, both exported from `@mastra/core/server` |
+
+**退货**：如果身份验证成功，则用户对象，或者`null` if it fails.
+
+令牌会自动从`Authorization: Bearer <token>` header. If you need to access other headers or cookies, use the `request` parameter.
+
+### `authorizeUser()` {/* #authorizeuser */}
+
+确定是否允许经过身份验证的用户访问资源。
+
+```typescript oxfmt:false
+async authorizeUser(user: TUser, request: MastraAuthRequest): Promise<boolean> | boolean
+```
+
+|参数|类型 |描述 |
+| - | - | - |
+|`user` | `TUser` | The user object returned by `authenticateToken` |
+| `request` | `MastraAuthRequest` | The incoming request |
+
+**退货**: `true` to allow access, `false` to deny (returns 403 Forbidden).
+
+## 可选方法 {/* #optional-methods */}
+
+### `toMastraUser()` {/* #tomastrauser */}
+
+将特定于Provider的用户对象标准化为稳定的`MastraUser` shape that dynamic configuration callbacks (such as dynamic `instructions`, `model`, or `tools`) receive as the optional `user` argument.
+
+```typescript oxfmt:false
+toMastraUser(user: TUser): MastraUser
+```
+
+|参数|类型 |描述 |
+| - | - | - |
+|`user` | `TUser` | The user object returned by `authenticateToken` |
+
+**退货**: 一个`MastraUser` object: `{ id: string, name?: string, email?: string, avatarUrl?: string, role?: string }`.
+
+默认实现选择`id` from `id`, `sub`, or `userId`, `avatarUrl` from `avatarUrl` or `picture`, and passes `name`, `email`, and `role` through when present. Override it when your user type stores these fields elsewhere:
+
+```typescript {8-14} title="src/mastra/auth/provider.ts"
+import type { MastraUser } from '@mastra/core/auth'
+
+export class MyAuthProvider extends MastraAuthProvider<MyUser> {
+  async authenticateToken(token: string) {
+    /* ... */
+  }
+
+  toMastraUser(user: MyUser): MastraUser {
+    return {
+      id: user.accountId,
+      name: user.profile.displayName,
+      role: user.permissions.primaryRole,
+    }
+  }
+}
+```
+
+如果没有`id` can be derived from the user object, the normalized user is omitted and callbacks receive `user: undefined`. The raw user object remains available on the request context.
+
+## MCP OAuth 的可选方法 {/* #optional-methods-for-mcp-oauth */}
+
+这[built-in MCP server](/docs/server/mcp#oauth-discovery) uses two optional methods for OAuth discovery and audience checks.
+
+`getOAuthMetadata()`返回 MCP 客户端应使用的授权服务器和可选范围。`server.mcp.oauth.authorizationServers` and `server.mcp.oauth.scopesSupported` take precedence.
+
+```typescript oxfmt:false
+getOAuthMetadata(): { authorizationServers?: string[]; scopesSupported?: string[] } | undefined
+```
+
+`verifyAudience()`运行于`/api/mcp` when `server.mcp.oauth.resource` is set. It receives the value `authenticateToken()` returned and the `resource` URL, and returns whether the token was issued for it. Returning `false` rejects the request with a `401`. Without this method the audience isn't checked, and Mastra logs a warning.
+
+```typescript oxfmt:false
+verifyAudience(user: TUser, audience: string): boolean | Promise<boolean>
+```
+
+对于 JWT Provider来说，其`authenticateToken()` returns the verified payload:
+
+```typescript oxfmt:false
+getOAuthMetadata() {
+  return { authorizationServers: ['https://auth.example.com/'] }
+}
+
+verifyAudience(user: JwtPayload, audience: string) {
+  return Array.isArray(user.aud) ? user.aud.includes(audience) : user.aud === audience
+}
+```
+
+## 配置选项 {/* #configuration-options */}
+
+这`MastraAuthProviderOptions` interface supports these options:
+
+|选项 |类型 |描述 |
+| - | - | - |
+|`name` | `string` | Provider name for logging/debugging |
+| `authorizeUser` | `(user, request) => Promise<boolean> \| boolean` | Custom authorization function |
+| `protected` | `(RegExp \| string \| [string, Methods \| Methods[]])[]` | Paths that require authentication |
+| `public` | `(RegExp \| string \| [string, Methods \| Methods[]])[]` | Paths that bypass authentication, unless the route sets `requiresAuth: true` |
+
+### 路径模式 {/* #path-patterns */}
+
+使用模式匹配配置哪些路径需要身份验证：
+
+```typescript
+const auth = new MyAuthProvider({
+  // Paths that require authentication
+  protected: [
+    '/api/*', // Wildcard: all /api routes
+    '/admin/*', // Wildcard: all /admin routes
+    /^\/secure\/.*/, // Regex pattern
+  ],
+
+  // Paths that bypass authentication
+  public: [
+    '/health', // Exact match
+    '/api/status', // Exact match
+    ['/api/webhook', 'POST'], // Only POST requests to /api/webhook
+  ],
+})
+```
+
+## 使用您的身份验证提供者 {/* #using-your-auth-provider */}
+
+向 Mastra 实例注册您的自定义身份验证提供程序：
+
+```typescript
+import { Mastra } from '@mastra/core'
+import { MyAuthProvider } from './my-auth-provider'
+
+export const mastra = new Mastra({
+  server: {
+    auth: new MyAuthProvider({
+      apiUrl: process.env.MY_AUTH_API_URL,
+      apiKey: process.env.MY_AUTH_API_KEY,
+    }),
+  },
+})
+```
+
+## 辅助实用程序 {/* #helper-utilities */}
+
+这`@mastra/auth` package provides utilities for common token verification patterns:
+
+### 智威汤逊验证 {/* #jwt-verification */}
+
+```typescript
+import { verifyHmac, verifyJwks, decodeToken, getTokenIssuer } from '@mastra/auth'
+
+// Verify HMAC-signed JWT
+const payload = await verifyHmac(token, 'your-secret-key')
+
+// Verify with JWKS (for OAuth providers)
+const payload = await verifyJwks(token, 'https://provider.com/.well-known/jwks.json')
+
+// Decode without verification (for inspection)
+const decoded = await decodeToken(token)
+
+// Get the issuer from a decoded token
+const issuer = getTokenIssuer(decoded)
+```
+
+### 示例：基于 JWKS 的Provider {/* #example-jwks-based-provider */}
+
+```typescript
+import { MastraAuthProvider } from '@mastra/core/server'
+import type { MastraAuthProviderOptions } from '@mastra/core/server'
+import { verifyJwks } from '@mastra/auth'
+import type { JwtPayload } from '@mastra/auth'
+
+type MyUser = JwtPayload
+
+interface MyJwksAuthOptions extends MastraAuthProviderOptions<MyUser> {
+  jwksUri?: string
+  issuer?: string
+}
+
+export class MyJwksAuth extends MastraAuthProvider<MyUser> {
+  protected jwksUri: string
+  protected issuer: string
+
+  constructor(options?: MyJwksAuthOptions) {
+    super({ name: options?.name ?? 'my-jwks-auth' })
+
+    const jwksUri = options?.jwksUri ?? process.env.MY_JWKS_URI
+    const issuer = options?.issuer ?? process.env.MY_AUTH_ISSUER
+
+    if (!jwksUri) {
+      throw new Error('JWKS URI is required')
+    }
+
+    this.jwksUri = jwksUri
+    this.issuer = issuer ?? ''
+
+    this.registerOptions(options)
+  }
+
+  async authenticateToken(token: string): Promise<MyUser | null> {
+    try {
+      const payload = await verifyJwks(token, this.jwksUri)
+
+      // Optionally validate issuer
+      if (this.issuer && payload.iss !== this.issuer) {
+        return null
+      }
+
+      return payload
+    } catch {
+      return null
+    }
+  }
+
+  async authorizeUser(user: MyUser): Promise<boolean> {
+    // Check token hasn't expired
+    if (user.exp && user.exp * 1000 < Date.now()) {
+      return false
+    }
+    return !!user.sub
+  }
+}
+```
+
+## 自定义授权逻辑 {/* #custom-authorization-logic */}
+
+通过提供自定义权限来覆盖默认授权`authorizeUser` function:
+
+```typescript
+const auth = new MyAuthProvider({
+  apiUrl: process.env.MY_AUTH_API_URL,
+  apiKey: process.env.MY_AUTH_API_KEY,
+
+  // Custom authorization: require admin role for all requests
+  async authorizeUser(user, request) {
+    return user.roles.includes('admin')
+  },
+})
+```
+
+### 基于角色的授权 {/* #role-based-authorization */}
+
+```typescript
+import { getWebRequest } from '@mastra/core/server'
+
+const auth = new MyAuthProvider({
+  async authorizeUser(user, request) {
+    const webRequest = getWebRequest(request)
+    if (!webRequest) {
+      return false
+    }
+
+    const path = new URL(webRequest.url).pathname
+    const method = webRequest.method
+
+    // Admin routes require admin role
+    if (path.startsWith('/admin/')) {
+      return user.roles.includes('admin')
+    }
+
+    // Write operations require write role
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+      return user.roles.includes('write') || user.roles.includes('admin')
+    }
+
+    // Read operations allowed for all authenticated users
+    return true
+  },
+})
+```
+
+## 测试自定义身份验证提供程序 {/* #testing-custom-auth-providers */}
+
+使用 Vitest 的测试结构示例：
+
+```typescript
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { MyAuthProvider } from './my-auth-provider'
+
+// Mock fetch for API calls
+global.fetch = vi.fn()
+
+describe('MyAuthProvider', () => {
+  const mockOptions = {
+    apiUrl: 'https://auth.example.com',
+    apiKey: 'test-api-key',
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  describe('initialization', () => {
+    it('should initialize with provided options', () => {
+      const auth = new MyAuthProvider(mockOptions)
+      expect(auth).toBeInstanceOf(MyAuthProvider)
+    })
+
+    it('should throw error when required options are missing', () => {
+      expect(() => new MyAuthProvider({})).toThrow('Auth API URL and API key are required')
+    })
+  })
+
+  describe('authenticateToken', () => {
+    it('should return user when token is valid', async () => {
+      const mockUser = { id: 'user123', email: 'test@example.com', roles: ['read'] }
+      ;(fetch as any).mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(mockUser),
+      })
+
+      const auth = new MyAuthProvider(mockOptions)
+      const result = await auth.authenticateToken('valid-token', {} as any)
+
+      expect(fetch).toHaveBeenCalledWith(
+        'https://auth.example.com/verify',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ token: 'valid-token' }),
+        }),
+      )
+      expect(result).toEqual(mockUser)
+    })
+
+    it('should return null when token is invalid', async () => {
+      ;(fetch as any).mockResolvedValue({ ok: false })
+
+      const auth = new MyAuthProvider(mockOptions)
+      const result = await auth.authenticateToken('invalid-token', {} as any)
+
+      expect(result).toBeNull()
+    })
+  })
+
+  describe('authorizeUser', () => {
+    it('should return true when user has valid id', async () => {
+      const auth = new MyAuthProvider(mockOptions)
+      const result = await auth.authorizeUser(
+        { id: 'user123', email: 'test@example.com', roles: [] },
+        {} as any,
+      )
+
+      expect(result).toBe(true)
+    })
+
+    it('should return false when user has no id', async () => {
+      const auth = new MyAuthProvider(mockOptions)
+      const result = await auth.authorizeUser(
+        { id: '', email: 'test@example.com', roles: [] },
+        {} as any,
+      )
+
+      expect(result).toBe(false)
+    })
+  })
+
+  describe('custom authorization', () => {
+    it('should use custom authorizeUser when provided', async () => {
+      const auth = new MyAuthProvider({
+        ...mockOptions,
+        authorizeUser: user => user.roles.includes('admin'),
+      })
+
+      const adminUser = { id: 'user123', email: 'admin@example.com', roles: ['admin'] }
+      const regularUser = { id: 'user456', email: 'user@example.com', roles: ['read'] }
+
+      expect(await auth.authorizeUser(adminUser, {} as any)).toBe(true)
+      expect(await auth.authorizeUser(regularUser, {} as any)).toBe(false)
+    })
+  })
+
+  describe('route configuration', () => {
+    it('should store public routes configuration', () => {
+      const publicRoutes = ['/health', '/api/status']
+      const auth = new MyAuthProvider({
+        ...mockOptions,
+        public: publicRoutes,
+      })
+
+      expect(auth.public).toEqual(publicRoutes)
+    })
+
+    it('should store protected routes configuration', () => {
+      const protectedRoutes = ['/api/*', '/admin/*']
+      const auth = new MyAuthProvider({
+        ...mockOptions,
+        protected: protectedRoutes,
+      })
+
+      expect(auth.protected).toEqual(protectedRoutes)
+    })
+  })
+})
+```
+
+## 错误处理 {/* #error-handling */}
+
+提供常见故障场景的描述性错误：
+
+```typescript
+export class MyAuthProvider extends MastraAuthProvider<MyUser> {
+  constructor(options?: MyAuthOptions) {
+    super({ name: options?.name ?? 'my-auth' })
+
+    const apiUrl = options?.apiUrl ?? process.env.MY_AUTH_API_URL
+    const apiKey = options?.apiKey ?? process.env.MY_AUTH_API_KEY
+
+    if (!apiUrl) {
+      throw new Error(
+        'Missing MY_AUTH_API_URL. Set the environment variable or pass apiUrl in options.',
+      )
+    }
+
+    if (!apiKey) {
+      throw new Error(
+        'Missing MY_AUTH_API_KEY. Set the environment variable or pass apiKey in options.',
+      )
+    }
+
+    this.apiUrl = apiUrl
+    this.apiKey = apiKey
+    this.registerOptions(options)
+  }
+
+  async authenticateToken(token: string): Promise<MyUser | null> {
+    if (!token || typeof token !== 'string') {
+      return null // Immediate safe fail
+    }
+
+    try {
+      const response = await fetch(`${this.apiUrl}/verify`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-API-Key': this.apiKey,
+        },
+        body: JSON.stringify({ token }),
+      })
+
+      if (!response.ok) {
+        return null
+      }
+
+      return await response.json()
+    } catch (error) {
+      // Log error for debugging, but don't expose details to client
+      console.error('Auth verification error:', error)
+      return null
+    }
+  }
+}
+```
+
+## 内置Provider {/* #built-in-providers */}
+
+Mastra 包含这些身份验证提供程序作为参考实现：
+
+* **MastraJwtAuth**：使用 HMAC 密钥进行简单的 JWT 验证（`@mastra/auth`)
+* **MastraAuthClerk**: 职员认证（`@mastra/auth-clerk`)
+* **MastraAuthAuth0**：Auth0认证（`@mastra/auth-auth0`)
+* **MastraAuthSupabase**：Supabase 身份验证（`@mastra/auth-supabase`)
+* **MastraAuthFirebase**：Firebase 身份验证（`@mastra/auth-firebase`)
+* **MastraAuthWorkos**：WorkOS 身份验证（`@mastra/auth-workos`)
+* **MastraAuthBetterAuth**：更好的身份验证集成（`@mastra/auth-better-auth`)
+* **简单验证**：用于开发的令牌到用户映射（`@mastra/core/server`)
+
+请参阅[source code](https://github.com/mastra-ai/mastra/tree/main/auth) for implementation details.
+
+## 有关的 {/* #related */}
+
+* [身份验证概述](/docs/auth/overview)：身份验证概念和配置
+* [自定义 API 路由](/docs/server/custom-api-routes)：控制自定义端点上的身份验证

@@ -1,15 +1,15 @@
 ---
-title: "參考：voice.connect() | Voice"
-description: "實時語音 Provider 所提供 connect() 方法的文件；此方法會為語音對語音通訊建立連線。"
+title: "Reference: voice.connect() | Voice"
+description: "The connect() method establishes a WebSocket or WebRTC connection for real-time speech-to-speech communication."
 packages:
   - "@mastra/core"
   - "@mastra/node-speaker"
   - "@mastra/voice-openai-realtime"
 ---
 
-# voice.connect()
+# 語音.connect()
 
-`connect()` 方法會建立 WebSocket 或 WebRTC 連線，以進行實時語音對語音通訊。使用 `send()` 或 `answer()` 等其他實時功能前，必須先呼叫此方法。
+這`connect()`方法建立 WebSocket 或 WebRTC 連線以進行即時語音到語音通訊。在使用其他即時功能（例如`send()`或者`answer()`.
 
 ## 使用範例 {/* #usage-example */}
 
@@ -18,27 +18,14 @@ import { OpenAIRealtimeVoice } from '@mastra/voice-openai-realtime'
 import Speaker from '@mastra/node-speaker'
 
 const speaker = new Speaker({
-  sampleRate: 24100, // Audio sample rate in Hz - standard for high-quality audio on MacBook Pro
-  channels: 1, // Mono audio output (as opposed to stereo which would be 2)
-  bitDepth: 16, // Bit depth for audio quality - CD quality standard (16-bit resolution)
+  sampleRate: 24000,
+  channels: 1,
+  bitDepth: 16,
 })
 
-// Initialize a real-time voice provider
 const voice = new OpenAIRealtimeVoice({
-  realtimeConfig: {
-    model: 'gpt-5.1-realtime',
-    apiKey: process.env.OPENAI_API_KEY,
-    options: {
-      sessionConfig: {
-        turn_detection: {
-          type: 'server_vad',
-          threshold: 0.6,
-          silence_duration_ms: 1200,
-        },
-      },
-    },
-  },
-  speaker: 'alloy', // Default voice
+  apiKey: process.env.OPENAI_API_KEY,
+  speaker: 'alloy',
 })
 // Connect to the real-time service
 await voice.connect()
@@ -46,71 +33,87 @@ await voice.connect()
 voice.on('speaker', stream => {
   stream.pipe(speaker)
 })
-// With connection options
-await voice.connect({
-  timeout: 10000, // 10 seconds timeout
-  reconnect: true,
-})
 ```
 
 ## 參數 {/* #parameters */}
 
 <PropertiesTable
   content={[
-  {
-    name: 'options',
-    type: 'Record<string, unknown>',
-    description: 'Provider 專屬的連線選項',
-    isOptional: true,
-  },
+{
+  name: 'options',
+  type: 'Record<string, unknown>',
+  description: 'Provider-specific connection options',
+  isOptional: true,
+},
 ]}
 />
 
 ## 傳回值 {/* #return-value */}
 
-傳回 `Promise<void>`，並在成功建立連線後 resolve。
+返回一個`Promise<void>` that resolves when the connection is successfully established.
 
-## Provider 專屬選項 {/* #provider-specific-options */}
+## 特定於提供者的選項 {/* #provider-specific-options */}
 
-每個實時語音 Provider 可為 `connect()` 方法支援不同選項：
+連線配置取決於即時語音提供者。
 
-### OpenAI Realtime {/* #openai-realtime */}
+### OpenAI 即時 {/* #openai-realtime */}
+
+`connect()`接受可選的`requestContext` for tool execution:
 
 <PropertiesTable
   content={[
-  {
-    name: 'options',
-    type: 'Options',
-    description: '設定選項。',
-    isOptional: true,
-    properties: [
-      {
-        type: 'Options',
-        parameters: [
-          {
-            name: 'timeout',
-            type: 'number',
-            description: '連線逾時時間（毫秒）',
-            isOptional: true,
-            defaultValue: '30000',
-          },
-          {
-            name: 'reconnect',
-            type: 'boolean',
-            description: '連線中斷時是否自動重新連線',
-            isOptional: true,
-            defaultValue: 'false',
-          },
-        ],
-      },
-    ],
-  },
+{
+  name: 'options.requestContext',
+  type: 'RequestContext',
+  description: 'Runtime context passed to tools called during the session.',
+  isOptional: true,
+},
 ]}
 />
 
-## 配合 `CompositeVoice` 使用 {/* #using-with-compositevoice */}
+看[Request context](/docs/server/request-context) for how to populate runtime values.
 
-使用 `CompositeVoice` 時，`connect()` 方法會委派給已設定的實時 Provider：
+放`connectTimeoutMs` in the `OpenAIRealtimeVoice` constructor, not in the `connect()` call:
+
+<PropertiesTable
+  content={[
+{
+  name: 'connectTimeoutMs',
+  type: 'number',
+  description:
+    'Connection handshake deadline in milliseconds. Must be a positive, finite number no greater than 2,147,483,647. Applies only to connection setup, not to an established session.',
+  isOptional: true,
+  defaultValue: '15000',
+},
+]}
+/>
+
+## 連線失敗 {/* #connection-failures */}
+
+對於 OpenAI Realtime，`connect()` waits for both the WebSocket to open and the server to create a session. It rejects if the connection fails, the server reports an error during the handshake, or the socket closes before the session is ready. A silent handshake times out after 15,000 milliseconds by default.
+
+直接捕獲連線失敗。一個`error` event listener doesn't replace handling the rejected promise:
+
+```typescript
+import { OpenAIRealtimeVoice } from '@mastra/voice-openai-realtime'
+
+const voice = new OpenAIRealtimeVoice({
+  apiKey: process.env.OPENAI_API_KEY,
+  connectTimeoutMs: 30_000,
+})
+
+try {
+  await voice.connect()
+} catch (error) {
+  console.error('Could not connect to the realtime service:', error)
+}
+```
+
+失敗的握手將關閉其套接字並清除其掛起的等待。您可以重試`connect()` on the same instance.
+
+## 與使用`CompositeVoice` {/* #using-with-compositevoice */}
+
+使用時`CompositeVoice`, the `connect()` method forwards its options to the configured real-time provider. It throws if no real-time provider is configured:
 
 ```typescript
 import { CompositeVoice } from '@mastra/core/voice'
@@ -123,18 +126,18 @@ const voice = new CompositeVoice({
 await voice.connect()
 ```
 
-## 注意事項 {/* #notes */}
+## 筆記 {/* #notes */}
 
-- 此方法只由支援語音對語音功能的實時語音 Provider 實作
-- 如在不支援此功能的語音 Provider 上呼叫，系統會記錄警告並立即 resolve
-- 使用 `send()` 或 `answer()` 等其他實時方法前，必須先建立連線
-- 使用完語音 instance 後，請呼叫 `close()` 以妥善清理資源
-- 部分 Provider 可能會在連線中斷時自動重新連線，實際行為視乎其實作方式
-- 連線錯誤通常會作為 exception 拋出，應將其 catch 並處理
+* 此方法僅由支援語音轉語音功能的即時語音提供者實現
+* 繼承基礎的提供者`connect()` implementation log a debug message and resolve without establishing a connection
+* 在使用其他實時方法（例如`send()` or `answer()`
+* 完成語音實例後，請致電`close()` to properly clean up resources
+* 某些提供者可能會在連接遺失時自動重新連接，具體取決於其實施情況
+* 連接錯誤通常會作為異常拋出，應該捕獲和處理
 
 ## 相關方法 {/* #related-methods */}
 
-- [voice.send()](./voice.send)：將音訊資料傳送至語音 Provider
-- [voice.answer()](./voice.answer)：觸發語音 Provider 作出回應
-- [voice.close()](./voice.close)：中斷與實時服務的連線
-- [voice.on()](./voice.on)：為語音事件註冊事件 listener
+* [語音.send()](./voice.send)：向語音提供者發送音訊數據
+* [語音.answer()](./voice.answer)：觸發語音提供者回應
+* [語音.close()](./voice.close)：斷開即時服務
+* [語音.on()](./voice.on)：註冊語音事件的事件監聽器

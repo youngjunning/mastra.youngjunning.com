@@ -1,0 +1,117 @@
+---
+title: "Migration: AI SDK v4 to v5 | Migration Guide"
+description: "Follow the official AI SDK v5 Migration Guide for all AI SDK core breaking changes, package updates, and API changes."
+---
+
+# 從 AI SDK v4 遷移到 v5
+
+正在尋找集成文檔？看[Using AI SDK](/integrations/agentic-ui/ai-sdk-ui).
+
+關注官方[AI SDK v5 Migration Guide](https://v5.ai-sdk.dev/docs/migration-guides/migration-guide-5-0) for all AI SDK core breaking changes, package updates, and API changes.
+
+本指南僅涵蓋遷移的 Mastra 特定方面。
+
+* **資料相容性**：如果從 v5 降級到 v4，以 v5 格式儲存的新資料將不再有效
+* **備份推薦**：保留升級到 v5 之前的資料庫備份
+
+## 記憶體和儲存 {/* #memory-and-storage */}
+
+Mastra 使用其內部自動處理 AI SDK v4 數據`MessageList` class, which manages format conversion, including v4 to v5. No database migrations are required. Your existing messages are translated on the fly and continue working after you upgrade.
+
+## 訊息格式轉換 {/* #message-format-conversion */}
+
+如果您需要手動在 AI SDK 和 Mastra 格式之間轉換訊息，請使用`convertMessages()` utility:
+
+```typescript
+import { convertMessages } from '@mastra/core/agent'
+
+// Convert AI SDK v4 messages to v5
+const aiv5Messages = convertMessages(aiv4Messages).to('AIV5.UI')
+
+// Convert Mastra messages to AI SDK v5
+const aiv5ModelMessages = convertMessages(mastraMessages).to('AIV5.Model')
+
+// Supported output formats:
+// 'Mastra.V2', 'AIV4.UI', 'AIV4.Core', 'AIV5.UI', 'AIV5.Model', 'AIV6.UI'
+```
+
+當您想要直接從儲存資料庫取得訊息並將其轉換為在 AI SDK 中使用時，此實用程式非常有用。
+
+## Tool的類型推斷 {/* #type-inference-for-tools */}
+
+當在 AI SDK v5 中使用具有 TypeScript 的Tool時，Mastra 提供類型推斷助手，以確保Tool輸入和輸出的類型安全。
+
+### `InferUITool` {/* #inferuitool */}
+
+這`InferUITool` type helper infers the input and output types of a single Mastra tool:
+
+```typescript title="app/types.ts"
+import { InferUITool, createTool } from '@mastra/core/tools'
+import { z } from 'zod'
+
+const weatherTool = createTool({
+  id: 'get-weather',
+  description: 'Get the current weather',
+  inputSchema: z.object({
+    location: z.string().describe('The city and state'),
+  }),
+  outputSchema: z.object({
+    temperature: z.number(),
+    conditions: z.string(),
+  }),
+  execute: async inputData => {
+    return {
+      temperature: 72,
+      conditions: 'sunny',
+    }
+  },
+})
+
+// Infer the types from the tool
+type WeatherUITool = InferUITool<typeof weatherTool>
+// This creates:
+// {
+//   input: { location: string };
+//   output: { temperature: number; conditions: string };
+// }
+```
+
+### `InferUITools` {/* #inferuitools */}
+
+這`InferUITools` type helper infers the input and output types of multiple tools:
+
+```typescript title="app/mastra/tools.ts"
+import { InferUITools, createTool } from '@mastra/core/tools'
+import { z } from 'zod'
+
+// Using weatherTool from the previous example
+const tools = {
+  weather: weatherTool,
+  calculator: createTool({
+    id: 'calculator',
+    description: 'Perform basic arithmetic',
+    inputSchema: z.object({
+      operation: z.enum(['add', 'subtract', 'multiply', 'divide']),
+      a: z.number(),
+      b: z.number(),
+    }),
+    outputSchema: z.object({
+      result: z.number(),
+    }),
+    execute: async inputData => {
+      // implementation...
+      return { result: 0 }
+    },
+  }),
+}
+
+// Infer types from the tool set
+export type MyUITools = InferUITools<typeof tools>
+// This creates:
+// {
+//   weather: { input: { location: string }; output: { temperature: number; conditions: string } };
+//   calculator: { input: { operation: "add" | "subtract" | "multiply" | "divide"; a: number; b: number }; output: { result: number } };
+// }
+```
+
+當將 Mastra Tool與 AI SDK v5 UI 元件結合使用時，這些類型助手提供完整的 TypeScript 支持，從而確保整個應用程式的類型安全。

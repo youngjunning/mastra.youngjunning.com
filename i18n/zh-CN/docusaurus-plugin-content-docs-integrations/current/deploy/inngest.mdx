@@ -1,0 +1,822 @@
+---
+title: "Inngest | Deploy"
+description: "Run Mastra workflows on Inngest with durable steps, retries, memoization, suspension, serving endpoints, event keys, and local development support."
+---
+
+# 因格斯特
+
+[因格斯特](https://www.inngest.com/docs)是一个用于构建和运行后台Workflow程的开发人员平台，无需管理基础设施。
+
+有关具有高级流量控制功能的完整示例，请参阅[Inngest workflow example](https://github.com/mastra-ai/mastra/tree/main/examples/inngest).
+
+## Ingest 如何与 Mastra 合作 {/* #how-inngest-works-with-mastra */}
+
+Inngest 和 Mastra 通过调整其Workflow程模型进行集成：Inngest 将逻辑组织为由步骤组成的函数，并且使用 Mastra 定义的Workflow程`createWorkflow()` and `createStep()` map directly onto this structure. Each Mastra workflow becomes an Inngest function with a unique identifier, and each step within the workflow maps to an Inngest step.
+
+这`serve()` function bridges the two systems by registering Mastra workflows as Inngest functions and setting up the necessary event handlers for execution and monitoring.
+
+当事件触发Workflow程时，Inngest 会逐步执行并记住每个结果。重试或恢复时，Inngest 会根据保存的结果跳过已完成的步骤。 Mastra 控制流原语（例如循环、条件和嵌套Workflow）映射到相同的 Ingest 函数和步骤模型，同时保留组合、分支和暂停。
+
+通过 Inngest 的发布-订阅系统和仪表板实现实时监控、暂停/恢复和步骤级可观察性。每个步骤执行时，都会使用 Mastra 存储来跟踪其状态和输出，并且可以根据需要恢复。
+
+## 设置 {/* #setup */}
+
+安装所需的软件包：
+
+```bash npm2yarn
+npm install @mastra/inngest@latest inngest
+```
+
+:::注意
+需要`inngest@^4` and Inngest Dev Server `v1.18.0` or later. Realtime is built into the SDK in v4, so `@inngest/realtime` and `realtimeMiddleware` are no longer used.
+:::
+
+## 构建 Ingest Workflow程 {/* #building-an-inngest-workflow */}
+
+本指南逐步介绍如何使用 Inngest 和 Mastra 创建Workflow程，演示一个计数器应用程序，该应用程序会递增值直到达到 10。
+
+### 摄取初始化 {/* #inngest-initialization */}
+
+初始化 Inngest 集成以获得与 Mastra 兼容的Workflow程助手。这`createWorkflow()` and `createStep()` functions are used to create workflow and step objects that are compatible with Mastra and inngest.
+
+开发中：
+
+```ts title="src/mastra/inngest/index.ts"
+import { Inngest } from 'inngest'
+
+export const inngest = new Inngest({
+  id: 'mastra',
+  baseUrl: 'http://localhost:8288',
+  isDev: true,
+})
+```
+
+生产中：
+
+```ts title="src/mastra/inngest/index.ts"
+import { Inngest } from 'inngest'
+
+export const inngest = new Inngest({
+  id: 'mastra',
+})
+```
+
+#### 选择开发或云模式`INNGEST_DEV` {/* #selecting-dev-or-cloud-mode-with-inngest_dev */}
+
+Inngest SDK 以两种模式之一运行：开发模式或云模式。从 v4 开始，SDK 默认为云模式，并且需要`INNGEST_EVENT_KEY` and `INNGEST_SIGNING_KEY`. The examples above set the mode in code with `isDev: true`. As an alternative, set the [`INNGEST_DEV` environment variable](https://www.inngest.com/docs/sdk/environment-variables#inngest-dev) so the same client code works across environments:
+
+* `INNGEST_DEV=1`：强制开发模式。 SDK 与本地 Inngest Dev Server 通信并禁用签名验证。
+* `INNGEST_DEV=0`：强制云模式。 SDK 与 Inngest Cloud 通信并需要事件和签名密钥。
+* `INNGEST_DEV=<url>`：强制开发模式并将 SDK 指向开发服务器`<url>`, for example `http://localhost:8288`.
+* 未设置：默认为云模式。
+
+什么时候`INNGEST_DEV` is set, you can drop `isDev` and `baseUrl` from the client:
+
+```ts title="src/mastra/inngest/index.ts"
+import { Inngest } from 'inngest'
+
+export const inngest = new Inngest({
+  id: 'mastra',
+})
+```
+
+:::警告
+不设置`INNGEST_DEV` in production. It disables signature verification, which is required to securely receive events from Inngest Cloud.
+:::
+
+这`isDev` option on `new Inngest()` overrides `INNGEST_DEV` when both are set.
+
+### 创建步骤 {/* #creating-steps */}
+
+定义构成Workflow程的各个步骤：
+
+```ts title="src/mastra/workflows/index.ts"
+import { z } from 'zod'
+import { inngest } from '../inngest'
+import { init } from '@mastra/inngest'
+
+// Initialize Inngest with Mastra, pointing to your local Inngest server
+const { createWorkflow, createStep } = init(inngest)
+
+// Step: Increment the counter value
+const incrementStep = createStep({
+  id: 'increment',
+  inputSchema: z.object({
+    value: z.number(),
+  }),
+  outputSchema: z.object({
+    value: z.number(),
+  }),
+  execute: async ({ inputData }) => {
+    return { value: inputData.value + 1 }
+  },
+})
+```
+
+### 创建Workflow程 {/* #creating-the-workflow */}
+
+使用以下方法将步骤组成Workflow程`dountil` loop pattern. The `createWorkflow()` function creates a function on Inngest server that's invocable.
+
+```ts title="src/mastra/workflows/index.ts"
+// workflow that is registered as a function on inngest server
+const workflow = createWorkflow({
+  id: 'increment-workflow',
+  inputSchema: z.object({
+    value: z.number(),
+  }),
+  outputSchema: z.object({
+    value: z.number(),
+  }),
+}).then(incrementStep)
+
+workflow.commit()
+
+export { workflow as incrementWorkflow }
+```
+
+### 配置 Mastra 实例 {/* #configuring-the-mastra-instance */}
+
+向 Mastra 注册Workflow程并配置 Inngest API 端点：
+
+```ts title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { serve } from '@mastra/inngest'
+import { incrementWorkflow } from './workflows'
+import { inngest } from './inngest'
+import { PinoLogger } from '@mastra/loggers'
+
+export const mastra = new Mastra({
+  workflows: { incrementWorkflow },
+  server: {
+    host: '0.0.0.0',
+    apiRoutes: [
+      {
+        path: '/inngest/api',
+        method: 'ALL',
+        createHandler: async ({ mastra }) => {
+          return serve({ mastra, inngest })
+        },
+      },
+    ],
+  },
+  logger: new PinoLogger({ name: 'Mastra', level: 'info' }),
+})
+```
+
+:::注意
+路径是`/inngest/api`, not `/api/inngest`. Mastra reserves the `/api` prefix for built-in routes (agents, workflows, memory). Custom `apiRoutes` paths that start with the server's `apiPrefix` (default `/api`) throw at startup. See [#15743](https://github.com/mastra-ai/mastra/pull/15743) for context, or skip to [Using a custom `apiPrefix`](#using-a-custom-apiprefix) if you need to keep `/api/inngest`.
+:::
+
+## 运行Workflow程 {/* #running-workflows */}
+
+### 本地运行 {/* #running-locally */}
+
+1. 跑步`npx mastra dev` to start the Mastra server locally on port 4111
+
+2. 启动 Ingest 开发服务器。在新终端中，运行：
+
+   ```bash
+   npx inngest-cli@latest dev -u http://localhost:4111/inngest/api
+   ```
+
+   :::注意
+   之后的网址`-u` tells the Inngest dev server where to find your Mastra `/inngest/api` endpoint
+   :::
+
+3. 打开 Ingest 仪表板[http://localhost:8288](http://localhost:8288) and go to the **Apps** section in the sidebar to verify your Mastra workflow is registered
+
+4. 在**Functions**, open your workflow. Select **Invoke** and provide the following input:
+
+   ```json
+   {
+     "data": {
+       "inputData": {
+         "value": 5
+       }
+     }
+   }
+   ```
+
+5. 监控Workflow程执行情况**Runs** tab to see step-by-step execution progress
+
+### 生产中运行 {/* #running-in-production */}
+
+在开始之前，请确保您拥有：
+
+* 安装了 Vercel 帐户和 Vercel CLI (`npm i -g vercel`)
+* 摄取账户
+* Vercel代币
+
+1. 在您的环境中设置 Vercel 令牌：
+
+   ```bash title=".env"
+   export VERCEL_TOKEN=your_vercel_token
+   ```
+
+2. 添加`VercelDeployer` to Mastra instance
+
+   ```ts title="src/mastra/index.ts"
+   import { VercelDeployer } from '@mastra/deployer-vercel'
+   import { Mastra } from '@mastra/core'
+
+   export const mastra = new Mastra({
+     deployer: new VercelDeployer({
+       teamSlug: 'your_team_slug',
+       projectName: 'your_project_name',
+       // you can get your vercel token from the vercel dashboard by clicking on the user icon in the top right corner
+       // and then clicking on "Account Settings" and then clicking on "Tokens" on the left sidebar.
+       token: process.env.VERCEL_TOKEN,
+     }),
+   })
+   ```
+
+3. 构建 Mastra 实例
+
+   ```bash
+   npx mastra build
+   ```
+
+4. 部署到 Vercel
+
+   ```bash
+   cd .mastra/output
+   vercel login
+   vercel --prod
+   ```
+
+5. 与同步[Inngest dashboard](https://app.inngest.com/env/production/apps) by selecting **Sync new app with Vercel** and following the instructions
+
+   :::警告
+   Ingest 的自动发现约定假设`/api/inngest`. Because this guide uses `/inngest/api`, set the **URL** field on the Inngest app to your deployed origin plus `/inngest/api` (for example `https://your-app.vercel.app/inngest/api`). If you leave it on the default, the Inngest dashboard won't find your app's functions.
+   :::
+
+6. 在**Functions**, open `workflow.increment-workflow`. Select **All actions** > **Invoke** and provide the following input:
+
+   ```json
+   {
+     "data": {
+       "inputData": {
+         "value": 5
+       }
+     }
+   }
+   ```
+
+7. 监控执行情况**Runs** tab to see step-by-step progress
+
+## 添加自定义 Ingest 函数 {/* #adding-custom-inngest-functions */}
+
+您可以使用可选的选项，在 Mastra Workflow程中提供额外的 Ingest 功能`functions` parameter in `serve()`.
+
+### 创建自定义函数 {/* #creating-custom-functions */}
+
+首先，创建自定义 Ingest 函数：
+
+```ts title="src/inngest/custom-functions.ts"
+import { inngest } from '../inngest'
+
+// Define custom Inngest functions
+export const customEmailFunction = inngest.createFunction(
+  { id: 'send-welcome-email' },
+  { event: 'user/registered' },
+  async ({ event }) => {
+    // Custom email logic here
+    console.log(`Sending welcome email to ${event.data.email}`)
+    return { status: 'email_sent' }
+  },
+)
+
+export const customWebhookFunction = inngest.createFunction(
+  { id: 'process-webhook' },
+  { event: 'webhook/received' },
+  async ({ event }) => {
+    // Custom webhook processing
+    console.log(`Processing webhook: ${event.data.type}`)
+    return { processed: true }
+  },
+)
+```
+
+### 通过Workflow程提供自定义功能 {/* #serving-custom-functions-with-workflows */}
+
+更新您的 Mastra 配置以导入并包含自定义函数。突出显示的行显示了添加内容：
+
+```ts title="src/mastra/index.ts" {5-8,23}
+import { Mastra } from '@mastra/core'
+import { serve } from '@mastra/inngest'
+import { incrementWorkflow } from './workflows'
+import { inngest } from './inngest'
+import { customEmailFunction, customWebhookFunction } from './inngest/custom-functions'
+import { PinoLogger } from '@mastra/loggers'
+
+export const mastra = new Mastra({
+  workflows: { incrementWorkflow },
+  server: {
+    host: '0.0.0.0',
+    apiRoutes: [
+      {
+        path: '/inngest/api',
+        method: 'ALL',
+        createHandler: async ({ mastra }) => {
+          return serve({
+            mastra,
+            inngest,
+            functions: [customEmailFunction, customWebhookFunction],
+          })
+        },
+      },
+    ],
+  },
+  logger: new PinoLogger({ name: 'Mastra', level: 'info' }),
+})
+```
+
+### 功能注册 {/* #function-registration */}
+
+当您包含自定义函数时：
+
+1. Mastra Workflow程会自动转换为 Inngest 函数，其 ID 如下`workflow.${workflowId}`
+2. 自定义函数保留其指定的 ID（例如，`send-welcome-email`, `process-webhook`)
+3. 所有功能都在同一台上一起提供`/inngest/api` endpoint
+
+这使您可以将 Mastra 的Workflow程编排与现有的 Ingest 功能相结合。
+
+## 与其他框架一起使用 {/* #using-with-other-frameworks */}
+
+默认`serve` function uses Hono internally. If you're using a different web framework like Express, Fastify, or Koa, use the `createServe` factory function with the appropriate Inngest adapter.
+
+### 表达 {/* #express */}
+
+```ts title="src/server.ts"
+import express from 'express'
+import { createServe } from '@mastra/inngest'
+import { serve as expressAdapter } from 'inngest/express'
+import { mastra, inngest } from './mastra'
+
+const app = express()
+
+// Body parsing middleware required for Inngest
+app.use(express.json())
+
+const handler = createServe(expressAdapter)({ mastra, inngest })
+app.use('/inngest/api', handler)
+
+app.listen(3000)
+```
+
+### 快速化 {/* #fastify */}
+
+```ts title="src/server.ts"
+import Fastify from 'fastify'
+import { createServe } from '@mastra/inngest'
+import { serve as fastifyAdapter } from 'inngest/fastify'
+import { mastra, inngest } from './mastra'
+
+const fastify = Fastify()
+
+// JSON parsing is handled by Fastify's default content-type parser
+const handler = createServe(fastifyAdapter)({ mastra, inngest })
+
+fastify.route({
+  method: ['GET', 'POST', 'PUT'],
+  url: '/inngest/api',
+  handler,
+})
+
+fastify.listen({ port: 3000 })
+```
+
+### 相思木 {/* #koa */}
+
+```ts title="src/server.ts"
+import Koa from 'koa'
+import Router from '@koa/router'
+import bodyParser from 'koa-bodyparser'
+import { createServe } from '@mastra/inngest'
+import { serve as koaAdapter } from 'inngest/koa'
+import { mastra, inngest } from './mastra'
+
+const app = new Koa()
+const router = new Router()
+
+// Body parsing middleware required for Inngest
+app.use(bodyParser())
+
+const handler = createServe(koaAdapter)({ mastra, inngest })
+router.all('/inngest/api', handler)
+
+app.use(router.routes())
+app.use(router.allowedMethods())
+
+app.listen(3000)
+```
+
+### Next.js {/* #nextjs */}
+
+```ts title="app/inngest/api/route.ts"
+import { createServe } from '@mastra/inngest'
+import { serve as nextAdapter } from 'inngest/next'
+import { mastra, inngest } from '@/mastra'
+
+const handler = createServe(nextAdapter)({ mastra, inngest })
+
+export { handler as GET, handler as POST, handler as PUT }
+```
+
+### 可用适配器 {/* #available-adapters */}
+
+这`createServe` function works with any Inngest adapter. See the [Inngest serve documentation](https://www.inngest.com/docs/reference/serve) for a complete list of available adapters including AWS Lambda, Cloudflare Workers, and more.
+
+## 作为 Connect 工作线程运行 {/* #running-as-a-connect-worker */}
+
+`serve()`公开 Inngest 调用的 HTTP 端点。作为替代方案，`connect()` opens a long-lived outbound connection from your worker to Inngest, so the worker doesn't need a publicly reachable endpoint. Use this for long-running worker processes on runtimes such as Kubernetes, Docker, ECS, Fly.io, or Render.
+
+:::注意
+Inngest Connect 处于公开测试阶段。 Connect 工作线程不支持 Vercel 和 AWS Lambda 等无服务器运行时。
+:::
+
+### 何时使用`connect()` instead of `serve()` {/* #when-to-use-connect-instead-of-serve */}
+
+* 工作进程在仅允许出站连接的专用网络中运行。
+* 您希望将繁重的Workflow执行排除在服务面向用户的 HTTP 流量的同一进程之外。
+* 您希望独立于 Mastra HTTP 服务器来扩展和缩减工作线程，并限制每个工作线程的并发数。
+
+使用相同的 Mastra Workflow程定义`serve()` or `connect()`. The collection behavior is the same for standard workflows, nested workflows, cron workflows, and additional Inngest functions.
+
+### 要求 {/* #requirements */}
+
+* `inngest@^4`
+* Node.js`22.13.0` or later
+* 工人长期运行的流程
+
+### 设置 {/* #setup-1 */}
+
+将 Mastra 服务器和 Connect 工作线程作为两个进程运行。此设置中的 Mastra 服务器不需要公开`/inngest/api`:
+
+```ts title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { incrementWorkflow } from './workflows'
+import { PinoLogger } from '@mastra/loggers'
+
+export const mastra = new Mastra({
+  workflows: { incrementWorkflow },
+  logger: new PinoLogger({ name: 'Mastra', level: 'info' }),
+})
+```
+
+```ts title="src/worker.ts"
+import { connect } from '@mastra/inngest/connect'
+import { mastra } from './mastra'
+import { inngest } from './mastra/inngest'
+
+await connect({
+  mastra,
+  inngest,
+  instanceId: process.env.INNGEST_CONNECT_INSTANCE_ID,
+  maxWorkerConcurrency: Number(process.env.INNGEST_CONNECT_MAX_WORKER_CONCURRENCY ?? 10),
+})
+```
+
+启动工人`INNGEST_DEV=1 node --import tsx src/worker.ts` during local development. The Inngest Dev Server discovers the worker through the outbound connection, so no `-u` flag is required.
+
+在生产中，设置`INNGEST_EVENT_KEY` and `INNGEST_SIGNING_KEY`. Set `appVersion` on the `Inngest` client to a deploy identifier, such as a commit SHA or image tag, so Inngest can manage rolling deploys.
+
+当从以下位置迁移现有的生产应用程序时`serve()` to `connect()`, test the worker with a separate Inngest app before moving traffic.
+
+### 选项 {/* #options */}
+
+`connect()`接受与 Inngest 相同的选项[`connect`](https://www.inngest.com/docs/setup/connect) plus the Mastra-specific fields. The most common ones:
+
+* `mastra`：应公开其Workflow程的 Mastra 实例。
+* `inngest`： Ingest 客户端。使用您要传递给的同一个客户端`serve()`.
+* `functions`：可选的附加 Ingest 功能数组，可与 Mastra Workflow程一起注册。
+* `instanceId`：工作人员的稳定标识符，显示在 Inngest 仪表板中。默认为机器主机名。
+* `maxWorkerConcurrency`：worker 一次运行的最大步数。默认为无限制。
+* `registerOptions`：在应用程序注册期间转发到Inngest（例如`signingKey`). When a field is set both here and at the top level, `registerOptions` wins. This matches the behavior of `serve()`.
+
+`connect()`返回 Ingest 的`WorkerConnection`. The Inngest SDK handles `SIGINT` and `SIGTERM` by default. Store the returned connection and call `.close()` only when your worker needs custom shutdown control.
+
+如果 Mastra 实例没有`InngestWorkflow` and no additional `functions` are provided, `connect()` logs a warning because the worker would otherwise stay connected with nothing to execute. Register at least one workflow on Mastra or pass `functions: [...]`.
+
+## 使用自定义`apiPrefix` {/* #using-a-custom-apiprefix */}
+
+如果您需要保留`/api/inngest` (for example to match Inngest's auto-discover convention without changing the dashboard URL), set `server.apiPrefix` to relocate Mastra's built-in routes:
+
+```ts title="src/mastra/index.ts" {7,10}
+import { Mastra } from '@mastra/core'
+import { serve } from '@mastra/inngest'
+import { inngest } from './inngest'
+
+export const mastra = new Mastra({
+  server: {
+    apiPrefix: '/_mastra',
+    apiRoutes: [
+      {
+        path: '/api/inngest',
+        method: 'ALL',
+        createHandler: async ({ mastra }) => serve({ mastra, inngest }),
+      },
+    ],
+  },
+})
+```
+
+Mastra 的内置路线现在可以解析为`/_mastra/agents`, `/_mastra/workflows`, and so on, freeing the `/api/inngest` path for your custom route.
+
+:::警告
+默认身份验证配置可保护`/api/*` and treats `/api`, `/api/auth/*` as public. When you change `apiPrefix`, those defaults no longer match and built-in routes fall outside the protected pattern. Update `server.auth.protected` and `server.auth.public` to reference the new prefix, and update any client code (including [`MastraClient`](/docs/server/mastra-client) `apiPrefix`) that hits `/api/*`.
+:::
+
+## 流量控制 {/* #flow-control */}
+
+Inngest Workflow程支持流量控制功能，包括并发限制、速率限制、节流、去抖动和优先级排队。这些选项配置在`createWorkflow()` call and help manage workflow execution at scale.
+
+### 并发性 {/* #concurrency */}
+
+控制可以同时运行的Workflow实例数量：
+
+```ts
+const workflow = createWorkflow({
+  id: 'user-processing-workflow',
+  inputSchema: z.object({ userId: z.string() }),
+  outputSchema: z.object({ result: z.string() }),
+  steps: [processUserStep],
+  // Limit to 10 concurrent executions, scoped by user ID
+  concurrency: {
+    limit: 10,
+    key: 'event.data.userId',
+  },
+})
+```
+
+### 速率限制 {/* #rate-limiting */}
+
+限制一段时间内Workflow执行的数量：
+
+```ts
+const workflow = createWorkflow({
+  id: 'api-sync-workflow',
+  inputSchema: z.object({ endpoint: z.string() }),
+  outputSchema: z.object({ status: z.string() }),
+  steps: [apiSyncStep],
+  // Maximum 1000 executions per hour
+  rateLimit: {
+    period: '1h',
+    limit: 1000,
+  },
+})
+```
+
+### 节流 {/* #throttling */}
+
+确保Workflow程执行之间的最短时间：
+
+```ts
+const workflow = createWorkflow({
+  id: 'email-notification-workflow',
+  inputSchema: z.object({ organizationId: z.string(), message: z.string() }),
+  outputSchema: z.object({ sent: z.boolean() }),
+  steps: [sendEmailStep],
+  // Only one execution per 10 seconds per organization
+  throttle: {
+    period: '10s',
+    limit: 1,
+    key: 'event.data.organizationId',
+  },
+})
+```
+
+### 去抖 {/* #debouncing */}
+
+延迟执行，直到时间窗口内没有新事件到达：
+
+```ts
+const workflow = createWorkflow({
+  id: 'search-index-workflow',
+  inputSchema: z.object({ documentId: z.string() }),
+  outputSchema: z.object({ indexed: z.boolean() }),
+  steps: [indexDocumentStep],
+  // Wait 5 seconds of no updates before indexing
+  debounce: {
+    period: '5s',
+    key: 'event.data.documentId',
+  },
+})
+```
+
+### 优先事项 {/* #priority */}
+
+设置Workflow的执行优先级：
+
+```ts
+const workflow = createWorkflow({
+  id: 'order-processing-workflow',
+  inputSchema: z.object({
+    orderId: z.string(),
+    priority: z.number().optional(),
+  }),
+  outputSchema: z.object({ processed: z.boolean() }),
+  steps: [processOrderStep],
+  // Higher priority orders execute first
+  priority: {
+    run: 'event.data.priority ?? 50',
+  },
+})
+```
+
+### 重试 {/* #retries */}
+
+放`retries` to let a run survive a failed request to your app, such as a process restart, redeploy, or out-of-memory crash. Inngest calls the function again, skips the steps that already finished, and continues from the step that was interrupted:
+
+```ts
+const workflow = createWorkflow({
+  id: 'long-running-workflow',
+  inputSchema: z.object({ jobId: z.string() }),
+  outputSchema: z.object({ done: z.boolean() }),
+  steps: [longRunningStep],
+  // Re-invoke up to 3 times after a failed request
+  retries: 3,
+})
+```
+
+`retries`默认为`0`. Errors thrown by your step code are retried per step with `retryConfig` or the step's `retries` option, not at the function level. `createInngestAgent()` accepts the same `retries` option and applies it to every Inngest function the durable agent creates. All durable agents share these functions, so the `retries` value of the first agent registered with Mastra applies to every durable agent. Set the same value on each agent to avoid confusion.
+
+嵌套Workflow作为其自己的 Inngest 函数运行并使用其自己的`retries` setting. It doesn't inherit the parent's value, so set `retries` on each nested workflow that should recover from a failed request.
+
+### 组合流量控制选项 {/* #combining-flow-control-options */}
+
+多个流程控制选项可以组合在一个Workflow程中：
+
+```ts
+const workflow = createWorkflow({
+  id: 'comprehensive-workflow',
+  inputSchema: z.object({
+    userId: z.string(),
+    organizationId: z.string(),
+    priority: z.number().optional(),
+  }),
+  outputSchema: z.object({ result: z.string() }),
+  steps: [comprehensiveStep],
+  concurrency: {
+    limit: 5,
+    key: 'event.data.userId',
+  },
+  rateLimit: {
+    period: '1m',
+    limit: 100,
+  },
+  throttle: {
+    period: '10s',
+    limit: 1,
+    key: 'event.data.organizationId',
+  },
+  priority: {
+    run: 'event.data.priority ?? 0',
+  },
+})
+```
+
+所有流量控制选项都是可选的。如果未指定，Workflow程将按照 Inngest 的默认行为运行。欲了解更多信息，请参阅[Inngest flow control documentation](https://www.inngest.com/docs/guides/flow-control).
+
+## Cron调度 {/* #cron-scheduling */}
+
+使用 cron 表达式按计划触发 Inngest Workflow程。常见用途包括每日报告和每小时数据同步以及维护任务。
+
+### 基本的 cron 调度 {/* #basic-cron-scheduling */}
+
+通过添加一个Workflow来配置Workflow按计划运行`cron` property:
+
+```ts
+const workflow = createWorkflow({
+  id: 'daily-report-workflow',
+  inputSchema: z.object({ reportType: z.string() }),
+  outputSchema: z.object({ generated: z.boolean() }),
+  steps: [generateReportStep],
+  // Run daily at midnight
+  cron: '0 0 * * *',
+})
+```
+
+### Cron 计划格式 {/* #cron-schedule-format */}
+
+这`cron` property accepts standard cron expressions in the format: `minute hour day month dayOfWeek`
+
+* **分钟**: 0-59
+* **小时**: 0-23
+* **天**: 1-31
+* **月**： 1-12 或 1-12 月
+* **星期几**：0-6（星期日 = 0）或星期日至星期六
+
+常见的 cron 模式：
+
+```ts
+// Every 15 minutes
+cron: '*/15 * * * *'
+
+// Every hour at minute 0
+cron: '0 * * * *'
+
+// Every 6 hours
+cron: '0 */6 * * *'
+
+// Daily at midnight
+cron: '0 0 * * *'
+
+// Daily at 9 AM
+cron: '0 9 * * *'
+
+// Every weekday at 9 AM
+cron: '0 9 * * 1-5'
+
+// First day of every month at midnight
+cron: '0 0 1 * *'
+
+// Every Monday at 8 AM
+cron: '0 8 * * 1'
+```
+
+### 为计划运行提供输入数据 {/* #providing-input-data-for-scheduled-runs */}
+
+您可以提供将用于每个计划执行的静态输入数据：
+
+```ts
+const workflow = createWorkflow({
+  id: 'scheduled-data-sync',
+  inputSchema: z.object({
+    source: z.string(),
+    destination: z.string(),
+  }),
+  outputSchema: z.object({ synced: z.boolean() }),
+  steps: [syncDataStep],
+  cron: '0 */6 * * *', // Every 6 hours
+  // Input data provided to each scheduled run
+  inputData: {
+    source: 'production-db',
+    destination: 'analytics-warehouse',
+  },
+})
+```
+
+### 为计划运行提供初始状态 {/* #providing-initial-state-for-scheduled-runs */}
+
+您还可以为计划的Workflow程运行设置初始状态：
+
+```ts
+const workflow = createWorkflow({
+  id: 'scheduled-aggregation',
+  inputSchema: z.object({ date: z.string() }),
+  outputSchema: z.object({ aggregated: z.boolean() }),
+  stateSchema: z.object({
+    processedCount: z.number(),
+    lastProcessedDate: z.string(),
+  }),
+  steps: [aggregateDataStep],
+  cron: '0 0 * * *', // Daily at midnight
+  inputData: {
+    date: new Date().toISOString().split('T')[0], // Today's date
+  },
+  initialState: {
+    processedCount: 0,
+    lastProcessedDate: '',
+  },
+})
+```
+
+### 将 cron 与流量控制相结合 {/* #combining-cron-with-flow-control */}
+
+Cron 调度可以与流量控制选项结合使用：
+
+```ts
+const workflow = createWorkflow({
+  id: 'scheduled-api-sync',
+  inputSchema: z.object({ endpoint: z.string() }),
+  outputSchema: z.object({ synced: z.boolean() }),
+  steps: [syncApiStep],
+  cron: '*/30 * * * *', // Every 30 minutes
+  inputData: {
+    endpoint: 'https://api.example.com/data',
+  },
+  // Limit concurrent executions even for scheduled runs
+  concurrency: {
+    limit: 5,
+  },
+  // Rate limit scheduled executions
+  rateLimit: {
+    period: '1h',
+    limit: 100,
+  },
+})
+```
+
+### cron 函数如何工作 {/* #how-cron-functions-work */}
+
+当您配置Workflow程时`cron` property:
+
+1. 使用 ID 自动创建单独的 Ingest 函数`workflow.${workflowId}.cron`
+2. 该函数已在 Inngest 注册，将在指定的时间表触发
+3. 每个计划的执行都会使用提供的创建一个新的Workflow程运行`inputData` and `initialState`
+4. 当您调用时，cron 函数和主Workflow函数一起服务`serve()`
+
+您可以在 Inngest 仪表板中监控计划执行**Functions** and **Runs** sections. The cron function will appear as a separate function alongside your main workflow function.
+
+有关 cron 调度的更多信息，请参阅[Inngest cron documentation](https://www.inngest.com/docs/guides/scheduled-functions).

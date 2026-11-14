@@ -1,19 +1,29 @@
 ---
-title: "人類參與（HITL）| Workflows"
-description: "Mastra 的人類參與 Workflow 可暫停執行，以便在繼續之前進行人工批准、審核或取得用戶輸入。"
+title: "Human-in-the-loop | Workflows"
+description: "Pause Mastra workflows for approvals, reviews, or user input, then resume with supplied data, reject with bail, or support repeated human interactions."
 packages:
   - "@mastra/core"
 ---
 
-# 人類參與（HITL）
+# 人在迴路
 
-部分 Workflow 需要暫停以等候人類輸入，然後才繼續執行。當 Workflow 被[暫停](/docs/workflows/suspend-and-resume#pausing-a-workflow-with-suspend)時，可傳回訊息，說明暫停原因及繼續執行所需的資料。之後，Workflow 可根據收到的輸入選擇[恢復執行](#resuming-workflows-with-human-input)，或[提早結束](#handling-human-rejection-with-bail)。這種方式很適合用於人工批准、拒絕、設有條件限制的決策，或任何需要人類監督的步驟。
+某些Workflow需要暫停以等待手動輸入，然後才能繼續。當Workflow是[suspended](/docs/workflows/suspend-and-resume#pausing-a-workflow-with-suspend)，它可以返回一條訊息，解釋為什麼暫停以及需要做什麼才能繼續。然後Workflow可以[恢復](#resuming-workflows-with-human-input)或者[保釋](#handling-human-rejection-with-bail)基於收到的輸入。這種方法非常適合手動批准、拒絕、門控決策或任何需要手動監督的步驟。
 
-## 暫停 Workflow 以等候人類輸入 {/* #pausing-workflows-for-human-input */}
+## 暫停Workflow以進行手動輸入 {/* #pausing-workflows-for-human-input */}
 
-人類參與輸入的運作方式，與使用 `suspend()` [暫停 Workflow](/docs/workflows/suspend-and-resume) 十分相似。主要分別是需要人類輸入時，你可透過 `suspend()` 傳回 payload，為用戶提供背景資料或指引，說明如何繼續。
+人機互動 (HITL) 輸入的工作原理與[pausing a workflow](/docs/workflows/suspend-and-resume) using `suspend()`. The key difference is that when human input is required, you can return `suspend()` with a payload that provides context or guidance to the user on how to continue.
 
-![使用 suspend() 暫停 Workflow](/img/workflows/workflows-suspend.jpg)
+```mermaid
+flowchart LR
+  accTitle: Suspending a workflow for human input
+  accDescr: The workflow starts step1. The step either completes the workflow or suspends while it waits for human input.
+  start(( start )) -- in --> step1([step1])
+  step1 -- out --> stop(( end ))
+  step1 pending1@-. suspend .-> paused@{ shape: manual-input, label: "awaiting<br/>human input" }
+
+  class stop accent
+  class paused pending
+```
 
 ```typescript {12-17,22-26} title="src/mastra/workflows/test-workflow.ts"
 import { createWorkflow, createStep } from '@mastra/core/workflows'
@@ -62,9 +72,9 @@ export const testWorkflow = createWorkflow({
   .commit()
 ```
 
-## 向用戶提供回饋 {/* #providing-user-feedback */}
+## 提供使用者回饋 {/* #providing-user-feedback */}
 
-Workflow 暫停時，你可存取 `suspend()` 傳回的 payload，方法是找出已暫停的步驟，並讀取其 `suspendPayload`。
+當Workflow暫停時，您可以訪問由`suspend()` by identifying the suspended step and reading its `suspendPayload`.
 
 ```typescript {12} title="src/test-workflow.ts"
 const workflow = mastra.getWorkflow('testWorkflow')
@@ -86,7 +96,7 @@ if (result.status === 'suspended') {
 
 ### 輸出範例 {/* #example-output */}
 
-步驟傳回的資料可包含原因，協助用戶了解恢復執行 Workflow 所需的操作。
+此步驟傳回的資料可以包含原因並幫助使用者了解恢復Workflow所需的內容。
 
 ```typescript
 {
@@ -94,11 +104,21 @@ if (result.status === 'suspended') {
 }
 ```
 
-## 使用人類輸入恢復執行 Workflow {/* #resuming-workflows-with-human-input */}
+## 透過手動輸入恢復Workflow {/* #resuming-workflows-with-human-input */}
 
-與[重新啟動 Workflow](/docs/workflows/suspend-and-resume#restarting-a-workflow-with-resume)一樣，收到人類輸入後，使用 `resume()` 並傳入 `resumeData`，即可繼續執行 Workflow。Workflow 會從暫停的步驟恢復執行。
+與[restarting a workflow](/docs/workflows/suspend-and-resume#restarting-a-workflow-with-resume), use `resume()` with `resumeData` to continue a workflow after receiving input from a human. The workflow resumes from the step where it was paused.
 
-![使用 resume() 重新啟動 Workflow](/img/workflows/workflows-resume.jpg)
+```mermaid
+flowchart LR
+  accTitle: Resuming a workflow with human input
+  accDescr: Human input resumes step1. The step then completes the workflow.
+  paused@{ shape: manual-input, label: "human input" }
+  paused pending1@-. resume .-> step1([step1])
+  step1 -- out --> stop(( end ))
+
+  class paused pending
+  class stop accent
+```
 
 ```typescript {13}
 const workflow = mastra.getWorkflow('testWorkflow')
@@ -118,9 +138,9 @@ const handleResume = async () => {
 }
 ```
 
-### 使用 `bail()` 處理人類拒絕 {/* #handling-human-rejection-with-bail */}
+### 處理人類排斥`bail()` {/* #handling-human-rejection-with-bail */}
 
-使用 `bail()` 可在某個步驟停止執行 Workflow，而不會觸發錯誤。當人類明確拒絕某項操作時，這會很有用。Workflow 會以 `success` 狀態完成，而呼叫 `bail()` 之後的所有邏輯均會略過。
+使用`bail()` to stop workflow execution at a step without triggering an error. This can be useful when a human explicitly rejects an action. The workflow completes with a `success` status, and any logic after the call to `bail()` is skipped.
 
 ```typescript {6-10}
 const step1 = createStep({
@@ -147,11 +167,14 @@ const step1 = createStep({
 })
 ```
 
-## 多輪人類輸入 {/* #multi-turn-human-input */}
+## 多輪人工輸入 {/* #multi-turn-human-input */}
 
-對於需要在多個階段取得輸入的 Workflow，暫停模式維持不變。每個步驟都會定義 `resumeSchema` 和 `suspendSchema`；後者通常包含一個原因，以便向用戶提供回饋。
+對於需要在多個階段輸入的Workflow，掛起模式保持不變。每個步驟定義一個`resumeSchema`, and `suspendSchema` typically with a reason that can be used to provide user feedback.
 
-```typescript {11-16,21-25} title="src/mastra/workflows/test-workflow.ts" prettier:false
+```typescript {14-19,24-28} title="src/mastra/workflows/test-workflow.ts" oxfmt:false
+import { createWorkflow, createStep } from '@mastra/core/workflows';
+import { z } from 'zod';
+
 const step1 = createStep({...});
 
 const step2 = createStep({
@@ -198,7 +221,7 @@ export const testWorkflow = createWorkflow({
   .commit();
 ```
 
-每個步驟都必須按順序恢復執行，並為每個已暫停的步驟分別呼叫一次 `resume()`。這種方式有助管理多步驟批准流程，在每個階段提供一致的 UI 回饋，並清晰處理輸入。
+每個步驟必須按順序恢復，並單獨調用`resume()` for each suspended step. This approach helps manage multi-step approvals with consistent UI feedback and clear input handling at each stage.
 
 ```typescript {4,11}
 const handleResume = async () => {
@@ -216,7 +239,7 @@ const handleDelete = async () => {
 }
 ```
 
-## 相關內容 {/* #related */}
+## 有關的 {/* #related */}
 
-- [控制流程](/docs/workflows/control-flow)
-- [暫停與恢復執行](/docs/workflows/suspend-and-resume)
+* [控制流程](/docs/workflows/control-flow)
+* [暫停和恢復](/docs/workflows/suspend-and-resume)

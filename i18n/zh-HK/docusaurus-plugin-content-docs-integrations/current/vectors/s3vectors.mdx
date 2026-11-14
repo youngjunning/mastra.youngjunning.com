@@ -1,0 +1,440 @@
+---
+title: "Amazon S3 vectors store | Vector Stores"
+description: "Store embeddings in Amazon S3 vector buckets and run similarity search from Mastra with JSON metadata filters and index management."
+packages:
+  - "@mastra/s3vectors"
+---
+
+# Amazon S3 向量存儲
+
+這`S3Vectors`類別提供向量搜尋使用[Amazon S3 向量（預覽）](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-vectors.html)。它將向量儲存在**向量桶**並執行相似性搜索**向量索引**，具有基於 JSON 的元資料過濾器。
+
+：：：警告
+
+Amazon S3 Vectors 是一項預覽服務。預覽功能可能會變更或刪除，恕不另行通知，且不包含在 AWS SLA 範圍內。行為、限制和區域可用性可能隨時變更。該庫可能會引入重大變更以與 AWS 保持一致。
+
+:::
+
+## 安裝 {/* #installation */}
+
+```bash npm2yarn
+npm install @mastra/s3vectors@latest
+```
+
+## 使用範例 {/* #usage-example */}
+
+```typescript
+import { S3Vectors } from '@mastra/s3vectors'
+
+const store = new S3Vectors({
+  id: 's3-vectors',
+  vectorBucketName: process.env.S3_VECTORS_BUCKET_NAME!, // e.g. "my-vector-bucket"
+  clientConfig: {
+    region: process.env.AWS_REGION!, // credentials use the default AWS provider chain
+  },
+  // Optional: mark large/long-text fields as non-filterable at index creation time
+  nonFilterableMetadataKeys: ['content'],
+})
+
+// Create an index (names are normalized: "_" → "-" and lowercased)
+await store.createIndex({
+  indexName: 'my_index',
+  dimension: 1536,
+  metric: 'cosine', // "euclidean" also supported; "dotproduct" is NOT supported
+})
+
+// Upsert vectors (ids auto-generated if omitted). Date values in metadata are serialized to epoch ms.
+const ids = await store.upsert({
+  indexName: 'my_index',
+  vectors: [
+    [0.1, 0.2 /* … */],
+    [0.3, 0.4 /* … */],
+  ],
+  metadata: [
+    {
+      text: 'doc1',
+      genre: 'documentary',
+      year: 2023,
+      createdAt: new Date('2024-01-01'),
+    },
+    { text: 'doc2', genre: 'comedy', year: 2021 },
+  ],
+})
+
+// Query with metadata filters (implicit AND is canonicalized)
+const results = await store.query({
+  indexName: 'my-index',
+  queryVector: [0.1, 0.2 /* … */],
+  topK: 10, // Service-side limits may apply (commonly 30)
+  filter: { genre: { $in: ['documentary', 'comedy'] }, year: { $gte: 2020 } },
+  includeVector: false, // set true to include raw vectors (may trigger a secondary fetch)
+})
+
+// Clean up resources (closes the underlying HTTP handler)
+await store.disconnect()
+```
+
+## 建構函數選項 {/* #constructor-options */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'id',
+  type: 'string',
+  description: 'Unique identifier for this vector store instance',
+},
+{
+  name: 'vectorBucketName',
+  type: 'string',
+  description: 'Target S3 Vectors vector bucket name.',
+},
+{
+  name: 'clientConfig',
+  type: 'S3VectorsClientConfig',
+  isOptional: true,
+  description: 'AWS SDK v3 client options (e.g., `region`, `credentials`).',
+},
+{
+  name: 'nonFilterableMetadataKeys',
+  type: 'string[]',
+  isOptional: true,
+  description:
+    'Metadata keys that should NOT be filterable (applied to the index at creation time). Use this for large text fields like `content`.',
+},
+]}
+/>
+
+## 方法 {/* #methods */}
+
+### `createIndex()` {/* #createindex */}
+
+在配置的向量桶中建立新的向量索引。如果索引已存在，則呼叫將驗證架構並變為無操作（保留現有指標和維度）。
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description:
+    'Logical index name. Normalized internally: underscores are replaced with hyphens and the name is lowercased.',
+},
+{
+  name: 'dimension',
+  type: 'number',
+  description: 'Vector dimension (must match your embedding model)',
+},
+{
+  name: 'metric',
+  type: "'cosine' | 'euclidean'",
+  isOptional: true,
+  defaultValue: 'cosine',
+  description: 'Distance metric for similarity search. `dotproduct` is not supported by S3 Vectors.',
+},
+]}
+/>
+
+### `upsert()` {/* #upsert */}
+
+新增或替換向量（全記錄放置）。如果`ids` aren't provided, UUIDs are generated.
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index to upsert into',
+},
+{
+  name: 'vectors',
+  type: 'number[][]',
+  description: 'Array of embedding vectors',
+},
+{
+  name: 'metadata',
+  type: 'Record<string, any>[]',
+  isOptional: true,
+  description: 'Metadata for each vector',
+},
+{
+  name: 'ids',
+  type: 'string[]',
+  isOptional: true,
+  description: 'Optional vector IDs (auto-generated if not provided)',
+},
+]}
+/>
+
+### `query()` {/* #query */}
+
+使用可選的元資料過濾搜尋最近的鄰居。
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index to query',
+},
+{
+  name: 'queryVector',
+  type: 'number[]',
+  description: 'Query vector to find similar vectors',
+},
+{
+  name: 'topK',
+  type: 'number',
+  isOptional: true,
+  defaultValue: '10',
+  description: 'Number of results to return',
+},
+{
+  name: 'filter',
+  type: 'S3VectorsFilter',
+  isOptional: true,
+  description:
+    'JSON-based metadata filter supporting `$and`, `$or`, `$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$in`, `$nin`, `$exists`.',
+},
+{
+  name: 'includeVector',
+  type: 'boolean',
+  isOptional: true,
+  defaultValue: 'false',
+  description: 'Whether to include vectors in the results',
+},
+]}
+/>
+
+：：：筆記
+
+結果包括`score = 1/(1 + distance)` so that higher is better while preserving the underlying distance ranking.
+
+:::
+
+### `describeIndex()` {/* #describeindex */}
+
+傳回有關索引的資訊。
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Index name to describe.',
+},
+]}
+/>
+
+返回：
+
+```typescript
+interface IndexStats {
+  dimension: number
+  count: number // computed via ListVectors pagination (O(n))
+  metric: 'cosine' | 'euclidean'
+}
+```
+
+### `deleteIndex()` {/* #deleteindex */}
+
+刪除索引及其資料。
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Index to delete.',
+},
+]}
+/>
+
+### `listIndexes()` {/* #listindexes */}
+
+列出配置的向量桶中的所有索引。
+
+返回：`Promise<string[]>`
+
+### `updateVector()` {/* #updatevector */}
+
+更新索引中特定 ID 的向量或元資料。
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Index containing the vector.',
+},
+{
+  name: 'id',
+  type: 'string',
+  description: 'ID to update.',
+},
+{
+  name: 'update',
+  type: 'object',
+  description: 'Update data containing vector and/or metadata',
+},
+{
+  name: 'update.vector',
+  type: 'number[]',
+  isOptional: true,
+  description: 'New vector data to update',
+},
+{
+  name: 'update.metadata',
+  type: 'Record<string, any>',
+  isOptional: true,
+  description: 'New metadata to update',
+},
+]}
+/>
+
+### `deleteVector()` {/* #deletevector */}
+
+按 ID 刪除特定向量。
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Index containing the vector.',
+},
+{
+  name: 'id',
+  type: 'string',
+  description: 'ID to delete.',
+},
+]}
+/>
+
+### `deleteVectors()` {/* #deletevectors */}
+
+按 ID 刪除多個向量。不支援透過元資料過濾器刪除：透過`ids` instead, and pass either `ids` or `filter`, never both.
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Index containing the vectors to delete.',
+},
+{
+  name: 'ids',
+  type: 'string[]',
+  description: 'IDs of the vectors to delete. Required for S3 Vectors.',
+},
+{
+  name: 'filter',
+  type: 'Record<string, any>',
+  isOptional: true,
+  description:
+    'Metadata filter. Accepted by the interface but not supported by S3 Vectors, which throws when it receives one.',
+},
+]}
+/>
+
+### `disconnect()` {/* #disconnect */}
+
+關閉底層 AWS 開發Tool包 HTTP 處理程序以釋放套接字。
+
+## 回應類型 {/* #response-types */}
+
+查詢結果以如下格式傳回：
+
+```typescript
+interface QueryResult {
+  id: string
+  score: number // 1/(1 + distance)
+  metadata?: Record<string, any>
+  vector?: number[] // Only included if includeVector is true
+}
+```
+
+## 過濾語法 {/* #filter-syntax */}
+
+S3 Vectors 支援運算子和值類型的嚴格子集。 Mastra 過濾器轉換器：
+
+* **規範化隱式 AND**: `{a:1,b:2}` → `{ $and: [{a:1},{b:2}] }`.
+* **標準化日期值**到 epoch ms 進行數值比較和數組元素。
+* **不允許日期**處於平等地位（`field: value` or `$eq/$ne`). Equality values must be **string | number | boolean**.
+* **拒絕**null/未定義的平等。**array equality** isn't supported (use `$in`/`$nin`).
+* 僅有&#x7684;**`$and` / `$or`** are allowed as top-level logical operators.
+* 邏輯運算子必須包含**field conditions** (not direct operators).
+
+**支援的營運商：**
+
+* **邏輯：** `$and`, `$or` (non-empty arrays)
+* **基本的：** `$eq`, `$ne` (string | number | boolean)
+* **數字：** `$gt`, `$gte`, `$lt`, `$lte` (number or `Date` → epoch ms)
+* **大批：** `$in`, `$nin` (non-empty arrays of string | number | boolean; `Date` → epoch ms)
+* **元素：** `$exists` (boolean)
+
+**不支援/不允許（拒絕）：** `$not`, `$nor`, `$regex`, `$all`, `$elemMatch`, `$size`, `$text`, etc.
+
+**範例：**
+
+```typescript oxfmt:false
+// Implicit AND
+{ genre: { $in: ["documentary", "comedy"] }, year: { $gte: 2020 } }
+
+// Explicit logicals and ranges
+{
+  $and: [
+    { price: { $gte: 100, $lte: 1000 } },
+    { $or: [{ stock: { $gt: 0 } }, { preorder: true }] }
+  ]
+}
+
+// Dates in range (converted to epoch ms)
+{ timestamp: { $gt: new Date("2024-01-01T00:00:00Z") } }
+```
+
+：：：筆記
+
+如果你設定`nonFilterableMetadataKeys` at index creation, those keys are stored but **can't** be used in filters.
+
+:::
+
+## 錯誤處理 {/* #error-handling */}
+
+店裡丟`MastraError` instances from `@mastra/core/error`:
+
+```typescript
+import { MastraError } from '@mastra/core/error'
+
+try {
+  await store.query({
+    indexName: 'index-name',
+    queryVector: queryVector,
+  })
+} catch (error) {
+  if (error instanceof MastraError) {
+    console.log(error.id) // 'MASTRA_VECTOR_S3VECTORS_QUERY_FAILED'
+    console.log(error.domain) // 'STORAGE'
+    console.log(error.category) // 'USER' | 'THIRD_PARTY'
+    console.log(error.details) // Additional error context
+  }
+}
+```
+
+## 環境變數 {/* #environment-variables */}
+
+連接應用程式時的典型環境變數：
+
+* `S3_VECTORS_BUCKET_NAME`：你的S3**vector bucket** name (used to populate `vectorBucketName`).
+* `AWS_REGION`：S3 向量儲存桶的 AWS 區域。
+* **AWS 憑證**：透過標準 AWS SDK Provider鏈（`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_PROFILE`, etc.).
+
+## 最佳實踐 {/* #best-practices */}
+
+* 選擇指標 (`cosine` or `euclidean`) to match your embedding model. `dotproduct` isn't supported.
+* 保持**filterable** metadata small and structured (string/number/boolean). Store large text (e.g., `content`) as **non-filterable**.
+* 使用**dotted paths** for nested metadata and explicit `$and`/`$or` for complex logic.
+* 避免打電話`describeIndex()` on hot paths. `count` is computed with paginated `ListVectors` (**O(n)**).
+* 使用`includeVector: true` only when you need raw vectors.
+
+## 有關的 {/* #related */}
+
+* [元資料過濾器](/reference/rag/metadata-filters)

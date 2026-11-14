@@ -1,0 +1,574 @@
+---
+title: "Convex | Vector Stores"
+description: "Store embeddings in Convex and query them from Mastra with cosine similarity and metadata filtering, for development-scale search."
+packages:
+  - "@mastra/convex"
+---
+
+# 凸向量存储
+
+这`ConvexVector`类提供向量存储和相似性搜索使用[凸面](https://convex.dev)。它将嵌入存储在 Convex 内，并在 Mastra 适配器中执行余弦相似性搜索。
+
+:::警告\[开发规模搜索]
+
+`ConvexVector`通过 Mastra 存储处理程序读取匹配的向量并在 JavaScript 中过滤它们。然后，它计算余弦相似度并对结果进行排序，然后返回最匹配的结果。将其用于本地开发、测试和小型数据集。
+
+对于凸上的生产向量搜索，请使用`ConvexNativeVector`. It uses the Convex native `vectorSearch` API, which requires a deployed Convex vector index and a Convex action.
+
+:::
+
+## 安装 {/* #installation */}
+
+```bash npm2yarn
+npm install @mastra/convex@latest
+```
+
+## 凸设置 {/* #convex-setup */}
+
+使用前`ConvexVector`, you need to set up the Convex schema and storage handler. See [Convex Storage Setup](/integrations/databases/convex#convex-setup) for setup instructions.
+
+## 构造函数选项 {/* #constructor-options */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'id',
+  type: 'string',
+  description: 'Unique identifier for this vector store instance',
+},
+{
+  name: 'deploymentUrl',
+  type: 'string',
+  description: 'Convex deployment URL (e.g., https://your-project.convex.cloud)',
+  isOptional: false,
+},
+{
+  name: 'adminAuthToken',
+  type: 'string',
+  description: 'Convex admin authentication token',
+  isOptional: false,
+},
+{
+  name: 'storageFunction',
+  type: 'string',
+  description: 'Path to the storage mutation function',
+  isOptional: true,
+  defaultValue: 'mastra/storage:handle',
+},
+]}
+/>
+
+## 构造函数示例 {/* #constructor-examples */}
+
+### 基本配置 {/* #basic-configuration */}
+
+```ts
+import { ConvexVector } from '@mastra/convex'
+
+const vectorStore = new ConvexVector({
+  id: 'convex-vectors',
+  deploymentUrl: 'https://your-project.convex.cloud',
+  adminAuthToken: 'your-admin-token',
+})
+```
+
+### 本机凸向量搜索 {/* #native-convex-vector-search */}
+
+使用`ConvexNativeVector` for production vector workloads. It stores vectors in a dedicated Convex table and queries a schema-defined Convex vector index.
+
+在`convex/schema.ts`, define a dedicated table for each Mastra vector index:
+
+```typescript title="convex/schema.ts"
+import { defineSchema } from 'convex/server'
+import { defineMastraNativeVectorTable } from '@mastra/convex/schema'
+
+export default defineSchema({
+  docs_vectors: defineMastraNativeVectorTable({
+    dimensions: 1536,
+  }),
+})
+```
+
+在`convex/mastra/nativeVector.ts`, export the native vector handlers:
+
+```typescript title="convex/mastra/nativeVector.ts"
+import {
+  mastraNativeVectorAction,
+  mastraNativeVectorMutation,
+  mastraNativeVectorQuery,
+} from '@mastra/convex/server'
+
+export const query = mastraNativeVectorAction
+export const read = mastraNativeVectorQuery
+export const write = mastraNativeVectorMutation
+```
+
+在您的 Mastra 应用程序中，配置`ConvexNativeVector` with the deployed table and vector index:
+
+```typescript title="src/mastra/index.ts"
+import { ConvexNativeVector } from '@mastra/convex'
+
+const vectorStore = new ConvexNativeVector({
+  id: 'convex-native-vectors',
+  deploymentUrl: process.env.CONVEX_URL!,
+  adminAuthToken: process.env.CONVEX_ADMIN_KEY!,
+  indexes: {
+    docs: {
+      tableName: 'docs_vectors',
+      vectorIndexName: 'by_embedding',
+      dimension: 1536,
+    },
+  },
+})
+
+const results = await vectorStore.query({
+  indexName: 'docs',
+  queryVector: embedding,
+  topK: 10,
+})
+```
+
+对于本机过滤器支持，请在凸架构中声明过滤器字段。写入向量时，本机向量处理程序将匹配的元数据字段复制到顶级文档字段。
+
+```typescript title="convex/schema.ts"
+import { defineSchema, defineTable } from 'convex/server'
+import { v } from 'convex/values'
+
+export default defineSchema({
+  docs_vectors: defineTable({
+    id: v.string(),
+    embedding: v.array(v.float64()),
+    metadata: v.optional(v.any()),
+    tenantId: v.string(),
+  })
+    .index('by_record_id', ['id'])
+    .vectorIndex('by_embedding', {
+      vectorField: 'embedding',
+      dimensions: 1536,
+      filterFields: ['tenantId'],
+    }),
+})
+```
+
+```typescript title="src/mastra/index.ts"
+const vectorStore = new ConvexNativeVector({
+  id: 'convex-native-vectors',
+  deploymentUrl: process.env.CONVEX_URL!,
+  adminAuthToken: process.env.CONVEX_ADMIN_KEY!,
+  indexes: {
+    docs: {
+      tableName: 'docs_vectors',
+      dimension: 1536,
+      filterFields: ['tenantId'],
+    },
+  },
+})
+
+await vectorStore.upsert({
+  indexName: 'docs',
+  ids: ['chunk-1'],
+  vectors: [embedding],
+  metadata: [{ tenantId: 'acme', text: 'Account setup guide' }],
+})
+
+const results = await vectorStore.query({
+  indexName: 'docs',
+  queryVector: embedding,
+  filter: { tenantId: 'acme' },
+})
+```
+
+`ConvexNativeVector`支持凸本机矢量滤波器形状：一个等式场，或`$or` of equality fields. It doesn't support metadata-only queries, filter-based updates, or filter-based deletes. Use vector IDs for updates and deletes.
+
+### 自定义存储功能 {/* #custom-storage-function */}
+
+```ts
+const vectorStore = new ConvexVector({
+  id: 'convex-vectors',
+  deploymentUrl: 'https://your-project.convex.cloud',
+  adminAuthToken: 'your-admin-token',
+  storageFunction: 'custom/path:handler',
+})
+```
+
+## 方法 {/* #methods */}
+
+### `createIndex()` {/* #createindex */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index to create',
+},
+{
+  name: 'dimension',
+  type: 'number',
+  description: 'Vector dimension (must match your embedding model)',
+},
+{
+  name: 'metric',
+  type: "'cosine' | 'euclidean' | 'dotproduct'",
+  isOptional: true,
+  defaultValue: 'cosine',
+  description: 'Distance metric for similarity search (only cosine is currently supported)',
+},
+]}
+/>
+
+```typescript
+await vectorStore.createIndex({
+  indexName: 'my_vectors',
+  dimension: 1536,
+})
+```
+
+### `upsert()` {/* #upsert */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index to upsert vectors into',
+},
+{
+  name: 'vectors',
+  type: 'number[][]',
+  description: 'Array of embedding vectors',
+},
+{
+  name: 'metadata',
+  type: 'Record<string, any>[]',
+  isOptional: true,
+  description: 'Metadata for each vector',
+},
+{
+  name: 'ids',
+  type: 'string[]',
+  isOptional: true,
+  description: 'Optional vector IDs (auto-generated if not provided)',
+},
+]}
+/>
+
+```typescript oxfmt:false
+await vectorStore.upsert({
+  indexName: "my_vectors",
+  vectors: [[0.1, 0.2, 0.3, ...]],
+  metadata: [{ label: "example" }],
+  ids: ["vec-1"],
+});
+```
+
+### `query()` {/* #query */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index to query',
+},
+{
+  name: 'queryVector',
+  type: 'number[]',
+  description: 'Query vector',
+},
+{
+  name: 'topK',
+  type: 'number',
+  isOptional: true,
+  defaultValue: '10',
+  description: 'Number of results to return',
+},
+{
+  name: 'filter',
+  type: 'Record<string, any>',
+  isOptional: true,
+  description: 'Metadata filters',
+},
+{
+  name: 'includeVector',
+  type: 'boolean',
+  isOptional: true,
+  defaultValue: 'false',
+  description: 'Whether to include the vector in the result',
+},
+]}
+/>
+
+```typescript oxfmt:false
+const results = await vectorStore.query({
+  indexName: "my_vectors",
+  queryVector: [0.1, 0.2, 0.3, ...],
+  topK: 5,
+  filter: { category: "documents" },
+});
+```
+
+### `listIndexes()` {/* #listindexes */}
+
+以字符串形式返回索引名称数组。
+
+```typescript
+const indexes = await vectorStore.listIndexes()
+// ["my_vectors", "embeddings", ...]
+```
+
+### `describeIndex()` {/* #describeindex */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index to describe',
+},
+]}
+/>
+
+返回：
+
+```typescript
+interface IndexStats {
+  dimension: number
+  count: number
+  metric: 'cosine' | 'euclidean' | 'dotproduct'
+}
+```
+
+### `deleteIndex()` {/* #deleteindex */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index to delete',
+},
+]}
+/>
+
+删除索引及其所有向量。
+
+```typescript
+await vectorStore.deleteIndex({ indexName: 'my_vectors' })
+```
+
+### `truncateIndex()` {/* #truncateindex */}
+
+删除索引中的每个向量，同时保留索引本身。行被批量删除，因此每个突变都保持在 Convex 的每次突变时间限制内。此方法可用于`ConvexVector`; `ConvexNativeVector` uses Convex's own table operations instead.
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index to clear',
+},
+]}
+/>
+
+```typescript
+await vectorStore.truncateIndex({ indexName: 'my_vectors' })
+```
+
+### `updateVector()` {/* #updatevector */}
+
+通过 ID 或元数据过滤器更新单个向量。任何一个`id` or `filter` must be provided, but not both.
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index containing the vector',
+},
+{
+  name: 'id',
+  type: 'string',
+  isOptional: true,
+  description: 'ID of the vector to update (mutually exclusive with filter)',
+},
+{
+  name: 'filter',
+  type: 'Record<string, any>',
+  isOptional: true,
+  description: 'Metadata filter to identify vector(s) to update (mutually exclusive with id)',
+},
+{
+  name: 'update',
+  type: '{ vector?: number[]; metadata?: Record<string, any>; }',
+  description: 'Object containing the vector and/or metadata to update',
+},
+]}
+/>
+
+```typescript
+// Update by ID
+await vectorStore.updateVector({
+  indexName: 'my_vectors',
+  id: 'vector123',
+  update: {
+    vector: [0.1, 0.2, 0.3],
+    metadata: { label: 'updated' },
+  },
+})
+
+// Update by filter
+await vectorStore.updateVector({
+  indexName: 'my_vectors',
+  filter: { category: 'product' },
+  update: {
+    metadata: { status: 'reviewed' },
+  },
+})
+```
+
+### `deleteVector()` {/* #deletevector */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index containing the vector',
+},
+{
+  name: 'id',
+  type: 'string',
+  description: 'ID of the vector to delete',
+},
+]}
+/>
+
+```typescript
+await vectorStore.deleteVector({ indexName: 'my_vectors', id: 'vector123' })
+```
+
+### `deleteVectors()` {/* #deletevectors */}
+
+通过 ID 或元数据过滤器删除多个向量。任何一个`ids` or `filter` must be provided, but not both.
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index containing the vectors to delete',
+},
+{
+  name: 'ids',
+  type: 'string[]',
+  isOptional: true,
+  description: 'Array of vector IDs to delete (mutually exclusive with filter)',
+},
+{
+  name: 'filter',
+  type: 'Record<string, any>',
+  isOptional: true,
+  description: 'Metadata filter to identify vectors to delete (mutually exclusive with ids)',
+},
+]}
+/>
+
+```typescript
+// Delete by IDs
+await vectorStore.deleteVectors({
+  indexName: 'my_vectors',
+  ids: ['vec1', 'vec2', 'vec3'],
+})
+
+// Delete by filter
+await vectorStore.deleteVectors({
+  indexName: 'my_vectors',
+  filter: { status: 'archived' },
+})
+```
+
+## 响应类型 {/* #response-types */}
+
+查询结果以如下格式返回：
+
+```typescript
+interface QueryResult {
+  id: string
+  score: number
+  metadata?: Record<string, any>
+  vector?: number[] // Only included if includeVector is true
+}
+```
+
+## 元数据过滤 {/* #metadata-filtering */}
+
+`ConvexVector`支持使用运算符进行元数据过滤。从 Convex 加载矢量后，适配器将应用这些过滤器。
+
+```typescript
+// Simple equality
+const results = await vectorStore.query({
+  indexName: 'my_vectors',
+  queryVector: embedding,
+  filter: { category: 'documents' },
+})
+
+// Comparison operators
+const results = await vectorStore.query({
+  indexName: 'my_vectors',
+  queryVector: embedding,
+  filter: {
+    price: { $gt: 100 },
+    status: { $in: ['active', 'pending'] },
+  },
+})
+
+// Logical operators
+const results = await vectorStore.query({
+  indexName: 'my_vectors',
+  queryVector: embedding,
+  filter: {
+    $and: [{ category: 'electronics' }, { price: { $lte: 500 } }],
+  },
+})
+```
+
+### 支持的过滤器运算符 {/* #supported-filter-operators */}
+
+|操作员|描述 |
+| - | - |
+|`$ne` | Not equal to |
+| `$gt` | Greater than |
+| `$gte` | Greater than or equal |
+| `$lt` | Less than |
+| `$lte` | Less than or equal |
+| `$in` | In array |
+| `$nin` | Not in array |
+| `$and` | Logical AND |
+| `$or` | Logical OR |
+
+## 建筑学 {/* #architecture */}
+
+`ConvexVector`将每个索引存储在其自己的表中，名为`mastra_vector_{indexName}`. Each record has the following structure:
+
+* `id`：唯一的向量标识符
+* `embedding`：矢量数据（浮点数数组）
+* `metadata`：可选的 JSON 元数据
+
+矢量相似性搜索是通过 Mastra 适配器中的余弦相似性进行的。这保持了设置的灵活性，但它不适用于大型生产矢量集合。
+
+`ConvexNativeVector`将每个 Mastra 向量索引存储在专用的凸表中。它的查询调用一个凸操作，该操作使用`ctx.vectorSearch`, then load the matched documents through a Convex query. This follows the Convex native vector search model:
+
+* 向量索引声明于`convex/schema.ts`.
+* 矢量搜索从凸操作运行。
+* `topK`必须介于`1` and `256`.
+* 过滤器必须针对凸向量索引中列出的字段`filterFields`.
+* 每个 Mastra 向量索引使用一个专用表以避免交叉索引结果。
+
+当您需要在运行时创建运行时定义的索引、仅元数据查询、复杂的过滤器运算符、基于过滤器的批量更新或删除，或者结果限制高于 Convex 的本机矢量搜索上限时，请使用外部矢量数据库。
+
+## 有关的 {/* #related */}
+
+* [凸存储](/integrations/databases/convex)
+* [元数据过滤器](/reference/rag/metadata-filters)
+* [凸文档](https://docs.convex.dev/)

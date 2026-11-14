@@ -1,0 +1,289 @@
+---
+title: "Fly.io Sprites | Sandbox"
+description: "Run Mastra workspace commands in persistent Fly.io Sprites with filesystem reuse, streaming output, background processes, and checkpoint capture."
+packages:
+  - "@mastra/sprites"
+---
+
+import Tabs from "@theme/Tabs";
+import TabItem from "@theme/TabItem";
+
+# Fly.io精灵
+
+以持久方式执行命令[Fly.io Sprites](https://sprites.dev)通过官方`@fly/sprites`SDK。 Sprite 是一种 Linux VM，它在运行之间保持其文件系统，并在空闲时自行休眠。`SpritesSandbox`通过名称获取或创建 Sprite，以便新进程可以重新连接到相同的文件。支持带有流输出、超时、取消、带有标准输入的后台进程以及检查点捕获的命令执行。接口详情请参见[Workspace沙盒界面](/reference/workspace/sandbox).
+
+## 安装 {/* #installation */}
+
+```bash npm2yarn
+npm install @mastra/sprites
+```
+
+：：：笔记`@mastra/sprites` requires Node.js 24 or later because the `@fly/sprites` SDK does.
+:::
+
+通过以下三种方式之一设置 Sprites API 令牌。
+
+<Tabs>
+  <TabItem value="shell-export" label="Shell export">
+    ```bash
+    export SPRITES_TOKEN=your-api-token
+    ```
+  </TabItem>
+
+  <TabItem value="env-file" label=".env file">
+    ```bash
+    SPRITES_TOKEN=your-api-token
+    ```
+  </TabItem>
+
+  <TabItem value="constructor" label="Constructor">
+    ```typescript
+    new SpritesSandbox({ token: 'your-api-token' })
+    ```
+  </TabItem>
+</Tabs>
+
+## 用法 {/* #usage */}
+
+添加一个`SpritesSandbox` to a workspace and assign it to an agent:
+
+```typescript
+import { Agent } from '@mastra/core/agent'
+import { Workspace } from '@mastra/core/workspace'
+import { SpritesSandbox } from '@mastra/sprites'
+
+const workspace = new Workspace({
+  sandbox: new SpritesSandbox({
+    id: 'mastra-project',
+    // token read from SPRITES_TOKEN
+  }),
+})
+
+const agent = new Agent({
+  id: 'code-agent',
+  name: 'Code Agent',
+  instructions: 'You are a coding assistant working in this workspace.',
+  model: '__GATEWAY_ANTHROPIC_MODEL_SONNET__',
+  workspace,
+})
+
+const response = await agent.generate(
+  'Print "Hello, world!" and show the current working directory.',
+)
+
+console.log(response.text)
+```
+
+### 重用精灵 {/* #reusing-a-sprite */}
+
+这`id` is the Sprite name. On `start()`, `SpritesSandbox` looks up a Sprite with that name and reconnects to it, or creates one when none exists. Files written in an earlier session are still there:
+
+```typescript
+const first = new SpritesSandbox({ id: 'mastra-project' })
+await first.executeCommand('sh', ['-c', 'echo hello > notes.txt'])
+await first.stop()
+
+// Later, possibly in another process
+const second = new SpritesSandbox({ id: 'mastra-project' })
+const result = await second.executeCommand('cat', ['notes.txt'])
+console.log(result.stdout) // hello
+```
+
+您帐户中任何同名的现有 Sprite 都会被采用，因此请选择项目唯一的名称。什么时候`id` is omitted, a random name is generated.
+
+`spriteConfig`（RAM、CPU、区域、存储）仅在创建 Sprite 时应用。
+
+### 停止并摧毁 {/* #stopping-and-destroying */}
+
+`stop()`和`destroy()` do different things:
+
+* `stop()`终止此实例启动的后台进程并关闭 SDK 连接。 Sprite 及其文件系统被保留。精灵在空闲时会自行冬眠，因此无需暂停任何内容。
+* `destroy()`永久删除 Sprite 及其文件系统。无需调用即可工作`start()` first, and a Sprite that no longer exists is treated as already deleted.
+
+```typescript
+const sandbox = new SpritesSandbox({ id: 'mastra-project' })
+
+// Remove the Sprite when the project is finished
+await sandbox.destroy()
+```
+
+### 检查站 {/* #checkpoints */}
+
+`snapshot()`捕获 Sprite 当前状态的检查点并等待捕获完成：
+
+```typescript
+await sandbox.snapshot()
+```
+
+检查点位于精灵内部。它们不能用于启动或播种另一个Sandbox，所以`supportsCheckpoints` is `false` and `SpritesSandbox` doesn't implement `clone()`. Use the `@fly/sprites` SDK through `sandbox.sprite` to list or restore checkpoints.
+
+### 流式输出 {/* #streaming-output */}
+
+经过`onStdout` and `onStderr` to receive output as it arrives:
+
+```typescript
+await sandbox.executeCommand('npm', ['install'], {
+  onStdout: data => process.stdout.write(data),
+  onStderr: data => process.stderr.write(data),
+  timeout: 120_000,
+})
+```
+
+当命令超时或其`abortSignal` fires, the command is killed and the result reports `killed: true`.
+
+## 构造函数参数 {/* #constructor-parameters */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'id',
+  type: 'string',
+  description:
+    'Sprite name, also used as the sandbox ID. An existing Sprite with this name is reused; otherwise one is created.',
+  isOptional: true,
+  defaultValue: 'Auto-generated',
+},
+{
+  name: 'token',
+  type: 'string',
+  description: 'Sprites API token.',
+  isOptional: true,
+  defaultValue: 'SPRITES_TOKEN environment variable',
+},
+{
+  name: 'baseURL',
+  type: 'string',
+  description: 'Sprites API base URL.',
+  isOptional: true,
+  defaultValue: "'https://api.sprites.dev'",
+},
+{
+  name: 'spriteConfig',
+  type: 'SpriteConfig',
+  description: 'Machine configuration (ramMB, cpus, region, storageGB). Only applied when the Sprite is created.',
+  isOptional: true,
+},
+{
+  name: 'timeout',
+  type: 'number',
+  description: 'Default command timeout in milliseconds. A per-command timeout takes precedence.',
+  isOptional: true,
+},
+{
+  name: 'env',
+  type: 'Record<string, string>',
+  description: 'Environment variables added to every command. Per-command env takes precedence.',
+  isOptional: true,
+},
+{
+  name: 'workingDirectory',
+  type: 'string',
+  description: 'Default working directory for commands. Defaults to the Sprite user home directory.',
+  isOptional: true,
+},
+{
+  name: 'instructions',
+  type: 'string | (opts) => string',
+  description:
+    'Override the default agent instructions. A string replaces them entirely; a function receives the default instructions and returns the final text.',
+  isOptional: true,
+},
+]}
+/>
+
+## 特性 {/* #properties */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'id',
+  type: 'string',
+  description: 'Sprite name and sandbox identifier.',
+},
+{
+  name: 'name',
+  type: 'string',
+  description: "Provider name ('SpritesSandbox').",
+},
+{
+  name: 'provider',
+  type: 'string',
+  description: "Provider identifier ('sprites').",
+},
+{
+  name: 'status',
+  type: 'ProviderStatus',
+  description: 'Current lifecycle status of the sandbox.',
+},
+{
+  name: 'sprite',
+  type: 'Sprite',
+  description:
+    'The underlying `@fly/sprites` Sprite for direct SDK access. Throws SandboxNotReadyError if the sandbox has not been started.',
+},
+{
+  name: 'processes',
+  type: 'SpritesProcessManager',
+  description:
+    'Background process manager. See [SandboxProcessManager reference](/reference/workspace/process-manager).',
+},
+]}
+/>
+
+## 方法 {/* #methods */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'stop',
+  type: '() => Promise<void>',
+  description: 'Kill background processes and close the SDK connection. The Sprite and its filesystem are kept.',
+},
+{
+  name: 'destroy',
+  type: '() => Promise<void>',
+  description: 'Permanently delete the Sprite. Works without a prior start.',
+},
+{
+  name: 'snapshot',
+  type: '() => Promise<void>',
+  description: 'Capture a checkpoint of the Sprite. Throws if the capture fails.',
+},
+]}
+/>
+
+## 后台进程 {/* #background-processes */}
+
+`SpritesSandbox`包括用于生成和管理后台进程的进程管理器。每个进程都在自己的 Sprites exec 会话中运行并支持 stdin。
+
+```typescript
+const sandbox = new SpritesSandbox({ id: 'mastra-project' })
+await sandbox.start()
+
+const handle = await sandbox.processes.spawn('node server.js', {
+  env: { PORT: '3000' },
+  onStdout: data => console.log(data),
+})
+
+await handle.sendStdin('reload\n')
+await handle.kill()
+```
+
+由一个进程启动的进程`SpritesSandbox` instance are not visible to another instance, and `stop()` kills them.
+
+看[`SandboxProcessManager` reference](/reference/workspace/process-manager) for the full API.
+
+## 编辑器Provider {/* #editor-provider */}
+
+向Provider注册`MastraEditor` to hydrate stored sandbox configs into runtime instances:
+
+```typescript
+import { MastraEditor } from '@mastra/editor'
+import { spritesSandboxProvider } from '@mastra/sprites'
+
+const editor = new MastraEditor({
+  sandboxes: { [spritesSandboxProvider.id]: spritesSandboxProvider },
+})
+```
+
+请参阅[Sandbox provider reference](/reference/editor/sandbox-provider) for details on registering custom sandbox providers.

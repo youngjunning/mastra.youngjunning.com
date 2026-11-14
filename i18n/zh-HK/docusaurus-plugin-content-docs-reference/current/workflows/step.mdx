@@ -1,6 +1,6 @@
 ---
-title: "參考：Step class | Workflows"
-description: Mastra Step class 的文件，此 class 用於定義 Workflow 內的個別工作單元。
+title: "Reference: Step class | Workflows"
+description: "The Step class defines individual units of work within a workflow, encapsulating execution logic, data validation, and input/output handling."
 packages:
   - "@mastra/core"
 ---
@@ -8,10 +8,10 @@ packages:
 import Tabs from "@theme/Tabs";
 import TabItem from "@theme/TabItem";
 
-# Step class
+# 階梯班
 
-Step class 定義 Workflow 內的個別工作單元，並封裝執行邏輯、資料驗證及輸入／輸出處理。
-它可接受 Tool 或 Agent 作為參數，並據此自動建立步驟。
+Step 類別定義Workflow中的各個工作單元，封裝執行邏輯、資料驗證和輸入/輸出處理。
+它可以將Tool、Agent或配置的分類器作為參數來自動建立步驟。
 
 ## 使用範例 {/* #usage-example */}
 
@@ -37,9 +37,9 @@ const step1 = createStep({
 })
 ```
 
-## 定義 schema {/* #define-schemas */}
+## 定義模式 {/* #define-schemas */}
 
-你可以使用任何支援 [Standard JSON Schema](https://standardschema.dev/json-schema) 的程式庫，定義步驟的 `inputSchema` 及 `outputSchema`，包括 [Zod](https://zod.dev/)、[Valibot](https://valibot.dev/) 及 [ArkType](https://arktype.io/) 等程式庫。
+您可以定義步驟`inputSchema` and `outputSchema` with any library that supports [標準 JSON 架構](https://standardschema.dev/json-schema)。這包括像這樣的庫[佐德](https://zod.dev/), [瓦利博特](https://valibot.dev/)， 和[方舟型](https://arktype.io/).
 
 <Tabs>
   <TabItem value="zod" label="Zod">
@@ -120,25 +120,29 @@ const step1 = createStep({
   </TabItem>
 </Tabs>
 
-## 從 Agent 建立步驟 {/* #creating-steps-from-agents */}
+## 從Agent程式建立步驟 {/* #creating-steps-from-agents */}
 
-你可以直接從 Agent 建立步驟。該步驟會使用 Agent 的名稱作為 ID。
+您可以直接從Agent程式建立步驟。此步驟將使用Agent的名稱作為其 ID。
 
-### 基本 Agent 步驟 {/* #basic-agent-step */}
+### 基本Agent步驟 {/* #basic-agent-step */}
 
 ```typescript title="src/mastra/workflows/test-workflow.ts"
 import { testAgent } from '../agents/test-agent'
+import { createStep } from '@mastra/core/workflows'
 
 const agentStep = createStep(testAgent)
 // inputSchema: { prompt: string }
 // outputSchema: { text: string }
 ```
 
-### 使用結構化輸出的 Agent 步驟 {/* #agent-step-with-structured-output */}
+### 具有結構化輸出的Agent步驟 {/* #agent-step-with-structured-output */}
 
-傳入 `structuredOutput`，讓 Agent 傳回具型別的結構化資料：
+經過`structuredOutput` to have the agent return typed structured data:
 
 ```typescript title="src/mastra/workflows/test-workflow.ts"
+import { createStep } from '@mastra/core/workflows'
+import { z } from 'zod'
+
 const articleSchema = z.object({
   title: z.string(),
   summary: z.string(),
@@ -152,189 +156,242 @@ const agentStep = createStep(testAgent, {
 // outputSchema: { title: string, summary: string, tags: string[] }
 ```
 
-### Agent 步驟選項 {/* #agent-step-options */}
+### Agent步驟選項 {/* #agent-step-options */}
 
 <PropertiesTable
   content={[
-  {
-    name: 'structuredOutput',
-    type: '{ schema: StandardJSONSchemaV1 }',
-    description:
-      '提供此選項後，Agent 會傳回符合此 schema 的結構化資料，而非純文字。步驟的 outputSchema 會設為所提供的 schema。',
-    required: false,
-  },
-  {
-    name: 'onFinish',
-    type: '(result: AgentResult) => void',
-    description: 'Agent 完成生成時呼叫的 callback。',
-    required: false,
-  },
+{
+  name: 'structuredOutput',
+  type: '{ schema: StandardJSONSchemaV1 }',
+  description:
+    "When provided, the agent returns structured data matching this schema instead of plain text. The step's outputSchema is set to the provided schema.",
+  required: false,
+},
+{
+  name: 'onFinish',
+  type: '(result: AgentResult) => void',
+  description: 'Callback invoked when the agent completes generation.',
+  required: false,
+},
 ]}
 />
+
+## 從分類器建立步驟 {/* #creating-steps-from-classifiers */}
+
+透過一個[`Classifier`](/reference/classifier/classifier) with constructor-configured questions to `createStep()`. By default, the classifier evaluates the complete `inputData`. Use `state` to select a JSON value from the step context.
+
+```typescript title="src/mastra/workflows/ticket-triage.ts"
+import { Classifier } from '@mastra/core/classifier'
+import { typeSafeAi } from '@ai-sdk/typesafe-ai'
+import { createStep } from '@mastra/core/workflows'
+
+const router = new Classifier({
+  id: 'ticket-router',
+  model: typeSafeAi.decisionModel('__AI_SDK_TYPESAFE_DECISION_MODEL__'),
+  questions: {
+    route: {
+      type: 'choice',
+      criteria: {
+        billing: 'Billing, invoices, and payments',
+        support: 'Account access and product help',
+        other: 'Anything else',
+      },
+    },
+    urgent: { type: 'boolean' },
+  },
+})
+
+const classifyTicket = createStep(router, {
+  maxRetries: 2,
+  retries: 1,
+})
+```
+
+輸入的步驟輸出是 JSON 安全的：
+
+* `answers.route.choice`是選定的選擇文字。
+* `answers.urgent.probability`是布爾答案的機率`true`, not a thresholded boolean.
+* 選擇和評分答案可能包括分佈。
+* 決策模型拒絕的一個問題是`{ type: 'refusal' }` and has no `choice`, `score`, or `probability`.
+* `usage`包含規範化的令牌使用情況。
+
+`maxRetries`控制分類器模型呼叫重試。`retries` controls workflow step retries. Classifier warnings, response metadata, and raw provider data aren't included in workflow output.
+
+沒有建構函數配置的問題的分類器不能用作Workflow步驟。此步驟評估其完整輸入。添加前面的`.map()` call when the workflow needs to select or reshape that input.
 
 ## 建構函數參數 {/* #constructor-parameters */}
 
 <PropertiesTable
   content={[
-  {
-    name: 'id',
-    type: 'string',
-    description: '步驟的唯一識別碼',
-    required: true,
-  },
-  {
-    name: 'description',
-    type: 'string',
-    description: '說明步驟用途的可選描述',
-    required: false,
-  },
-  {
-    name: 'inputSchema',
-    type: 'StandardJSONSchemaV1',
-    description: '定義輸入結構的 Standard JSON Schema',
-    required: true,
-  },
-  {
-    name: 'outputSchema',
-    type: 'StandardJSONSchemaV1',
-    description: '定義輸出結構的 Standard JSON Schema',
-    required: true,
-  },
-  {
-    name: 'resumeSchema',
-    type: 'StandardJSONSchemaV1',
-    description: '用於恢復步驟的可選 Standard JSON Schema',
-    required: false,
-  },
-  {
-    name: 'suspendSchema',
-    type: 'StandardJSONSchemaV1',
-    description: '用於暫停步驟的可選 Standard JSON Schema',
-    required: false,
-  },
-  {
-    name: 'stateSchema',
-    type: 'StandardJSONSchemaV1',
-    description:
-      "步驟 state 的可選 Standard JSON Schema。使用 Mastra 的 state 系統時會自動注入。stateSchema 必須是 Workflow stateSchema 的子集。如未指定，型別為 'any'。",
-    required: false,
-  },
-  {
-    name: 'requestContextSchema',
-    type: 'StandardJSONSchemaV1',
-    description:
-      '用於驗證 request context 值的 Standard JSON Schema。提供此項後，系統會在步驟的 execute() 執行前驗證 context；如驗證失敗，步驟亦會失敗。',
-    required: false,
-  },
-  {
-    name: 'execute',
-    type: '(params: ExecuteParams) => Promise<any>',
-    description: '包含步驟邏輯的非同步函數',
-    required: true,
-    properties: [
-      {
-        type: 'ExecuteParams',
-        parameters: [
-          {
-            name: 'inputData',
-            type: 'z.infer<TStepInput>',
-            description: '符合 inputSchema 的輸入資料',
-          },
-          {
-            name: 'resumeData',
-            type: 'z.infer<TResumeSchema>',
-            description: '從暫停狀態恢復步驟時，符合 resumeSchema 的 resume 資料。只在步驟正被恢復時存在。',
-          },
-          {
-            name: 'suspendData',
-            type: 'z.infer<TSuspendSchema>',
-            description:
-              '步驟暫停時原先傳入 suspend() 的 suspend 資料。只在步驟正被恢復，而且之前曾連同資料暫停時存在。',
-          },
-          {
-            name: 'mastra',
-            type: 'Mastra',
-            description: '存取 Mastra 服務（Agent、Tool 等）',
-          },
-          {
-            name: 'getStepResult',
-            type: '(step: Step | string) => any',
-            description: '存取其他步驟結果的函數',
-          },
-          {
-            name: 'getInitData',
-            type: '() => any',
-            description: '在任何步驟中存取 Workflow 初始輸入資料的函數',
-          },
-          {
-            name: 'suspend',
-            type: '(suspendPayload: any, suspendOptions?: { resumeLabel?: string }) => Promise<void>',
-            description: '暫停 Workflow 執行的函數',
-          },
-          {
-            name: 'state',
-            type: 'z.infer<TState>',
-            description:
-              '目前的 Workflow state。包含在所有步驟及 suspend/resume 週期之間持續存在的共用值。其結構由步驟的 stateSchema 定義。',
-          },
-          {
-            name: 'setState',
-            type: '(state: z.infer<TState>) => void',
-            description:
-              "設定 Workflow state 的函數。透過類似 reducer 的模式注入，例如 'setState({ ...state, ...newState })'",
-          },
-          {
-            name: 'runId',
-            type: 'string',
-            description: '目前的 run ID',
-          },
-          {
-            name: 'requestContext',
-            type: 'RequestContext',
-            isOptional: true,
-            description: '用於依賴注入及 context 資訊的 Request Context。',
-          },
-          {
-            name: 'retryCount',
-            type: 'number',
-            description: '此特定步驟的重試次數；每次重試步驟時都會自動增加',
-            isOptional: true,
-          },
-        ],
-      },
-    ],
-  },
-  {
-    name: 'scorers',
-    type: 'MastraScorers | (({ requestContext }) => MastraScorers | Promise<MastraScorers>)',
-    description:
-      '步驟成功完成後自動執行的 Scorer。每個 Scorer 都會評估步驟本身的輸入及輸出，結果會被儲存並附加至步驟的 trace。請提供 `{ [name]: { scorer, sampling? } }` map，或傳回該 map 的函數。評分會以非同步方式執行，不會阻塞 Workflow。請參閱[為步驟輸出評分](#scoring-step-output)。',
-    required: false,
-  },
-  {
-    name: 'retries',
-    type: 'number',
-    description: '步驟的 `execute` 函數拋出錯誤時的重試次數。',
-    required: false,
-  },
-  {
-    name: 'metadata',
-    type: 'Record<string, any>',
-    description: '用於儲存其他步驟資訊的可選 key-value pair。值必須可序列化（不得包含函數、循環參照等）。',
-    required: false,
-  },
+{
+  name: 'id',
+  type: 'string',
+  description: 'Unique identifier for the step',
+  required: true,
+},
+{
+  name: 'description',
+  type: 'string',
+  description: 'Optional description of what the step does',
+  required: false,
+},
+{
+  name: 'inputSchema',
+  type: 'StandardJSONSchemaV1',
+  description: 'Standard JSON Schema defining the input structure',
+  required: true,
+},
+{
+  name: 'outputSchema',
+  type: 'StandardJSONSchemaV1',
+  description: 'Standard JSON Schema defining the output structure',
+  required: true,
+},
+{
+  name: 'resumeSchema',
+  type: 'StandardJSONSchemaV1',
+  description: 'Optional Standard JSON Schema for resuming the step',
+  required: false,
+},
+{
+  name: 'suspendSchema',
+  type: 'StandardJSONSchemaV1',
+  description: 'Optional Standard JSON Schema for suspending the step',
+  required: false,
+},
+{
+  name: 'stateSchema',
+  type: 'StandardJSONSchemaV1',
+  description:
+    "Optional Standard JSON Schema for the step state. Automatically injected when using Mastra's state system. The stateSchema must be a subset of the workflow's stateSchema. If not specified, type is 'any'.",
+  required: false,
+},
+{
+  name: 'requestContextSchema',
+  type: 'StandardJSONSchemaV1',
+  description:
+    "Standard JSON Schema for validating request context values. When provided, the context is validated before the step's execute() runs, failing the step if validation fails.",
+  required: false,
+},
+{
+  name: 'execute',
+  type: '(params: ExecuteParams) => Promise<any>',
+  description: 'Async function containing step logic',
+  required: true,
+  properties: [
+    {
+      type: 'ExecuteParams',
+      parameters: [
+        {
+          name: 'inputData',
+          type: 'z.infer<TStepInput>',
+          description: 'The input data matching the inputSchema',
+        },
+        {
+          name: 'resumeData',
+          type: 'z.infer<TResumeSchema>',
+          description:
+            'The resume data matching the resumeSchema, when resuming the step from a suspended state. Only exists if the step is being resumed.',
+        },
+        {
+          name: 'suspendData',
+          type: 'z.infer<TSuspendSchema>',
+          description:
+            'The suspend data that was originally passed to suspend() when the step was suspended. Only exists if the step is being resumed and was previously suspended with data.',
+        },
+        {
+          name: 'mastra',
+          type: 'Mastra',
+          description: 'Access to Mastra services (agents, tools, etc.)',
+        },
+        {
+          name: 'getStepResultAsync',
+          type: '(step: Step | string) => Promise<any>',
+          description:
+            "Function to access results from other steps. Resolves to the step's output, or `null` if the step hasn't completed successfully.",
+        },
+        {
+          name: 'getStepResult',
+          type: '(step: Step | string) => any',
+          description:
+            'Deprecated. Use `await getStepResultAsync(step)` instead. `getStepResult` will be removed in a future major release.',
+        },
+        {
+          name: 'getInitData',
+          type: '() => any',
+          description: 'Function to access the initial input data of the workflow in any step',
+        },
+        {
+          name: 'suspend',
+          type: '(suspendPayload: any, suspendOptions?: { resumeLabel?: string }) => Promise<void>',
+          description: 'Function to pause workflow execution',
+        },
+        {
+          name: 'state',
+          type: 'z.infer<TState>',
+          description:
+            "The current workflow state. Contains shared values that persist across all steps and suspend/resume cycles. The structure is defined by the step's stateSchema.",
+        },
+        {
+          name: 'setState',
+          type: '(state: z.infer<TState>) => void',
+          description:
+            "Function to set the state of the workflow. Inject via reducer-like pattern, such as 'setState({ ...state, ...newState })'",
+        },
+        {
+          name: 'runId',
+          type: 'string',
+          description: 'Current run id',
+        },
+        {
+          name: 'requestContext',
+          type: 'RequestContext',
+          isOptional: true,
+          description: 'Request Context for dependency injection and contextual information.',
+        },
+        {
+          name: 'retryCount',
+          type: 'number',
+          description:
+            'The retry count for this specific step, it automatically increases each time the step is retried',
+          isOptional: true,
+        },
+      ],
+    },
+  ],
+},
+{
+  name: 'scorers',
+  type: 'MastraScorers | (({ requestContext }) => MastraScorers | Promise<MastraScorers>)',
+  description:
+    "Scorers that run automatically after the step completes successfully. Each scorer evaluates the step's own input and output, and the results are stored and attached to the step's trace. Provide a map of `{ [name]: { scorer, sampling? } }`, or a function that returns one. Scoring runs asynchronously and doesn't block the workflow. See [Scoring step output](#scoring-step-output).",
+  required: false,
+},
+{
+  name: 'retries',
+  type: 'number',
+  description: "Number of times to retry the step's `execute` function if it throws.",
+  required: false,
+},
+{
+  name: 'metadata',
+  type: 'Record<string, any>',
+  description:
+    'Optional key-value pairs for storing additional step information. Values must be serializable (no functions, circular references, etc.).',
+  required: false,
+},
 ]}
 />
 
-## 為步驟輸出評分 {/* #scoring-step-output */}
+## 評分步驟輸出 {/* #scoring-step-output */}
 
-將 `scorers` 附加至步驟，即可在該步驟執行時自動評估其輸出，而非只為 Workflow 的最終答案評分。這對多步驟及 RAG Workflow 很有用，因為你可以查看是哪個步驟令品質下降，例如 retrieval 步驟是否在後續步驟進行推理前傳回了相關 chunk。
+附`scorers` to a step to evaluate that step's output automatically, at the point it runs, instead of only scoring the workflow's final answer. This is useful for multi-step and RAG workflows, where you want to see which step degraded quality, for example whether a retrieval step returned relevant chunks before later steps reason over them.
 
-每個 Scorer 都會接收步驟本身的 `input` 及 `output`。步驟成功後，評分會以非同步方式執行，結果則儲存至步驟的 trace。使用 `sampling` 控制 Scorer 的執行頻率。
+每個得分者都會收到自己的步數`input` and `output`. Scoring runs asynchronously after the step succeeds, and the result is stored against the step's trace. Use `sampling` to control how often a scorer runs.
 
-以下範例將 Scorer 附加至 retrieval 步驟，令每次執行都會被評分：
+以下範例將評分器附加到檢索步驟，以便對每次執行進行評分：
 
-```typescript title="src/mastra/workflows/rag-workflow.ts" prettier:false
+```typescript title="src/mastra/workflows/rag-workflow.ts"
 import { createStep } from '@mastra/core/workflows'
 import { z } from 'zod'
 import { retrievalRelevanceScorer } from '../scorers/retrieval-relevance'
@@ -356,16 +413,16 @@ const retrievalStep = createStep({
 })
 ```
 
-將 Scorer 附加至每個要量度的步驟，便可在多步驟 Workflow 中建立逐步評分。由於評分範圍限於單一步驟，因此毋須專用的跨步驟指標，亦可找出品質在哪裏出現變化。
+將記分器附加到要測量的每個步驟，以便在多步驟Workflow中建立每個步驟分數。由於評分僅限於單一步驟，因此您不需要專用的跨步驟指標來查看品質變化的位置。
 
-使用 [`Workflow.agent()`](/reference/workflows/workflow-methods/agent) 及 [`Workflow.tool()`](/reference/workflows/workflow-methods/tool) 加入的 Agent 和 Tool 步驟，其步驟選項亦接受相同的 `scorers` 選項。
+新增了Agent和Tool步驟[`Workflow.agent()`](/reference/workflows/workflow-methods/agent) and [`Workflow.tool()`](/reference/workflows/workflow-methods/tool) accept the same `scorers` option in their step options.
 
-:::note
-請參閱 [Scorer 概覽](/docs/evals/overview)，了解即時 evaluation 的執行方式及結果的儲存位置；亦可參閱[自訂 Scorer](/docs/evals/custom-scorers)，建立自己的 Scorer。
+:::注意
+參觀[Scorers overview](/docs/evals/overview) to learn how live evaluations run and where results are stored, and [Custom scorers](/docs/evals/custom-scorers) to build your own.
 :::
 
-## 相關內容 {/* #related */}
+## 有關的 {/* #related */}
 
-- [Workflow state](/docs/workflows/workflow-state)
-- [控制流程](/docs/workflows/control-flow)
-- [使用 Agent 及 Tool](/docs/workflows/agents-and-tools)
+* [Workflow狀態](/docs/workflows/workflow-state)
+* [控制流程](/docs/workflows/control-flow)
+* [使用Agent和Tool](/docs/workflows/agents-and-tools)

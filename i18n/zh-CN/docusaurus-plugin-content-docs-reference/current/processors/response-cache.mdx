@@ -1,19 +1,25 @@
 ---
-title: "参考：ResponseCache | Processors"
-description: "ResponseCache 输入 Processor 的 API 参考，它在 Agent 循环内缓存 LLM 响应。"
+title: "Reference: ResponseCache | Processors"
+description: "ResponseCache is an input processor that caches LLM responses on the request/response boundary inside the agentic loop."
 packages:
   - "@mastra/core"
 ---
 
-# ResponseCache
+# 响应缓存
 
-`ResponseCache` 是一种输入 Processor，在 Agent 循环内的请求/响应边界缓存 LLM 响应。它接入 `processLLMRequest` 以查找缓存，并在命中时短路返回。它使用 `processLLMResponse` 写入完整响应。
+:::测试版
 
-缓存键派生自 Mastra 即将发送给模型的已解析 `LanguageModelV2Prompt`（即在内存加载完毕且更早的输入 Processor 已转换提示词\_之后\_），因此拥有不同内存上下文的两个用户会生成不同的缓存键。Agent Tool 循环中的每个步骤都会独立缓存。
+在 API 稳定之前，可能会在没有重大版本更新的情况下发生重大更改。
 
-响应缓存没有 Agent 级选项。请在 `inputProcessors` 上显式注册 `ResponseCache`。每次调用的覆盖项通过 [`ResponseCache.context()`](#static-helpers) 和 [`ResponseCache.applyContext()`](#static-helpers)，经由 `RequestContext` 传递。
+:::
 
-## 用法示例 {/* #usage-example */}
+`ResponseCache`是一个输入处理器，用于在Agent循环内的请求/响应边界上缓存 LLM 响应。它挂钩到`processLLMRequest` for cache lookup and short-circuits on a hit. It uses `processLLMResponse`写出完整的回复。
+
+缓存键源自已解析的`LanguageModelV2Prompt` Mastra is about to send to the model (i.e. *after* memory has loaded and earlier input processors have transformed the prompt) so two users with different memory contexts produce different cache keys. Each step in an agentic tool loop is independently cached.
+
+不存在用于响应缓存的Agent级选项。登记`ResponseCache` explicitly on `inputProcessors`. Per-call overrides flow through `RequestContext` via [`ResponseCache.context()`](#static-helpers)和[`ResponseCache.applyContext()`](#static-helpers).
+
+## 使用示例 {/* #usage-example */}
 
 ```typescript
 import { Agent } from '@mastra/core/agent'
@@ -42,65 +48,67 @@ await agent.generate('What is the capital of France?', {
 })
 ```
 
-有关概念概述、作用域规则和推荐的部署模式，请参阅[响应缓存](/docs/agents/processors#response-caching)。
+看[Response caching](/docs/agents/processors#response-caching) for the conceptual overview, scoping rules, and recommended deployment patterns.
 
 ## 构造函数参数 {/* #constructor-parameters */}
 
 <PropertiesTable
   content={[
-  {
-    name: 'cache',
-    type: 'MastraServerCache',
-    description:
-      '缓存后端。必填。可传入任意 `MastraServerCache` 实现——本地开发使用 `InMemoryServerCache`，生产环境使用 `@mastra/redis` 中的 `RedisCache`，也可以为自定义后端传入自己的子类。',
-    isOptional: false,
-  },
-  {
-    name: 'ttl',
-    type: 'number',
-    description: '此 Processor 所写条目的存活时间（秒）。默认为 300 秒（5 分钟），与 OpenRouter 的参考实现一致。',
-    isOptional: true,
-    defaultValue: '300',
-  },
-  {
-    name: 'scope',
-    type: 'string | null',
-    description:
-      '追加到缓存键的租户作用域。`null` 表示不使用作用域。省略时，Processor 会回退到从请求上下文（`MASTRA_RESOURCE_ID_KEY`）解析出的 resource id，以自动实现按用户隔离。',
-    isOptional: true,
-  },
-  {
-    name: 'key',
-    type: 'string | (inputs: ResponseCacheKeyInputs) => string | Promise<string>',
-    description:
-      '覆盖自动派生的缓存键。传入字符串可固定缓存键，或传入接收 `{ agentId, scope, model, prompt, stepNumber }` 并返回缓存键的函数。如果函数抛出错误，Processor 会回退到确定性哈希，使调用仍可使用缓存。',
-    isOptional: true,
-  },
-  {
-    name: 'bust',
-    type: 'boolean',
-    description: '强制每次调用缓存未命中：跳过读取，但仍在完成时写入。适用于显式刷新路径。',
-    isOptional: true,
-    defaultValue: 'false',
-  },
-  {
-    name: 'agentId',
-    type: 'string',
-    description:
-      "缓存键命名空间中使用的逻辑 id。默认为 `'mastra-response-cache'`。如果希望缓存条目按 Agent 划分作用域，请将其设置为所属 Agent 的 id。",
-    isOptional: true,
-    defaultValue: "'mastra-response-cache'",
-  },
+{
+  name: 'cache',
+  type: 'MastraServerCache',
+  description:
+    'The cache backend. Required. Pass any `MastraServerCache` implementation — `InMemoryServerCache` for local development, `RedisServerCache` from `@mastra/redis` for production, or your own subclass for a custom backend.',
+  isOptional: false,
+},
+{
+  name: 'ttl',
+  type: 'number',
+  description:
+    "Time-to-live (seconds) for entries written by this processor. Defaults to 300 seconds (5 minutes), matching OpenRouter's reference implementation.",
+  isOptional: true,
+  defaultValue: '300',
+},
+{
+  name: 'scope',
+  type: 'string | null',
+  description:
+    'Tenant scope appended to the cache key. `null` opts out of scoping. When omitted, the processor falls back to the resource id resolved from the request context (`MASTRA_RESOURCE_ID_KEY`) for automatic per-user isolation.',
+  isOptional: true,
+},
+{
+  name: 'key',
+  type: 'string | (inputs: ResponseCacheKeyInputs) => string | Promise<string>',
+  description:
+    'Override the auto-derived cache key. Pass a string to pin a key, or a function that receives `{ agentId, scope, model, prompt, stepNumber }` and returns a key. If the function throws, the processor falls back to the deterministic hash so the call still benefits from caching.',
+  isOptional: true,
+},
+{
+  name: 'bust',
+  type: 'boolean',
+  description:
+    'Force a cache miss on every call: skip the read but still write on completion. Useful for explicit refresh paths.',
+  isOptional: true,
+  defaultValue: 'false',
+},
+{
+  name: 'agentId',
+  type: 'string',
+  description:
+    "Logical id used in the cache key namespace. Defaults to `'mastra-response-cache'`. Set this to the owning agent's id when you want cache entries scoped per-agent.",
+  isOptional: true,
+  defaultValue: "'mastra-response-cache'",
+},
 ]}
 />
 
-## 静态辅助函数 {/* #static-helpers */}
+## 静态助手 {/* #static-helpers */}
 
-`ResponseCache` 提供两个静态辅助函数，用于在 `RequestContext` 上设置每次调用的覆盖项。这些辅助函数会将底层上下文键保留为私有实现细节：应优先使用它们，而不是直接读写原始键。
+`ResponseCache`公开两个静态助手，用于设置每次调用覆盖`RequestContext`. The helpers keep the underlying context key a private implementation detail: prefer them over reading/writing the raw key.
 
 ### `ResponseCache.context(options)` {/* #responsecachecontextoptions */}
 
-构建一个预先加载了每次调用响应缓存覆盖项的新 `RequestContext`。
+打造一个新鲜的`RequestContext` preloaded with per-call response cache overrides.
 
 ```typescript
 await agent.stream('hello', {
@@ -110,7 +118,7 @@ await agent.stream('hello', {
 
 ### `ResponseCache.applyContext(requestContext, options)` {/* #responsecacheapplycontextrequestcontext-options */}
 
-将每次调用的响应缓存覆盖项合并到现有 `RequestContext` 中。返回同一个上下文以便链式调用。
+将每次调用响应缓存覆盖合并到现有的`RequestContext`. Returns the same context for chaining.
 
 ```typescript
 const ctx = new RequestContext()
@@ -119,82 +127,83 @@ ResponseCache.applyContext(ctx, { bust: true })
 await agent.stream('hello', { requestContext: ctx })
 ```
 
-## ResponseCacheContextOptions {/* #responsecachecontextoptions-1 */}
+## 响应缓存上下文选项 {/* #responsecachecontextoptions-1 */}
 
-传递给 `ResponseCache.context()` / `ResponseCache.applyContext()` 的数据结构。
-
-<PropertiesTable
-  content={[
-  {
-    name: 'key',
-    type: 'string | (inputs: ResponseCacheKeyInputs) => string | Promise<string>',
-    description: '仅为此请求覆盖自动派生的缓存键。',
-    isOptional: true,
-  },
-  {
-    name: 'scope',
-    type: 'string | null',
-    description: '仅为此请求覆盖租户作用域。`null` 表示不使用作用域。',
-    isOptional: true,
-  },
-  {
-    name: 'bust',
-    type: 'boolean',
-    description: '跳过缓存读取，但仍在完成时写入。',
-    isOptional: true,
-  },
-]}
-/>
-
-`cache`、`ttl` 和 `agentId` 特意不允许按调用覆盖：它们属于实例级关注点，不应因请求而异。
-
-## ResponseCacheKeyInputs {/* #responsecachekeyinputs */}
-
-传递给 `key` 函数（构造函数或每次调用）的参数。默认情况下，所有字段都会参与确定性哈希的计算。
+形状传递给`ResponseCache.context()` / `ResponseCache.applyContext()`.
 
 <PropertiesTable
   content={[
-  {
-    name: 'agentId',
-    type: 'string',
-    description: '用于为缓存键划分命名空间的逻辑 Processor id。',
-    isOptional: false,
-  },
-  {
-    name: 'scope',
-    type: 'string | null | undefined',
-    description: '为此请求解析出的作用域；禁用作用域时为 `null`。',
-    isOptional: true,
-  },
-  {
-    name: 'model',
-    type: '{ provider?: string; modelId?: string; specVersion?: string }',
-    description: 'Provider/模型标识。不同模型会生成不同响应。',
-    isOptional: false,
-  },
-  {
-    name: 'prompt',
-    type: 'LanguageModelV2Prompt',
-    description: 'Provider 将收到的确切提示词，即内存加载以及所有会修改提示词的输入 Processor 处理之后的结果。',
-    isOptional: false,
-  },
-  {
-    name: 'stepNumber',
-    type: 'number',
-    description: 'Agent 循环中从 0 开始的步骤编号。Tool 步骤的编号大于零。',
-    isOptional: false,
-  },
+{
+  name: 'key',
+  type: 'string | (inputs: ResponseCacheKeyInputs) => string | Promise<string>',
+  description: 'Overrides the auto-derived cache key for this request only.',
+  isOptional: true,
+},
+{
+  name: 'scope',
+  type: 'string | null',
+  description: 'Overrides the tenant scope for this request only. `null` opts out of scoping.',
+  isOptional: true,
+},
+{
+  name: 'bust',
+  type: 'boolean',
+  description: 'Skip the cache read but still write on completion.',
+  isOptional: true,
+},
 ]}
 />
 
-## 辅助导出 {/* #helper-exports */}
+`cache`, `ttl`, and `agentId` are intentionally not overridable per call: they're instance-level concerns that shouldn't vary per request.
 
-- `buildResponseCacheKey(inputs)`：默认使用的确定性哈希。可重新导出它以覆盖个别字段，同时保留标准缓存键结构的其余部分。
-- `DEFAULT_RESPONSE_CACHE_TTL_SECONDS`：默认 `ttl`（`300`）。
-- `RESPONSE_CACHE_CONTEXT_KEY`：静态辅助函数写入的 `RequestContext` 键。为高级场景公开（例如在管道中途清除覆盖项）。请优先使用辅助函数。
+## 响应缓存键输入 {/* #responsecachekeyinputs */}
 
-## 相关内容 {/* #related */}
+参数传递给`key` function (constructor or per-call). All fields contribute to the deterministic hash by default.
 
-- [响应缓存](/docs/agents/processors#response-caching)
-- [Processors](/docs/agents/processors)
-- [Processor 接口](/reference/processors/processor-interface)
+<PropertiesTable
+  content={[
+{
+  name: 'agentId',
+  type: 'string',
+  description: 'Logical processor id used to namespace the cache key.',
+  isOptional: false,
+},
+{
+  name: 'scope',
+  type: 'string | null | undefined',
+  description: 'Resolved scope for this request, or `null` when scoping is disabled.',
+  isOptional: true,
+},
+{
+  name: 'model',
+  type: '{ provider?: string; modelId?: string; specVersion?: string }',
+  description: 'Provider/model identity. Different models produce different responses.',
+  isOptional: false,
+},
+{
+  name: 'prompt',
+  type: 'LanguageModelV2Prompt',
+  description:
+    'The exact prompt the provider would receive, post memory load and post any prompt-modifying input processors.',
+  isOptional: false,
+},
+{
+  name: 'stepNumber',
+  type: 'number',
+  description: '0-indexed step number within the agentic loop. Greater than zero for tool steps.',
+  isOptional: false,
+},
+]}
+/>
+
+## 助手导出 {/* #helper-exports */}
+
+* `buildResponseCacheKey(inputs)`：默认使用的确定性哈希。重新导出它以覆盖各个字段，同时保留标准密钥形状的其余部分。
+* `DEFAULT_RESPONSE_CACHE_TTL_SECONDS`：默认`ttl` (`300`).
+* `RESPONSE_CACHE_CONTEXT_KEY`： 这`RequestContext` key the static helpers write to. Exposed for advanced cases (e.g. clearing the override mid-pipeline). Prefer the helpers.
+
+## 有关的 {/* #related */}
+
+* [响应缓存](/docs/agents/processors#response-caching)
+* [处理器](/docs/agents/processors)
+* [处理器接口](/reference/processors/processor-interface)

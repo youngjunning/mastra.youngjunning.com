@@ -1,50 +1,44 @@
 ---
-title: "程式碼模式 | Agents"
-description: "讓 Agent 在 Sandbox 中執行涉及多個 Tool 的運算，並傳回單一而更準確的回應。"
+title: "Code mode | Agents"
+description: "Configure Mastra code mode so agents can run multi-tool computations in isolated local or remote sandboxes and return one accurate, consolidated response."
 packages:
   - "@mastra/core"
 ---
 
-# 程式碼模式
+# 編碼方式
 
-**新增於：** `@mastra/core@1.38.0`
+**添加於：** `@mastra/core@1.38.0`
 
-:::experimental
+程式碼模式允許Agent程式在隔離的沙箱中執行多Tool計算，並將結果作為單一、更準確的回應傳回。
 
-此功能目前為 beta 版本。在 API 穩定之前，即使主要版本號不變，亦可能會有破壞性變更。
+該模型不是一次呼叫一個Tool，而是為使用者查詢編寫一個客製化的函數。此功能將您現有的Tool編排為`external_*` functions and reduces or aggregates their results into one structured answer.
 
-:::
+[`createCodeMode()`](/reference/tools/create-code-mode)傳回此Tool的預設值`id` of `execute_typescript`. The `id`是可配置的，因此Agent可以同時擁有多個程式碼模式Tool，每個Tool的範圍都不同（請參閱[跨多個程式碼Tool確定Tool範圍](#scoping-tools-across-multiple-code-tools)).
 
-程式碼模式讓 Agent 在隔離的 Sandbox 中執行涉及多個 Tool 的運算，並將結果以單一而更準確的回應傳回。
+## 何時使用代碼模式 {/* #when-to-use-code-mode */}
 
-模型不會每次輪流呼叫一個 Tool，而是針對用戶查詢編寫專用函式。該函式會將你現有的 Tool 編排為 `external_*` 函式，並歸納或匯總其結果，產生一個結構化答案。
+當Agent程式使用多個Tool來回答使用者查詢或執行複雜計算時，請使用程式碼模式：
 
-[`createCodeMode()`](/reference/tools/create-code-mode) 會傳回此 Tool，其預設 `id` 為 `execute_typescript`。`id` 可自行設定，因此一個 Agent 可同時擁有數個程式碼模式 Tool，而每個 Tool 可限定使用不同的一組 Tool（請參閱[為多個程式碼 Tool 設定 Tool 範圍](#scoping-tools-across-multiple-code-tools)）。
+* 更少的往返次數：多Tool查詢在一次Tool呼叫中運行，而不是為每個Tool決策重複Agent循環。
+* 較小的上下文：該函數可以在將大型Tool回應傳回給Agent之前減少或聚合它們。
+* 正確的數學：求和、平均值和其他算術作為 JavaScript 運行，而不是作為標記預測運行。
+* 預先規劃：過濾、聚合和分支發生在函數內部，而不是跨單獨的回合。
 
-## 何時使用程式碼模式 {/* #when-to-use-code-mode */}
+## 它是如何運作的 {/* #how-it-works */}
 
-當 Agent 需要使用多個 Tool 來回答用戶查詢或執行複雜運算時，可使用程式碼模式：
+如果沒有程式碼模式，多Tool查詢可以多次執行Agent循環。模型選擇一個Tool並讀取結果。它根據需要重複該過程。
 
-- 減少往返次數：涉及多個 Tool 的查詢只需一次 Tool 呼叫即可執行，毋須為每次 Tool 選擇重複執行 Agent 迴圈。
-- 縮小上下文：函式可在將大型 Tool 回應傳回 Agent 前，先行歸納或匯總內容。
-- 準確運算：總和、平均值及其他算術運算會以 JavaScript 執行，而非透過 token 預測完成。
-- 預先規劃：篩選、匯總及分支邏輯均在函式內進行，而非分散於不同輪次。
+每個回合都會在Agent的上下文視窗中添加完整的Tool回應，這可能會導致推理能力較差並增加令牌使用量。
 
-## 運作方式 {/* #how-it-works */}
+使用程式碼模式，您的Tool可以在主機上繼續運行，並具有完整的驗證、請求上下文和追蹤。只有模型的編排程式碼在沙箱中運作。每個`external_*` call is bridged back to the real tool on the host, and the function can reduce or aggregate results before returning one response to the agent.
 
-不使用程式碼模式時，涉及多個 Tool 的查詢可能會多次執行 Agent 迴圈。模型會選擇一個 Tool 並讀取結果，再按需要重複此過程。
+該函數運行在[Workspace sandbox](/docs/sandbox/overview). Because code mode runs model-authored code, you must choose its execution boundary deliberately by passing `sandbox` or using a workspace that provides one. Pass `new LocalSandbox()` explicitly to execute on the host machine. This runs the function as a host `node` process with host privileges, so only use it for trusted or local development.
 
-每一輪都會將完整的 Tool 回應加入 Agent 的上下文視窗，可能導致推理質素下降，並增加 token 用量。
+帶有自己的執行邊界的傳輸是例外：[`IsolatedVmCodeModeTransport`](/reference/tools/isolated-vm-transport) the program runs in an in-process V8 isolate and no sandbox is needed (see [In-process isolation](#in-process-isolation)).
 
-使用程式碼模式時，你的 Tool 仍會在主機上執行，並保留完整的驗證、請求上下文及追蹤功能。只有模型編排 Tool 的程式碼會在 Sandbox 中執行。每次呼叫 `external_*` 都會橋接回主機上實際的 Tool，而函式可先歸納或匯總結果，再向 Agent 傳回單一回應。
+## 快速入門 {/* #quickstart */}
 
-函式會在 [Workspace Sandbox](/docs/workspace/overview) 中執行。程式碼模式會執行由模型編寫的程式碼，因此必須使用 Sandbox，並審慎選擇執行邊界。你可以透過 `sandbox` 傳入 Sandbox，或在能提供 Sandbox 的 Workspace 中執行 Agent。如要在主機上執行，請明確傳入 `new LocalSandbox()`。這會以主機權限將函式作為主機的 `node` 程序執行，因此只應用於受信任的程式碼或本機開發。
-
-自帶執行邊界的 Transport 則屬例外：使用 [`IsolatedVmCodeModeTransport`](/reference/tools/isolated-vm-transport) 時，程式會在程序內的 V8 isolate 中執行，因此不需要 Sandbox（請參閱[程序內隔離](#in-process-isolation)）。
-
-## 快速開始 {/* #quickstart */}
-
-`createCodeMode()` 會傳回 Tool 及產生的指示。如未提供 `id`，Tool 會使用名稱 `execute_typescript`。請將兩者都加入 Agent：
+`createCodeMode()`返回Tool以及生成的指令。沒有`id`, the tool uses the name `execute_typescript`. Add both to your agent:
 
 ```typescript
 import { Agent } from '@mastra/core/agent'
@@ -84,7 +78,7 @@ const agent = new Agent({
 })
 ```
 
-當用戶問「銷量最高的五款產品是甚麼？每款產品的平均評分又是多少？」時，模型會發出一次 `execute_typescript` 呼叫，而非分開呼叫多個 Tool：
+當被問及「排名前 5 的產品以及每種產品的平均分數是什麼？」時，模型會給出一個`execute_typescript` call instead of many separate tool calls:
 
 ```typescript
 const top = await external_getTopProducts({ limit: 5 })
@@ -102,20 +96,20 @@ return top.products.map((product, i) => {
 })
 ```
 
-所有五次評分查詢都會並行執行，平均值則以 JavaScript 計算，而 Agent 只會收到一個結構化結果。
+所有五個評級查找都是並行運行的，平均值是用 JavaScript 計算的，並且Agent會收到一個結構化結果。
 
-為讓 `createCodeMode()` 發揮良好效果，請緊記以下建議：
+為了`createCodeMode()` to work well, keep these tips in mind:
 
-- 每個 Tool 應專注於單一用途，以便模型在程式碼中組合使用。
-- 如可使用 `Promise.all` 並行執行呼叫，程式碼模式最能發揮作用。
+* 讓Tool保持專注，讓每個Tool都能做好一件事，模型將它們組合成程式碼。
+* 當呼叫可以並行時，程式碼模式最有幫助`Promise.all`.
 
-請參閱 [`createCodeMode()` 參考資料](/reference/tools/create-code-mode)，了解設定選項、傳回值、結果結構及如何檢視指示。
+參觀[`createCodeMode()` reference](/reference/tools/create-code-mode) for configuration options, return values, result shape, and instructions inspection.
 
-## 為多個程式碼 Tool 設定 Tool 範圍 {/* #scoping-tools-across-multiple-code-tools */}
+## 跨多個程式碼Tool確定Tool範圍 {/* #scoping-tools-across-multiple-code-tools */}
 
-`createCodeMode()` 會擷取其本身的允許清單。多次呼叫此函式，即可為 Agent 提供數個程式碼 Tool，並讓每個 Tool 限定使用不同的 Tool 子集。程式碼 Tool 只能呼叫傳入其本身 `createCodeMode()` 呼叫的 Tool 所對應的 `external_*` 函式，因此各個子集會保持隔離。
+`createCodeMode()`捕獲自己的允許清單。多次呼叫它可以為Agent提供多個程式碼Tool，每個Tool的作用域不同。每個實例只能調用`external_*` functions for the tools passed to its own `createCodeMode()` call. The subsets stay isolated.
 
-請為每個 Tool 指定不同的 `id`，避免其 ID 發生衝突，並將每個 Tool 的指示加入 Agent：
+賦予每個Tool獨特的`id` so their ids don't collide, and add each tool's instructions to the agent:
 
 ```typescript
 const sales = createCodeMode({
@@ -139,13 +133,17 @@ const agent = new Agent({
 })
 ```
 
-為 `sales_code` 產生的程式碼無法呼叫庫存 Tool，反之亦然。你可利用此功能設定最低權限範圍，並縮小每個 Tool 的提示詞範圍。
+產生的程式碼為`sales_code` can't call an inventory tool, and the reverse holds too. Use this for least-privilege scoping and to keep each tool's prompt surface small.
 
-## 遙距 Sandbox {/* #remote-sandboxes */}
+## 連接Tool {/* #connected-tools */}
 
-程式碼模式預設使用一種 Transport，將程式寫入主機檔案系統，再透過 `node` 執行。這種方式適用於與主機共用環境的 `LocalSandbox`，但不適用於在其本身 micro-VM 中執行的遙距 Sandbox（例如 [E2B](/reference/workspace/e2b-sandbox)），因為主機路徑在該環境中並不存在。
+若要編排連接到 Mastra 平台的提供者的Tool，請使用[`tools().codeMode()`](/reference/connect/tools#code-mode) from `@mastra/connect`. It builds the code tool and instructions from the current connections on each request, and keeps tools that need approval as direct agent tools.
 
-遙距 Sandbox 需要使用能將程式寫入 Sandbox 檔案系統的 Transport。使用 E2B 時，請將隨附的 `E2BCodeModeTransport` 作為第二個引數傳入 `createCodeMode`：
+## 遠端沙箱 {/* #remote-sandboxes */}
+
+預設情況下，程式碼模式使用將程式寫入主機檔案系統並運行的傳輸`node` against it. That works for `LocalSandbox`, which shares the host, but not for remote sandboxes that run in their own micro-VM (such as [E2B](/integrations/sandboxes/e2b)), where the host paths don't exist.
+
+遠端沙箱需要將程式寫入沙箱檔案系統的傳輸。對於E2B，傳遞包含的`E2BCodeModeTransport` as the second argument to `createCodeMode`:
 
 ```typescript
 import { createCodeMode } from '@mastra/core/tools'
@@ -157,9 +155,9 @@ const { tool, instructions } = createCodeMode(
 )
 ```
 
-## 程序內隔離 {/* #in-process-isolation */}
+## 進程內隔離 {/* #in-process-isolation */}
 
-如要在毋須衍生程序或執行遙距 Sandbox 的情況下取得安全邊界，可使用 `@mastra/isolated-vm` 提供的 [`IsolatedVmCodeModeTransport`](/reference/tools/isolated-vm-transport)。它會在程序內的 V8 isolate 中執行程式，因此不需要 Sandbox：該 isolate 無法存取檔案系統、網絡或程序，唯一可用的功能是橋接回主機 Tool 的 `external_*` 函式。
+若要在不產生進程或執行遠端沙箱的情況下獲得安全邊界，請使用[`IsolatedVmCodeModeTransport`](/reference/tools/isolated-vm-transport) from `@mastra/isolated-vm`. It runs the program in an in-process V8 isolate, so no sandbox is required: the isolate has no filesystem, network, or process access, and its only capabilities are the `external_*` functions bridged back to your tools on the host.
 
 ```typescript
 import { createCodeMode } from '@mastra/core/tools'
@@ -171,11 +169,26 @@ const { tool, instructions } = createCodeMode(
 )
 ```
 
-`isolated-vm` 是原生附加元件，而在 Node.js 20 或更新版本中，主機程序必須使用 `--no-node-snapshot` 旗標啟動。設定詳情請參閱 [IsolatedVmCodeModeTransport 參考資料](/reference/tools/isolated-vm-transport)。
+`isolated-vm`是一個本機插件，在 Node.js 20 及更高版本上，主機進程必須使用`--no-node-snapshot` flag. See the [IsolatedVmCodeModeTransport reference](/reference/tools/isolated-vm-transport) for setup details.
 
-## 相關內容 {/* #related */}
+當主機無法安裝本機外掛程式或設定 Node.js 標誌（這在無伺服器平台上很常見）時，請使用[`QuickJsCodeModeTransport`](/reference/tools/quickjs-transport) from `@mastra/quickjs` instead. It gives the same in-process boundary using a QuickJS runtime compiled to WebAssembly, at the cost of slower execution:
 
-- [createCodeMode() 參考資料](/reference/tools/create-code-mode)
-- [IsolatedVmCodeModeTransport 參考資料](/reference/tools/isolated-vm-transport)
-- [Tool](/docs/agents/using-tools)
-- [Workspace 概覽](/docs/workspace/overview)
+```typescript
+import { createCodeMode } from '@mastra/core/tools'
+import { QuickJsCodeModeTransport } from '@mastra/quickjs'
+
+const { tool, instructions } = createCodeMode(
+  { tools }, // no sandbox needed
+  new QuickJsCodeModeTransport({ memoryLimitMb: 128 }),
+)
+```
+
+看[Choosing a transport](/reference/tools/quickjs-transport#choosing-a-transport) for a side-by-side comparison.
+
+## 有關的 {/* #related */}
+
+* [createCodeMode() 參考](/reference/tools/create-code-mode)
+* [isolatedVmCodeModeTransport 參考](/reference/tools/isolated-vm-transport)
+* [QuickJsCodeModeTransport 參考](/reference/tools/quickjs-transport)
+* [Tool](/docs/agents/tools)
+* [Sandbox](/docs/sandbox/overview)

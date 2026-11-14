@@ -1,24 +1,37 @@
 ---
-title: "暫停及恢復 | Workflows"
-description: "Mastra workflow 的暫停及恢復功能，讓你在等待外部輸入或資源時暫停執行。"
+title: "Suspend and resume | Workflows"
+description: "Suspend Mastra workflows while waiting for external input, resources, or time, then resume saved runs with data and recover interrupted executions."
 packages:
   - "@mastra/core"
 ---
 
-# 暫停及恢復
+# 暫停和恢復
 
-Workflow 可以在任何步驟暫停，以收集額外資料、等待 API 回呼、限制高成本操作的頻率，或要求[人工介入](/docs/workflows/human-in-the-loop)輸入。Workflow 暫停時，其目前的執行狀態會儲存為快照。之後，你可以從[特定步驟 ID](/docs/workflows/snapshots#retrieving-snapshots) 恢復 workflow，還原該快照擷取的確切狀態。[快照](/docs/workflows/snapshots)會儲存在你已設定的儲存 Provider 中，並會在部署及應用程式重新啟動後保留。
+在任何步驟暫停Workflow以收集其他資料、等待 API 回調、限製成本高昂的操作或請求[human-in-the-loop](/docs/workflows/human-in-the-loop)輸入。暫停將目前執行狀態儲存為快照。稍後，從[具體步驟ID](/docs/workflows/snapshots#retrieving-snapshots)恢復準確的捕捉狀態。[快照](/docs/workflows/snapshots)儲存在您配置的儲存提供者中，並在部署和應用程式重新啟動時持續存在。
 
-## 使用 `suspend()` 暫停 workflow {/* #pausing-a-workflow-with-suspend */}
+## 暫停Workflow`suspend()` {/* #pausing-a-workflow-with-suspend */}
 
-使用 `suspend()` 在特定步驟暫停 workflow 執行。你可以在步驟的 `execute` 區塊中，使用來自 `resumeData` 的值定義暫停條件。
+使用`suspend()` to pause workflow execution at a specific step. You can define a suspend condition in the step’s `execute` block using values from `resumeData`.
 
-- 如果條件未符合，workflow 會暫停並傳回 `suspend()`。
-- 如果條件符合，workflow 會繼續執行步驟中的其餘邏輯。
+* 如果不符合條件，Workflow將暫停並返回`suspend()`.
+* 如果滿足條件，Workflow將繼續執行步驟中的剩餘邏輯。
 
-![使用 suspend() 暫停 workflow](/img/workflows/workflows-suspend.jpg)
+```mermaid
+flowchart LR
+  accTitle: Suspending a workflow and saving its state
+  accDescr: The workflow starts step1. The step either completes the workflow or suspends and saves a snapshot.
+  start(( start )) -- in --> step1([step1])
+  step1 -- out --> stop(( end ))
+  step1 pending1@-. suspend .-> snapshot@{ shape: cyl, label: "saved snapshot" }
 
-```typescript {9-11,16-18} title="src/mastra/workflows/test-workflow.ts"
+  class stop accent
+  class snapshot pending
+```
+
+```typescript {12-14,19-21} title="src/mastra/workflows/test-workflow.ts"
+import { createWorkflow, createStep } from '@mastra/core/workflows'
+import { z } from 'zod'
+
 const step1 = createStep({
   id: 'step-1',
   inputSchema: z.object({
@@ -57,11 +70,21 @@ export const testWorkflow = createWorkflow({
   .commit()
 ```
 
-## 使用 `resume()` 重新啟動 workflow {/* #restarting-a-workflow-with-resume */}
+## 重新啟動Workflow`resume()` {/* #restarting-a-workflow-with-resume */}
 
-使用 `resume()` 從 workflow 暫停的步驟重新啟動。傳入 `resumeData`；其內容須符合步驟的 `resumeSchema`，以符合暫停條件並繼續執行。
+使用`resume()` to restart a suspended workflow from the step where it paused. Pass `resumeData` matching the step's `resumeSchema` to satisfy the suspend condition and continue execution.
 
-![使用 resume() 重新啟動 workflow](/img/workflows/workflows-resume.jpg)
+```mermaid
+flowchart LR
+  accTitle: Resuming a workflow from a saved snapshot
+  accDescr: Resume restores the saved snapshot and restarts step1. The step then completes the workflow.
+  snapshot@{ shape: cyl, label: "saved snapshot" }
+  snapshot pending1@-. resume .-> step1([step1])
+  step1 -- out --> stop(( end ))
+
+  class snapshot pending
+  class stop accent
+```
 
 ```typescript
 import { step1 } from './workflows/test-workflow'
@@ -83,7 +106,7 @@ const handleResume = async () => {
 }
 ```
 
-傳入 `step` 物件可為 `resumeData` 提供完整的型別安全。或者，當 ID 來自使用者輸入或資料庫時，你可以傳入步驟 ID，以提高靈活性。
+透過`step` object provides full type-safety for `resumeData`. Alternatively, you can pass a step ID for more flexibility when the ID comes from user input or a database.
 
 ```typescript
 const result = await run.resume({
@@ -92,9 +115,9 @@ const result = await run.resume({
 })
 ```
 
-如果只有一個步驟處於暫停狀態，你可以完全省略 step 引數，Mastra 便會恢復 workflow 中最後暫停的步驟。
+如果只有一個步驟被暫停，您可以完全省略步驟參數，Mastra 將恢復Workflow中最後一個暫停的步驟。
 
-只使用 `runId` 恢復時，請先使用 `createRun()` 建立 run 實例。
+當僅使用一個恢復時`runId`, create a run instance first using `createRun()`.
 
 ```typescript
 const workflow = mastra.getWorkflow('testWorkflow')
@@ -105,7 +128,7 @@ const stream = run.resume({
 })
 ```
 
-你可以在應用程式的任何位置呼叫 `resume()`，包括 HTTP 端點、事件處理器、回應[人工輸入](/docs/workflows/human-in-the-loop)時，或計時器中。
+您可以致電`resume()` from anywhere in your application, such as an HTTP endpoint or event handler. Timers and code responding to [human input](/docs/workflows/human-in-the-loop) can also resume a workflow.
 
 ```typescript
 const midnight = new Date()
@@ -119,11 +142,14 @@ setTimeout(async () => {
 }, midnight.getTime() - Date.now())
 ```
 
-## 使用 `suspendData` 存取暫停資料 {/* #accessing-suspend-data-with-suspenddata */}
+## 存取掛起數據`suspendData` {/* #accessing-suspend-data-with-suspenddata */}
 
-步驟暫停後，你可能會想在稍後恢復步驟時，存取當初提供給 `suspend()` 的資料。使用步驟 execute 函式中的 `suspendData` 參數來存取這些資料。
+當某個步驟暫停時，您可能想要訪問提供給`suspend()` when the step is later resumed. Use the `suspendData` parameter in your step's execute function to access this data.
 
-```typescript {22-25,29-30} title="src/mastra/workflows/user-approval.ts"
+```typescript {25-28,32-33} title="src/mastra/workflows/user-approval.ts"
+import { createStep } from '@mastra/core/workflows'
+import { z } from 'zod'
+
 const approvalStep = createStep({
   id: 'user-approval',
   inputSchema: z.object({
@@ -162,11 +188,11 @@ const approvalStep = createStep({
 })
 ```
 
-步驟恢復時，系統會自動填入 `suspendData` 參數，當中包含最初暫停時傳給 `suspend()` 函式的確切資料。你可以保留 workflow 暫停原因的相關脈絡，並在恢復過程中使用該資訊。
+這`suspendData` parameter is automatically populated when a step is resumed and contains the exact data that was passed to the `suspend()` function during the original suspension. You can maintain context about why the workflow was suspended and use that information during the resume process.
 
-## 識別已暫停的執行 {/* #identifying-suspended-executions */}
+## 識別暫停執行的情況 {/* #identifying-suspended-executions */}
 
-Workflow 暫停後，會從原先暫停的步驟重新啟動。你可以檢查 workflow 的 `status` 以確認它已暫停，並使用 `suspended` 識別已暫停的步驟或[巢狀 workflow](/docs/workflows/overview#workflows-as-steps)。
+當Workflow暫停時，它將從暫停的步驟重新開始。您可以檢查Workflow`status` to confirm it's suspended, and use `suspended` to identify the paused step or [nested workflow](/docs/workflows/overview#workflows-as-steps).
 
 ```typescript {11}
 const workflow = mastra.getWorkflow('testWorkflow')
@@ -189,15 +215,15 @@ if (result.status === 'suspended') {
 
 ### 輸出範例 {/* #example-output */}
 
-`suspended` 陣列包含 run 中所有已暫停 workflow 及步驟的 ID。這些 ID 可以傳給 `step` 參數，以便在呼叫 `resume()` 時指定並恢復已暫停的執行路徑。
+這`suspended` array contains one path for each suspended step in the run. Each path is an array of step IDs that leads from the top-level workflow to the suspended step, passing through any nested workflows. Pass a path to the `step` parameter of `resume()` to target and resume that execution path. With the default engine, a nested workflow contributes only one path at a time, even if several of its parallel steps suspended. After resuming, check the returned `suspended` array for remaining paths. Treat each path as opaque and pass it back unchanged: depending on the engine, it can include repeated IDs or numeric `.foreach()` indexes. A path to a suspended `.foreach()` step targets every suspended iteration, so pass [`forEachIndex`](/reference/workflows/run-methods/resume) to resume one iteration at a time. For a step suspended inside a nested workflow, `result.suspended[0]` is:
 
 ```typescript
 ['nested-workflow', 'step-1']
 ```
 
-## 復原已暫停的 run {/* #recovering-suspended-runs */}
+## 恢復暫停的運行 {/* #recovering-suspended-runs */}
 
-當應用程式需要從儲存空間復原已暫停的 run 時，請同時使用 `workflow.getWorkflowRunById()` 及 `createWorkflowStateReader()`。Reader 會公開已暫停的步驟、恢復標籤、步驟 payload 及步驟輸出，毋須讀取原始快照結構。
+使用`workflow.getWorkflowRunById()` with `createWorkflowStateReader()` when your application needs to recover a suspended run from storage. The reader exposes suspended steps, resume labels, step payloads, and step outputs without reading the raw snapshot shape.
 
 ```typescript title="src/mastra/workflows/recover-run.ts"
 import { createWorkflowStateReader } from '@mastra/core/workflows'
@@ -219,21 +245,21 @@ if (state?.status === 'suspended') {
 }
 ```
 
-對於巢狀 workflow，`suspendedStep.path` 包含恢復路徑。對於 `foreach` 暫停，如果恢復標籤指向特定迭代，相符的標籤會包含 `foreachIndex`。
+對於嵌套Workflow，`suspendedStep.path` contains the resume path. For `foreach` suspensions, matching resume labels include `foreachIndex` when the label points to a specific iteration.
 
-## Sleep {/* #sleep */}
+## 睡覺 {/* #sleep */}
 
-Sleep 方法可用於在 workflow 層級暫停執行，並將狀態設為 `waiting`。相比之下，`suspend()` 會在特定步驟內暫停執行，並將狀態設為 `suspended`。
+Sleep 方法可用於在Workflow層級暫停執行，這會將狀態設為`waiting`. By comparison, `suspend()` pauses execution within a specific step and sets the status to `suspended`.
 
 **可用方法：**
 
-- [`.sleep()`](/reference/workflows/workflow-methods/sleep)：暫停指定的毫秒數
-- [`.sleepUntil()`](/reference/workflows/workflow-methods/sleepUntil)：暫停至特定日期
+* [`.sleep()`](/reference/workflows/workflow-methods/sleep)：暫停指定的毫秒數
+* [`.sleepUntil()`](/reference/workflows/workflow-methods/sleepUntil)：暫停直到特定日期
 
-## 相關內容 {/* #related */}
+## 有關的 {/* #related */}
 
-- [控制流程](/docs/workflows/control-flow)
-- [人工介入](/docs/workflows/human-in-the-loop)
-- [快照](/docs/workflows/snapshots)
-- [時間回溯](/docs/workflows/time-travel)
-- [Workflow state reader](/reference/workflows/workflow-state-reader)
+* [控制流程](/docs/workflows/control-flow)
+* [人在迴路](/docs/workflows/human-in-the-loop)
+* [快照](/docs/workflows/snapshots)
+* [時間旅行](/docs/workflows/time-travel)
+* [Workflow狀態讀取器](/reference/workflows/workflow-state-reader)

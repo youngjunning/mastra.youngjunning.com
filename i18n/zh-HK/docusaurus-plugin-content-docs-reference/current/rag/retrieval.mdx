@@ -1,0 +1,688 @@
+---
+title: "Retrieval, semantic search, reranking | RAG"
+description: "After storing embeddings, you need to retrieve relevant chunks to answer user queries."
+packages:
+  - "@mastra/core"
+  - "@mastra/rag"
+---
+
+import Tabs from "@theme/Tabs";
+import TabItem from "@theme/TabItem";
+
+# RAG 系統中的檢索
+
+儲存嵌入後，您需要檢索相關區塊來回答使用者查詢。
+
+Mastra 提供靈活的檢索選項，支援語義搜尋、篩選和重新排名。
+
+## 檢索的工作原理 {/* #how-retrieval-works */}
+
+1. 使用與文件嵌入相同的模型將使用者的查詢轉換為嵌入
+2. 使用向量相似度將此嵌入與儲存的嵌入進行比較
+3. 檢索最相似的區塊並且可以選擇：
+
+* 按元資料過濾
+* 重新排名以獲得更好的相關性
+* 透過知識圖譜進行處理
+
+## 基本檢索 {/* #basic-retrieval */}
+
+最簡單的方法是直接語意搜尋。此方法使用向量相似度來尋找語意上與查詢相似的區塊：
+
+```ts
+import { embed } from 'ai'
+import { PgVector } from '@mastra/pg'
+import { ModelRouterEmbeddingModel } from '@mastra/core/llm'
+
+// Convert query to embedding
+const { embedding } = await embed({
+  value: 'What are the main points in the article?',
+  model: new ModelRouterEmbeddingModel('openai/text-embedding-3-small'),
+})
+
+// Query vector store
+const pgVector = new PgVector({
+  id: 'pg-vector',
+  connectionString: process.env.POSTGRES_CONNECTION_STRING,
+})
+const results = await pgVector.query({
+  indexName: 'embeddings',
+  queryVector: embedding,
+  topK: 10,
+})
+
+// Display results
+console.log(results)
+```
+
+這`topK` parameter specifies the maximum number of most similar results to return from the vector search.
+
+每個結果都包含一個`id`, a similarity `score`, and the stored `metadata`. When you store chunk text in metadata, it's available as `metadata.text`:
+
+```ts
+[
+  {
+    id: 'chunk-1',
+    score: 0.89,
+    metadata: { text: 'Climate change poses significant challenges...', source: 'article1.txt' },
+  },
+  {
+    id: 'chunk-2',
+    score: 0.82,
+    metadata: { text: 'Rising temperatures affect crop yields...', source: 'article1.txt' },
+  },
+]
+```
+
+結果還可以包括`vector` when you set `includeVector: true`, and `document` when the store returns the original document (Chroma only).
+
+## 進階檢索選項 {/* #advanced-retrieval-options */}
+
+### 元資料過濾 {/* #metadata-filtering */}
+
+根據元資料欄位過濾結果以縮小搜尋空間。這種方法 - 將向量相似性搜尋與元資料過濾器結合 - 有時稱為混合向量搜索，因為它將語義搜尋與結構化過濾標準合併。
+
+當您擁有來自不同來源、不同時間段或具有特定屬性的文件時，這非常有用。 Mastra 提供了統一的 MongoDB 風格的查詢語法，適用於所有支援的向量儲存。
+
+有關可用運算符和語法的詳細信息，請參閱[Metadata Filters Reference](/reference/rag/metadata-filters).
+
+基本過濾範例：
+
+<Tabs>
+  <TabItem value="mongodb" label="MongoDB">
+    ```ts
+    import { MongoDBVector } from '@mastra/mongodb'
+
+    const mongoVector = new MongoDBVector({
+      id: 'mongodb-vector',
+      uri: process.env.MONGODB_URI,
+      dbName: process.env.MONGODB_DB_NAME,
+    })
+
+    // Simple equality filter
+    const equalityResults = await mongoVector.query({
+      indexName: 'embeddings',
+      queryVector: embedding,
+      topK: 10,
+      filter: {
+        source: 'article1.txt',
+      },
+    })
+
+    // Numeric comparison
+    const priceResults = await mongoVector.query({
+      indexName: 'embeddings',
+      queryVector: embedding,
+      topK: 10,
+      filter: {
+        price: { $gt: 100 },
+      },
+    })
+
+    // Multiple conditions
+    const compoundResults = await mongoVector.query({
+      indexName: 'embeddings',
+      queryVector: embedding,
+      topK: 10,
+      filter: {
+        category: 'electronics',
+        price: { $lt: 1000 },
+        inStock: true,
+      },
+    })
+
+    // Array operations
+    const tagResults = await mongoVector.query({
+      indexName: 'embeddings',
+      queryVector: embedding,
+      topK: 10,
+      filter: {
+        tags: { $in: ['sale', 'new'] },
+      },
+    })
+
+    // Logical operators
+    const categoryResults = await mongoVector.query({
+      indexName: 'embeddings',
+      queryVector: embedding,
+      topK: 10,
+      filter: {
+        $or: [{ category: 'electronics' }, { category: 'accessories' }],
+        $and: [{ price: { $gt: 50 } }, { price: { $lt: 200 } }],
+      },
+    })
+    ```
+  </TabItem>
+
+  <TabItem value="pgvector" label="pgVector">
+    ```ts
+    // Simple equality filter
+    const equalityResults = await pgVector.query({
+      indexName: 'embeddings',
+      queryVector: embedding,
+      topK: 10,
+      filter: {
+        source: 'article1.txt',
+      },
+    })
+
+    // Numeric comparison
+    const priceResults = await pgVector.query({
+      indexName: 'embeddings',
+      queryVector: embedding,
+      topK: 10,
+      filter: {
+        price: { $gt: 100 },
+      },
+    })
+
+    // Multiple conditions
+    const compoundResults = await pgVector.query({
+      indexName: 'embeddings',
+      queryVector: embedding,
+      topK: 10,
+      filter: {
+        category: 'electronics',
+        price: { $lt: 1000 },
+        inStock: true,
+      },
+    })
+
+    // Array operations
+    const tagResults = await pgVector.query({
+      indexName: 'embeddings',
+      queryVector: embedding,
+      topK: 10,
+      filter: {
+        tags: { $in: ['sale', 'new'] },
+      },
+    })
+
+    // Logical operators
+    const categoryResults = await pgVector.query({
+      indexName: 'embeddings',
+      queryVector: embedding,
+      topK: 10,
+      filter: {
+        $or: [{ category: 'electronics' }, { category: 'accessories' }],
+        $and: [{ price: { $gt: 50 } }, { price: { $lt: 200 } }],
+      },
+    })
+    ```
+  </TabItem>
+</Tabs>
+
+元資料過濾的常見用例：
+
+* 依文檔來源或類型過濾
+* 按日期範圍過濾
+* 按特定類別或標籤過濾
+* 按數字範圍（例如價格、評級）過濾
+* 組合多個條件進行精準查詢
+* 依文檔屬性（例如語言、作者）過濾
+
+### 應用過濾器的地方 {/* #where-the-filter-is-applied */}
+
+向量存儲的不同之處在於*when* they apply a metadata filter, which affects how filtered queries scale.
+
+MongoDB 可以評估向量索引本身內部的篩選器。這使查詢保持單次往返`$vectorSearch`, so it avoids the pre-filter pass that collects matching document IDs and the 16 MB BSON limit that pass is subject to. Declaring the fields you filter on in `filterFields` when you create the index is what enables it:
+
+```ts
+// Declare the metadata fields you want to filter on
+await mongoVector.createIndex({
+  indexName: 'embeddings',
+  dimension: 1536,
+  filterFields: ['source', 'price', 'category', 'inStock', 'tags'],
+})
+
+// createIndex() returns before the index finishes building
+await mongoVector.waitForIndexReady({ indexName: 'embeddings' })
+
+// The filter is applied during the index search
+const results = await mongoVector.query({
+  indexName: 'embeddings',
+  queryVector: embedding,
+  topK: 10,
+  filter: { source: 'article1.txt' },
+})
+```
+
+只有當 Matra 引用的每個欄位都在其中聲明時，Mastra 才會將篩選器傳遞給索引`filterFields` and every operator is one the index accepts: `$and`, `$or`, `$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$in`, and `$nin`. A filter that uses an undeclared field or any other operator takes a fallback path: Mastra matches the collection first and passes the matching document IDs into the vector search. That fallback holds only while the ID set fits within MongoDB's 16 MB BSON document limit. On large collections the query fails once that limit is exceeded, so declare your filter fields when you expect selective filters over large data sets.
+
+pgVector 將過濾器作為普通查詢條件套用：
+
+```ts
+const results = await pgVector.query({
+  indexName: 'embeddings',
+  queryVector: embedding,
+  topK: 10,
+  filter: { source: 'article1.txt' },
+})
+```
+
+使用 pgvector 0.8.0 或更高版本上的 HNSW 索引，PostgreSQL 會搜尋索引並跳過與篩選器不符的行。當索引搜尋無法填滿時`topK`, pgVector reruns the query as an exact search.
+
+對於舊 pgvector 版本上的 IVFFlat 或 HNSW，pgVector 會將查詢向量與每個符合行進行比較。結果是準確的，但工作量隨著匹配行數的增加而增加。
+
+對您過濾的元資料欄位建立索引可以加快這兩種情況的速度，並為 PostgreSQL 提供在它們之間進行選擇所需的行數。
+
+### 向量查詢Tool {/* #vector-query-tool */}
+
+有時您希望讓Agent能夠直接查詢向量資料庫。向量查詢Tool可讓您的Agent負責檢索決策，根據Agent對使用者需求的理解，將語義搜尋與可選的過濾和重新排名相結合。
+
+```ts
+import { createVectorQueryTool } from '@mastra/rag'
+import { ModelRouterEmbeddingModel } from '@mastra/core/llm'
+
+const vectorQueryTool = createVectorQueryTool({
+  vectorStoreName: 'pgVector',
+  indexName: 'embeddings',
+  model: new ModelRouterEmbeddingModel('openai/text-embedding-3-small'),
+})
+```
+
+建立Tool時，請特別注意Tool的名稱和描述 - 這些有助於Agent程式了解何時以及如何使用檢索功能。例如，您可以將其命名為「SearchKnowledgeBase」並將其描述為「搜尋我們的文件以查找有關 X 主題的相關資訊」。
+
+這在以下情況下特別有用：
+
+*
+* 檢索過程需要複雜的決策
+* 您希望Agent程式根據上下文組合多種檢索策略
+
+#### 資料庫特定的配置 {/* #database-specific-configurations */}
+
+向量查詢Tool支援特定於資料庫的配置，使您能夠使用不同向量儲存的獨特功能和最佳化。
+
+:::注意
+這些配置用於**query-time options** like namespaces, performance tuning, and filtering, not for database connection setup.
+
+連接憑證（URL、身份驗證令牌）是在實例化向量儲存類別時配置的（例如，`new LibSQLVector({ url: '...' })`).
+:::
+
+```ts
+import { createVectorQueryTool } from '@mastra/rag'
+import { ModelRouterEmbeddingModel } from '@mastra/core/llm'
+
+// Pinecone with namespace
+const pineconeQueryTool = createVectorQueryTool({
+  vectorStoreName: 'pinecone',
+  indexName: 'docs',
+  model: new ModelRouterEmbeddingModel('openai/text-embedding-3-small'),
+  databaseConfig: {
+    pinecone: {
+      namespace: 'production', // Isolate data by environment
+    },
+  },
+})
+
+// pgVector with performance tuning
+const pgVectorQueryTool = createVectorQueryTool({
+  vectorStoreName: 'postgres',
+  indexName: 'embeddings',
+  model: new ModelRouterEmbeddingModel('openai/text-embedding-3-small'),
+  databaseConfig: {
+    pgvector: {
+      minScore: 0.7, // Filter low-quality results
+      ef: 200, // HNSW search parameter
+      probes: 10, // IVFFlat probe parameter
+    },
+  },
+})
+
+// Chroma with advanced filtering
+const chromaQueryTool = createVectorQueryTool({
+  vectorStoreName: 'chroma',
+  indexName: 'documents',
+  model: new ModelRouterEmbeddingModel('openai/text-embedding-3-small'),
+  databaseConfig: {
+    chroma: {
+      where: { category: 'technical' },
+      whereDocument: { $contains: 'API' },
+    },
+  },
+})
+
+// LanceDB with table specificity
+const lanceQueryTool = createVectorQueryTool({
+  vectorStoreName: 'lance',
+  indexName: 'documents',
+  model: new ModelRouterEmbeddingModel('openai/text-embedding-3-small'),
+  databaseConfig: {
+    lance: {
+      tableName: 'myVectors', // Specify which table to query
+      includeAllColumns: true, // Include all metadata columns in results
+    },
+  },
+})
+```
+
+**主要優點：**
+
+* **松果命名空間**：按租戶、環境或資料類型組織向量
+* **pg向量最佳化**：使用 ef/probes 參數控制搜尋精確度和速度
+* **質量過濾**：設定最小相似度閾值以提高結果相關性
+* **LanceDB 表**：將資料分成表格，以便更好的組織和效能
+* **運行時靈活性**
+
+**常見用例：**
+
+* 使用 Pinecone 命名空間的多租戶應用程式
+* 高負載場景下的效能最佳化
+* 特定於環境的配置（dev/staging/prod）
+* 品質控制的搜尋結果
+* 使用 LanceDB 的嵌入式、基於檔案的向量存儲，適用於邊緣部署場景
+
+您也可以使用請求上下文在運行時覆寫這些配置：
+
+```ts
+import { RequestContext } from '@mastra/core/request-context'
+
+const requestContext = new RequestContext()
+requestContext.set('databaseConfig', {
+  pinecone: {
+    namespace: 'runtime-namespace',
+  },
+})
+
+await pineconeQueryTool.execute({ queryText: 'search query' }, { mastra, requestContext })
+```
+
+有關詳細配置選項和進階用法，請參閱[Vector Query Tool Reference](/reference/tools/vector-query-tool).
+
+### 向量商店提示 {/* #vector-store-prompts */}
+
+向量儲存提示定義了每個向量資料庫實現的查詢模式和篩選功能。
+實作篩選時，Agent指令中需要這些提示，以便為每個向量儲存實作指定有效的運算子和語法。
+
+<Tabs>
+  <TabItem value="mongodb" label="MongoDB">
+    ```ts title="vector-store.ts"
+    import { MONGODB_PROMPT } from '@mastra/mongodb'
+    import { Agent } from '@mastra/core/agent'
+
+    export const ragAgent = new Agent({
+      id: 'rag-agent',
+      name: 'RAG Agent',
+      model: '__GATEWAY_OPENAI_MODEL__',
+      instructions: `
+      Process queries using the provided context. Structure responses to be concise and relevant.
+      ${MONGODB_PROMPT}
+      `,
+      tools: { vectorQueryTool },
+    })
+    ```
+  </TabItem>
+
+  <TabItem value="pgvector" label="pgVector">
+    ```ts
+    import { PGVECTOR_PROMPT } from '@mastra/pg'
+
+    export const ragAgent = new Agent({
+      id: 'rag-agent',
+      name: 'RAG Agent',
+      model: '__GATEWAY_OPENAI_MODEL__',
+      instructions: `
+      Process queries using the provided context. Structure responses to be concise and relevant.
+      ${PGVECTOR_PROMPT}
+      `,
+      tools: { vectorQueryTool },
+    })
+    ```
+  </TabItem>
+
+  <TabItem value="pinecone" label="Pinecone">
+    ```ts title="vector-store.ts"
+    import { PINECONE_PROMPT } from '@mastra/pinecone'
+    import { Agent } from '@mastra/core/agent'
+
+    export const ragAgent = new Agent({
+      id: 'rag-agent',
+      name: 'RAG Agent',
+      model: '__GATEWAY_OPENAI_MODEL__',
+      instructions: `
+      Process queries using the provided context. Structure responses to be concise and relevant.
+      ${PINECONE_PROMPT}
+      `,
+      tools: { vectorQueryTool },
+    })
+    ```
+  </TabItem>
+
+  <TabItem value="qdrant" label="Qdrant">
+    ```ts title="vector-store.ts"
+    import { QDRANT_PROMPT } from '@mastra/qdrant'
+    import { Agent } from '@mastra/core/agent'
+
+    export const ragAgent = new Agent({
+      id: 'rag-agent',
+      name: 'RAG Agent',
+      model: '__GATEWAY_OPENAI_MODEL__',
+      instructions: `
+      Process queries using the provided context. Structure responses to be concise and relevant.
+      ${QDRANT_PROMPT}
+      `,
+      tools: { vectorQueryTool },
+    })
+    ```
+  </TabItem>
+
+  <TabItem value="chroma" label="Chroma">
+    ```ts title="vector-store.ts"
+    import { CHROMA_PROMPT } from '@mastra/chroma'
+    import { Agent } from '@mastra/core/agent'
+
+    export const ragAgent = new Agent({
+      id: 'rag-agent',
+      name: 'RAG Agent',
+      model: '__GATEWAY_OPENAI_MODEL__',
+      instructions: `
+      Process queries using the provided context. Structure responses to be concise and relevant.
+      ${CHROMA_PROMPT}
+      `,
+      tools: { vectorQueryTool },
+    })
+    ```
+  </TabItem>
+
+  <TabItem value="astra" label="Astra">
+    ```ts title="vector-store.ts"
+    import { ASTRA_PROMPT } from '@mastra/astra'
+    import { Agent } from '@mastra/core/agent'
+
+    export const ragAgent = new Agent({
+      id: 'rag-agent',
+      name: 'RAG Agent',
+      model: '__GATEWAY_OPENAI_MODEL__',
+      instructions: `
+      Process queries using the provided context. Structure responses to be concise and relevant.
+      ${ASTRA_PROMPT}
+      `,
+      tools: { vectorQueryTool },
+    })
+    ```
+  </TabItem>
+
+  <TabItem value="libsql" label="libSQL">
+    ```ts title="vector-store.ts"
+    import { LIBSQL_PROMPT } from '@mastra/libsql'
+    import { Agent } from '@mastra/core/agent'
+
+    export const ragAgent = new Agent({
+      id: 'rag-agent',
+      name: 'RAG Agent',
+      model: '__GATEWAY_OPENAI_MODEL__',
+      instructions: `
+      Process queries using the provided context. Structure responses to be concise and relevant.
+      ${LIBSQL_PROMPT}
+      `,
+      tools: { vectorQueryTool },
+    })
+    ```
+  </TabItem>
+
+  <TabItem value="upstash" label="Upstash">
+    ```ts title="vector-store.ts"
+    import { UPSTASH_PROMPT } from '@mastra/upstash'
+    import { Agent } from '@mastra/core/agent'
+
+    export const ragAgent = new Agent({
+      id: 'rag-agent',
+      name: 'RAG Agent',
+      model: '__GATEWAY_OPENAI_MODEL__',
+      instructions: `
+      Process queries using the provided context. Structure responses to be concise and relevant.
+      ${UPSTASH_PROMPT}
+      `,
+      tools: { vectorQueryTool },
+    })
+    ```
+  </TabItem>
+
+  <TabItem value="vectorize" label="Vectorize">
+    ```ts title="vector-store.ts"
+    import { VECTORIZE_PROMPT } from '@mastra/vectorize'
+    import { Agent } from '@mastra/core/agent'
+
+    export const ragAgent = new Agent({
+      id: 'rag-agent',
+      name: 'RAG Agent',
+      model: '__GATEWAY_OPENAI_MODEL__',
+      instructions: `
+      Process queries using the provided context. Structure responses to be concise and relevant.
+      ${VECTORIZE_PROMPT}
+      `,
+      tools: { vectorQueryTool },
+    })
+    ```
+  </TabItem>
+
+  <TabItem value="opensearch" label="OpenSearch">
+    ```ts title="vector-store.ts"
+    import { OPENSEARCH_PROMPT } from '@mastra/opensearch'
+    import { Agent } from '@mastra/core/agent'
+
+    export const ragAgent = new Agent({
+      id: 'rag-agent',
+      name: 'RAG Agent',
+      model: '__GATEWAY_OPENAI_MODEL__',
+      instructions: `
+      Process queries using the provided context. Structure responses to be concise and relevant.
+      ${OPENSEARCH_PROMPT}
+      `,
+      tools: { vectorQueryTool },
+    })
+    ```
+  </TabItem>
+
+  <TabItem value="oracledb" label="OracleDB">
+    ```ts title="vector-store.ts"
+    import { ORACLEDB_PROMPT } from '@mastra/oracledb'
+    import { Agent } from '@mastra/core/agent'
+
+    export const ragAgent = new Agent({
+      id: 'rag-agent',
+      name: 'RAG Agent',
+      model: '__GATEWAY_OPENAI_MODEL__',
+      instructions: `
+      Process queries using the provided context. Structure responses to be concise and relevant.
+      ${ORACLEDB_PROMPT}
+      `,
+      tools: { vectorQueryTool },
+    })
+    ```
+  </TabItem>
+
+  <TabItem value="s3vectors" label="S3Vectors">
+    ```ts title="vector-store.ts"
+    import { S3VECTORS_PROMPT } from '@mastra/s3vectors'
+    import { Agent } from '@mastra/core/agent'
+
+    export const ragAgent = new Agent({
+      id: 'rag-agent',
+      name: 'RAG Agent',
+      model: '__GATEWAY_OPENAI_MODEL__',
+      instructions: `
+      Process queries using the provided context. Structure responses to be concise and relevant.
+      ${S3VECTORS_PROMPT}
+      `,
+      tools: { vectorQueryTool },
+    })
+    ```
+  </TabItem>
+</Tabs>
+
+### 重新排名 {/* #re-ranking */}
+
+初始向量相似性搜尋有時可能會錯過詳細的相關性。重新排名是一個計算成本更高的過程，但演算法更準確，可以透過以下方式改進結果：
+
+* 考慮詞序和精確匹配
+* 應用更進階的相關性評分
+* 在查詢和文件之間使用稱為交叉注意力的方法
+
+以下是如何使用重新排名：
+
+```ts
+import { rerankWithScorer as rerank, MastraAgentRelevanceScorer } from '@mastra/rag'
+
+// Get initial results from vector search
+const initialResults = await pgVector.query({
+  indexName: 'embeddings',
+  queryVector: queryEmbedding,
+  topK: 10,
+})
+
+// Create a relevance scorer
+const relevanceProvider = new MastraAgentRelevanceScorer(
+  'relevance-scorer',
+  '__GATEWAY_OPENAI_MODEL__',
+)
+
+// Re-rank the results
+const rerankedResults = await rerank({
+  results: initialResults,
+  query,
+  scorer: relevanceProvider,
+  options: {
+    weights: {
+      semantic: 0.5, // How well the content matches the query semantically
+      vector: 0.3, // Original vector similarity score
+      position: 0.2, // Preserves original result ordering
+    },
+    topK: 10,
+  },
+})
+```
+
+權重控制不同因素如何影響最終排名：
+
+* `semantic`：較高的值優先考慮語義理解和與查詢的相關性
+* `vector`：較高的值有利於原始向量相似度分數
+* `position`：較高的值有助於保持結果的原始順序
+
+:::注意
+為了使語義評分在重新排名期間正常運作，每個結果必須包含其文字內容`metadata.text` field.
+:::
+
+您還可以使用其他相關性評分提供程序，例如 Voyage AI、Cohere 或 ZeroEntropy：
+
+```ts
+import { VoyageRelevanceScorer } from '@mastra/voyageai'
+
+const relevanceProvider = new VoyageRelevanceScorer({ model: 'rerank-2.5' })
+```
+
+```ts
+const relevanceProvider = new CohereRelevanceScorer('rerank-v3.5')
+```
+
+```ts
+const relevanceProvider = new ZeroEntropyRelevanceScorer('zerank-1')
+```
+
+Voyage AI 提供專用的重新排名模型：`rerank-2.5` and `rerank-2.5-lite` both allow up to 32,000 tokens for the query and any single document combined, and up to 600,000 tokens across a request. `VoyageRelevanceScorer` reads `VOYAGE_API_KEY` from the environment, or accepts an `apiKey` in its config.
+
+重新排序的結果將向量相似性與語義理解相結合，以提高檢索品質。
+
+有關重新排名的更多詳細信息，請參閱[rerank()](/reference/rag/rerankWithScorer) method.
+
+對於遵循區塊之間連接的基於圖的檢索，請參閱[GraphRAG](/reference/rag/graph-rag-guide) documentation.

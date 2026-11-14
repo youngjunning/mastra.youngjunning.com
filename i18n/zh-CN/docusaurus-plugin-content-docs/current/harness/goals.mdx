@@ -1,0 +1,148 @@
+---
+title: "Goals | Long-running agents"
+description: "Set a durable goal for a Mastra agent so an execution loop evaluates progress and continues working until the objective completes or its run budget ends."
+packages:
+  - "@mastra/core"
+  - "@mastra/memory"
+---
+
+# 目标
+
+**添加于：** `@mastra/core@1.43.0`
+
+目标是一个持久的、线程范围内的目标：Agent在循环迭代中不断努力的长期指令，直到判断模型决定它满足或运行预算耗尽。
+
+目标持久保存在线程状态中，因此即使在已运行的轮次中间有新消息到达，它也能在重新加载后继续存在并在循环中进行评估。
+
+目标建立在与[`isTaskComplete`](/docs/subagents): an LLM-as-judge scores the agent's output each iteration and gates the loop. The difference is that a goal is **durable** (stored in thread state, not passed per call) and is set and updated through `Agent`方法而不是每`stream()`选项。
+
+## 何时使用目标 {/* #when-to-use-goals */}
+
+当您希望Agent在多次迭代和消息中继续朝着单一目标努力，而无需在每次调用时重新提供成功标准时，请使用目标：
+
+* Agent应追求的长期目标，直到法官宣布其完成为止。
+* 应在运行中消息中继续进行的工作（仍根据目标来判断传递到实时运行的消息）。
+* 在线程重新加载或进程重新启动时必须持续存在的目标。
+
+对于一次内的一次性完成检查`stream()` call, use [`isTaskComplete`](/docs/subagents) instead.
+
+## 快速入门 {/* #quickstart */}
+
+目标需要配置[storage](/docs/storage) backend and a memory-backed thread. Add a `goal` config to the agent, a judge model is required for the goal to do anything, then set an objective for a thread:
+
+```typescript title="src/mastra/agents/worker.ts" {8-11}
+import { Agent } from '@mastra/core/agent'
+
+const worker = new Agent({
+  id: 'worker',
+  name: 'worker',
+  instructions: 'You complete software tasks end to end.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  memory,
+  goal: {
+    judge: '__GATEWAY_OPENAI_MODEL_LUNA__',
+    maxRuns: 50,
+  },
+})
+
+// Set the durable objective for a thread.
+await worker.setObjective('Add and test a /health endpoint', {
+  threadId,
+  resourceId,
+})
+
+// The objective is judged each iteration until it's complete or maxRuns is hit.
+const stream = await worker.stream('Start working on the goal', {
+  memory: { thread: threadId, resource: resourceId },
+})
+```
+
+这`goal` config auto-registers the state-signal projection, so the model always sees the current objective as `<current-objective>` in its context without extra setup.
+
+## 目标步骤如何运作 {/* #how-the-goal-step-works */}
+
+目标步骤在Agent执行循环内运行，紧随其后`isTaskComplete`. On a real candidate answer it scores the conversation against the objective and gates the loop:
+
+* **不满意，还有预算**→ 循环继续。注入每次评估反馈，以便Agent进行迭代。
+* **使满意**→ 循环停止并标记目标`done`.
+* **预算用尽** (`runsUsed >= maxRuns`) → the loop stops and the objective is marked `paused`. Raise `maxRuns`, then resume the objective to continue.
+
+该步骤对于后台任务、中间Tool循环和仅工作内存迭代来说是无操作的，与`isTaskComplete`.
+
+每个评估都会发出一个类型化的`goal` stream chunk (`GoalEvaluationPayload`: `objective`, `iteration`, `maxRuns`, `passed`, `status`, `results`, `reason`, `duration`, `timedOut`, `maxRunsReached`, `suppressFeedback`) so a UI can show goal progress mid-run.
+
+**判断模型是激活开关。**&#x5982;果没有法官解决，则根据每个目标的覆盖或Agent的`goal.judge`, the goal step performs no scoring or budget consumption and emits no `goal` chunk. The gate covers every scorer: Mastra checks it before selecting a scorer, so a custom `goal.scorer` still needs a judge to resolve.
+
+有效设置解析为每个目标记录值，然后解析为Agent`goal` config, then a built-in default (`maxRuns` `50` and the default judge prompt).
+
+### 裁判员和记分员 {/* #judge-and-scorer */}
+
+`goal.judge`和`goal.scorer` work at different levels. `goal.scorer` is the evaluation pipeline that produces the score the loop gates on. `goal.judge` is the model the default pipeline calls to reach that score.
+
+忽略`scorer` and Mastra builds a default LLM-as-judge scorer, which returns `1` when the objective is achieved, `0.5` when the judge decides the agent is waiting for user input, and `0` otherwise. A `0.5` score stops the automatic loop without completing the goal, so the next agent turn is still judged. Configure it with these settings:
+
+* `goal.judge`：决定是否满足目标的模型。
+* `goal.prompt`：给法官的额外指示。默认为内置进球判断提示。
+* `goal.tools`：法官可以在做出决定之前调用只读验证Tool，因此可以确认作品，而不是单独对Agent的文本进行评分。
+* `goal.maxSteps`：法官自己的Agent循环的步骤预算。默认为`5`.
+
+经过`goal.scorer` to replace the pipeline with your own [scorer](/reference/evals/create-scorer), either a scorer instance or a registered scorer id. The custom scorer brings its own judging, so `goal.prompt`, `goal.tools`, and `goal.maxSteps` no longer apply, and Mastra stops resolving the judge model for judging. A `goal.judge` resolver function still runs, and its return value is discarded.
+
+配置默认记分器`judge`, `maxRuns`, and `prompt`:
+
+```typescript title="src/mastra/agents/worker.ts"
+import { Agent } from '@mastra/core/agent'
+
+const worker = new Agent({
+  id: 'worker',
+  name: 'worker',
+  instructions: 'You complete software tasks end to end.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  memory,
+  goal: {
+    // A resolver function lets you inject provider credentials and read the
+    // current judge selection at runtime; returning `undefined` keeps the
+    // goal step a no-op.
+    judge: ({ requestContext }) => resolveJudgeModel(requestContext),
+    maxRuns: 30,
+    prompt: 'Only mark the goal complete when tests pass.',
+  },
+})
+```
+
+要将决定权交给您自己的记分员，请将其传递为`scorer` and keep `judge` set, because the activation gate still applies:
+
+```typescript oxfmt:false
+goal: {
+  judge: '__GATEWAY_OPENAI_MODEL_LUNA__',
+  // Replaces the built-in judge pipeline. `prompt`, `tools`, and `maxSteps` no longer apply.
+  scorer: 'tests-pass',
+}
+```
+
+## 管理目标 {/* #managing-the-objective */}
+
+控制线程的目标`Agent` methods. All of them no-op when the run isn't memory-backed (they require storage and a `threadId`):
+
+```typescript title="src/mastra/objective.ts"
+// Read the current objective record.
+const record = await worker.getObjective({ threadId })
+
+// Update options on the active objective (only provided fields are written;
+// unset fields fall back to the agent's `goal` config).
+await worker.updateObjectiveOptions({ threadId, maxRuns: 100 })
+
+// Drop the objective.
+await worker.clearObjective({ threadId })
+```
+
+客观记录包括可选的`activeDurationMs` value for user interfaces that display active pursuit time. Mastra advances this value while an agent runs toward an active objective and checkpoints it when the run ends or waits for tool approval. Missing values represent zero, and the duration measures agent execution rather than the goal's wall-clock age.
+
+每个目标的值由`setObjective` / `updateObjectiveOptions` take precedence over the agent's `goal` config, and that precedence is remembered in thread state. See the [`GoalEvaluationPayload` in the ChunkType reference](/reference/streaming/ChunkType) for the full goal chunk shape.
+
+## 有关的 {/* #related */}
+
+* [主管Agent](/docs/subagents): `isTaskComplete` and the rubric scorer
+* [信号提供者](/docs/signals/signal-providers)：如何将目标投射到背景中
+* [内存存储](/docs/storage)：存储后端目标要求
+* [马斯特拉工厂](https://factory.mastra.ai)和[Mastra Code](https://code.mastra.ai): Examples of goal-driven coding agents

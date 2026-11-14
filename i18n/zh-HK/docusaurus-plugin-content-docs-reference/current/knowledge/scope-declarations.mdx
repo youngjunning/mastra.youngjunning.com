@@ -1,0 +1,327 @@
+---
+title: 'Reference: Scope declarations | Knowledge'
+description: 'The Knowledge scopes option: patterns and params, access rules, belongsTo, child scopes, template pages, labels, renaming, and the errors each raises.'
+packages:
+  - '@mastra/core'
+---
+
+# 範圍聲明
+
+這`scopes`選項開啟[`Knowledge`](/reference/knowledge/knowledge-class)聲明運行可以容納的每個作用域類型以及誰在該類型的作用域上獲得哪個角色。每個鍵都是一個模式或一個特定位址，每個值都是一個聲明。當你建構它時，知識會檢查整個物件。啟動時出現拼字錯誤會失敗，而不是默默地授予任何內容。看[範圍和存取權限](/docs/knowledge/scopes-and-access)進行演練。
+
+：：：阿爾法
+
+知識處於阿爾法階段。其 API 可能會在不同版本之間變更。
+
+:::
+
+## 使用範例 {/* #usage-example */}
+
+```typescript title="src/mastra/knowledge.ts"
+import { Knowledge, knowledgeMemoryScopes } from '@mastra/core/knowledge'
+
+export const knowledge = new Knowledge({
+  id: 'company',
+  tools: true,
+  scopes: {
+    ...knowledgeMemoryScopes(),
+    'team:$orgId:$teamId': {
+      description: 'A team',
+      displayLabel: '$teamId team',
+      belongsTo: 'org:$orgId',
+      access: [
+        { principal: 'self', role: 'editor' },
+        { principal: 'org:$orgId', role: 'viewer' },
+      ],
+      pages: [{ key: 'handbook', name: 'Team Handbook' }],
+    },
+  },
+})
+```
+
+`scopes`是必須的。經過`{}` if the instance needs no scope types. [`knowledgeMemoryScopes()`](/reference/knowledge/knowledge-memory-scopes) returns the declarations for Memory's `resource:` and `thread:` scopes and a tenant scope.
+
+## 聲明字段 {/* #declaration-fields */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'access',
+  type: 'Array<{ principal: string; role: KnowledgeRole }>',
+  description:
+    'Rules. Each gives runs holding `principal` the role `viewer`, `contributor`, `editor` or `owner` on scopes of this type. `principal` is `self` or a declared pattern.',
+  isOptional: true,
+},
+{ name: 'description', type: 'string', description: 'What the scope holds. The model reads it.', isOptional: true },
+{
+  name: 'displayLabel',
+  type: 'string',
+  description: 'Short name for UIs such as Studio. `$params` fill in from the address. The model never sees it.',
+  isOptional: true,
+},
+{
+  name: 'belongsTo',
+  type: 'string',
+  description:
+    'Pattern of the scope this one is placed under. Grants nothing by itself; rules can bind params through it. Patterns only.',
+  isOptional: true,
+},
+{
+  name: 'children',
+  type: 'Array<{ name: string; description?: string; displayLabel?: string; access?: Rule[] }>',
+  description: 'Scopes created with each scope of this type, at `<address>/<name>`. Patterns only.',
+  isOptional: true,
+},
+{
+  name: 'pages',
+  type: 'KnowledgePageTemplate[]',
+  description:
+    'Template pages every scope of this type has: `{ key, name, description?, pages? }`, nested through `pages`. Patterns only.',
+  isOptional: true,
+},
+{
+  name: 'pinnedContext',
+  type: 'Array<string | { list: string; depth?: number }>',
+  description:
+    "What every run holding a scope of this type gets pinned. A string is a page path, such as `policy:$orgId#refund-policy`. `{ list, depth }` pins a listing of the pages under a scope or page path, `depth` 1 to 3 (default 1), such as `{ list: 'site:$siteId', depth: 1 }`. Each path is a [page path](/reference/knowledge/knowledge-tools#page-references) whose `$params` bind from the holding scope. A malformed path, an undeclared scope type, or a `$param` the holding scope lacks fails at startup. Pins are delivered only when the `Knowledge` instance sets `pinnedContext` and the agent has Memory. See [Pinned context](/docs/knowledge/pinned-context).",
+  isOptional: true,
+},
+{
+  name: 'pinnedContextPriority',
+  type: 'number',
+  description: 'Order of stored pins aimed at this scope type, highest first.',
+  isOptional: true,
+  defaultValue: '0',
+},
+]}
+/>
+
+## 模式和參數 {/* #patterns-and-params */}
+
+一個鍵，例如`team:$orgId:$teamId` is a pattern. The text before the first `:` is the type, and each `$name` segment is a param. The address `team:acme:support` matches it with `$orgId = acme` and `$teamId = support`.
+
+每個參數恰好匹配一個段，因此一個位址具有與其模式一樣多的段。`resource:user:123` doesn't match `resource:$resourceId`. An ID that contains `:`, `/`, `#` or `%` is encoded into one segment, so user `user:123` is `resource:user%3A123`。建置地址[`encodeKnowledgeScopeId()`或者`knowledgeScopeAddress()`](/reference/knowledge/knowledge-memory-scopes#encodeknowledgescopeid)。內存 ID 已為您編碼。
+
+:::警告\[早期 alpha 版本儲存的範圍]
+
+早期版本讓最後一個參數採用位址的其餘部分，包括原始冒號。以這種方式儲存的範圍，例如`resource:slack:U123` for Memory resource `slack:U123`, now has a new address, `resource:slack%3AU123`. Runs reach the new, empty scope. Pages, pins and notes under the old address stay in storage, but runs with that Memory resource no longer reach them, and Knowledge doesn't move them.
+
+其位址現在與不同模式相符的儲存範圍，例如`org:acme:viewer` stored as an `org:$orgId` scope before you declared `org:$orgId:viewer`, gets no rules from the new pattern. Using it as a scope of the new pattern throws.
+
+:::
+
+只有當沒有位址可以符合其中兩個模式時，一個類型才可以有多個模式。具有不同段数的图案永远不会重叠。具有相同編號的模式在同一位置必須有不同的文字文字：
+
+```typescript oxfmt:false
+scopes: {
+  'role:$orgId:admin': { description: 'Org administrators' },
+  'role:$orgId:support': { description: 'Support agents' },
+}
+```
+
+重疊模式在啟動時失敗。它們之間沒有優先順序：
+
+```text
+Knowledge scope patterns "role:$orgId:$role" and "role:$orgId:admin" overlap; patterns of a type must be pairwise disjoint.
+```
+
+`kb:$orgId`和`kb:$orgId:public` can be declared together, because `kb:acme` and `kb:acme:public` have different numbers of segments. Each is its own scope with its own rules. Holding `kb:acme` gives no role on `kb:acme:public` unless a rule on `kb:$orgId:public` names `kb:$orgId`.
+
+## 規則 {/* #rules */}
+
+`access`列出規則。每個規則都會指定一個主體、運行必須保留的運行範圍（要套用該規則）以及運行獲得的角色。主體是聲明的範圍模式或`self`, the scope being accessed:
+
+```typescript oxfmt:false
+scopes: {
+  ...knowledgeMemoryScopes(),
+  'team:$orgId:$teamId': {
+    description: 'A team',
+    access: [
+      { principal: 'self', role: 'editor' },
+      { principal: 'org:$orgId', role: 'viewer' },
+    ],
+  },
+}
+```
+
+* `self`是聲明規則的範圍。跑步控股`team:acme:support` is an editor there.
+* `org:$orgId`綁定`$orgId` from the team's address. A run holding `org:acme` can read `team:acme:support`, and a run holding `org:globex` can't see it at all.
+
+角色是`viewer`, `contributor`, `editor` and `owner`, each including the ones before it. What each role can do:
+
+|角色 |可|
+| - | - |
+|`viewer` | Search and read pages and notes |
+| `contributor` | Create pages and add notes |
+| `editor` | Edit a page's name, description and body, move pages within a scope, restamp and remove notes, and pin pages |
+| `owner` | Move pages to another scope, merge pages away and delete pages |
+
+看[what each operation needs](/reference/knowledge/knowledge-tools#what-each-operation-needs) for the role each tool operation checks.
+
+主體的參數必須透過以下兩種方式之一進行綁定：
+
+* **來自地址前綴。**&#x4E3B;體的參數是目標模式的第一個參數，就像`org:$orgId` on `team:$orgId:$teamId`.
+* **透過`belongsTo`.**&#x76EE;標的`belongsTo` pattern carries the params, as shown in the next section.
+
+任何其他綁定在啟動時都會失敗：
+
+```text
+Knowledge rule principal "y:$b" on "x:$a:$b" would reach scopes that aren't an address prefix; reorder "x:$a:$b"'s params so the bound ones come first, or bind them through belongsTo.
+```
+
+每個主體也必須是聲明的類型：
+
+```text
+Knowledge rule principal "org:$orgId" on "policy:$orgId" is not a declared scope type; declare it or fix the typo.
+```
+
+角色不會延續。跑步控股`org:acme` reads `team:acme:support` through its `org:$orgId` viewer rule, but it doesn't get the roles `team:acme:support` gives to other scopes. There's no inheritance either. A role on `org:acme` gives nothing on scopes placed under it unless a rule says so.
+
+## 將示波器放置在`belongsTo` {/* #place-scopes-with-belongsto */}
+
+`belongsTo`將一個範圍放在樹中另一個範圍的下方。它本身不授予任何內容，但規則可以透過它綁定參數：
+
+```typescript oxfmt:false
+'project:$projectId': {
+  belongsTo: 'org:$orgId',
+  access: [
+    { principal: 'self', role: 'editor' },
+    { principal: 'org:$orgId', role: 'viewer' },
+  ],
+},
+```
+
+地址`project:p1` has no `$orgId`, so the `org:$orgId` rule binds it from the project's place in the tree. The first run that writes Knowledge while holding `project:p1` and exactly one `org:` scope places it under that scope, and the placement sticks. After that, a run holding `org:acme` can read `project:p1`, and a run holding `org:globex` can't.
+
+只讀取創建和放置任何內容的運行。直到進行寫作`project:p1`, the `org:$orgId` rule gives nothing on it. A run that holds several `org:` scopes logs a warning and leaves the placement unchanged. A run that holds a different `org:` scope from the stored placement also logs a warning, and the placement stays.
+
+## 子範圍和鍵控頁面 {/* #child-scopes-and-keyed-pages */}
+
+`children`聲明使用該類型的每個範圍所建立的範圍，位於`<address>/<name>`. `pages` declares template pages, keyed pages every scope of the type has. A template can list its own `pages` to nest them:
+
+```typescript oxfmt:false
+'team:$orgId:$teamId': {
+  access: [
+    { principal: 'self', role: 'editor' },
+    { principal: 'org:$orgId', role: 'viewer' },
+  ],
+  children: [
+    {
+      name: 'private',
+      description: 'Only the team can read this',
+      access: [{ principal: 'team:$orgId:$teamId', role: 'editor' }],
+    },
+  ],
+  pages: [
+    {
+      key: 'handbook',
+      name: 'Team Handbook',
+      pages: [{ key: 'on-call', name: 'On-call rota' }],
+    },
+  ],
+},
+```
+
+現在每支球隊都有`team:acme:support/private`, a page the tools can name as `team:acme:support#handbook`, and a page under it at `team:acme:support#handbook/on-call`.
+
+鍵在兄弟姐妹中是唯一的並且不能包含`/`, `#` or `%`. A duplicate or invalid key fails at startup.
+
+模板頁面屬於配置：
+
+* 寫入的運行會建立其範圍缺少的任何範本頁面，包括您稍後新增至配置中的頁面。僅讀取的運行不會創建任何內容。已位於該路徑的頁面將被採用，並成為範本頁面。
+* Tool可以在通常的角色下編輯模板頁面的名稱、描述和正文，向其添加註釋，並將其他頁面合併到其中。
+* Tool無法移動模板頁面或將其合併。他們得到`"team:acme:support#handbook" is declared in config; change the scope's pages to move it.`
+* 您從中取出的頁面`pages` becomes an ordinary page and keeps its key. Putting the template back adopts the page at that path, with its body and notes. If the page has moved, the next writing run creates a new one there.
+* 如果主機程式碼透過儲存刪除了範本頁面，則下一次寫入運行會在該路徑上建立新的空白頁面。
+
+孩子沒有從父母那裡得到任何規則。列出它需要的每條規則，以及從父級位址綁定的參數。在孩子的規則中`self` is the child, which no run holds, so name the parent's pattern as the principal, as above. A run holding `org:acme` reads the team's pages but not the private child's.
+
+## UI 的標籤範圍 {/* #label-scopes-for-uis */}
+
+`displayLabel`為範圍類型提供螢幕（例如 Studio）的簡稱。模型永遠不會看到它。`description` is what the model reads. `$params` fill in from the address, and a concrete address's own label wins:
+
+```typescript oxfmt:false
+scopes: {
+  'org:$orgId': {
+    displayLabel: '$orgId organization',
+    access: [{ principal: 'self', role: 'editor' }],
+    children: [{ name: 'private', displayLabel: 'Private', access: [{ principal: 'org:$orgId', role: 'owner' }] }],
+  },
+  'org:acme': { displayLabel: 'Acme HQ' },
+}
+```
+
+`knowledge.scopeLabel('org:globex')`回報`globex organization`, and `knowledge.scopeLabel('org:acme')` returns `Acme HQ`. See [`scopeLabel()`](/reference/knowledge/knowledge-class#scopelabel).
+
+## 共享一個範圍 {/* #share-one-scope */}
+
+沒有參數的鍵是一個特定的位址。它將規則添加到它匹配的一個模式中，用於單一範圍：
+
+```typescript oxfmt:false
+'feature:$orgId:$featureId': { description: 'Product features' },
+'feature:acme:a': {
+  access: [
+    { principal: 'team:acme:eng', role: 'editor' },
+    { principal: 'team:acme:support', role: 'contributor' },
+  ],
+},
+```
+
+工程編輯功能 A，並且支援人員可以在其中新增註釋和頁面，而無需編輯工程頁面。其他功能僅取得模式的規則。
+
+首先聲明模式。沒有匹配模式的具體位址在啟動時失敗：
+
+```text
+Knowledge scope "feature:acme:a" doesn't match a declared pattern; declare its pattern first.
+```
+
+具體地址可以添加`description`, `displayLabel`, `access`, `pinnedContext` and `pinnedContextPriority`. Declare `belongsTo`, `children` and `pages` on the pattern.
+
+## 運行範圍 {/* #run-scopes */}
+
+運行的範圍來自主機程式碼：`MASTRA_SCOPES_KEY` request context key, the `scopes` option on a call, and the agent's `scopes` option. A list on the agent adds to the others. A function on the agent receives them and returns the final set. With Memory, a run also holds `resource:<resourceId>` and `thread:<threadId>`. See [set a run's scopes](/docs/knowledge/scopes-and-access#set-a-runs-scopes).
+
+附加知識後，運行所擁有的每個範圍都必須與聲明的類型相符。只命名運行的類型仍然需要聲明，即使是空聲明，例如`'role:$orgId:support': {}`.
+
+一次運行只有一個記憶體資源和一個執行緒。`knowledgeMemoryScopes()` places a user's `resource:` scope under the org held by its first writing run, and that placement doesn't change. Give a user who works in several orgs a resource ID per org, such as `acme-dana` and `globex-dana`.
+
+`MASTRA_SCOPES_KEY`被保留：伺服器在請求正文中忽略它。它需要一個`@mastra/server` release that reserves it.
+
+### 錯誤 {/* #errors */}
+
+|錯誤 |原因 |
+| - | - |
+|`Knowledge run scope "project:x" does not match a declared scope type. …` | Knowledge has no declaration for a scope the run holds. |
+| ``Knowledge tools need run scopes: give the agent or the call `scopes`, or run it with Memory.`` | The run has no scopes and no Memory. |
+| `Agent request context "mastra__scopes" must be an array of "<type>:<value>" strings.` | A scope entry isn't a string. |
+| `Invalid agent scope "Org:acme" in request context "mastra__scopes". …` | A scope isn't `<type>:<value>` with a lowercase type. |
+| `The agent's scopes function dropped "resource:dana". …` | The agent's `scopes` function left out a `resource:` or `thread:` scope. |
+| `Agent scopes contain more than one resource: …` | The run holds two `resource:` (or `thread:`) scopes. |
+| `Agent scope "resource:cust-7" conflicts with option "memory.resource" "spec-1". …` | A `resource:` scope disagrees with `memory.resource`. |
+| `AGENT_SCOPES_SERVER_OUTDATED` | Scopes came from the request context or the call behind an older `@mastra/server`. |
+
+## 重新命名或停用範圍類型 {/* #rename-or-retire-a-scope-type */}
+
+每個儲存範圍都會記住它創建時的聲明鍵、前綴和`belongsTo` rules match on that key. Renaming a key in `scopes`, say `'team:$org:$team'` to `'team:$orgId:$teamId'`, would cut every existing team scope off from those rules. To prevent that, Knowledge checks the stored keys against `scopes` on first use and refuses to run while any is missing:
+
+```text
+Knowledge storage has scopes created from declarations this config doesn't declare: "team:$org:$team" (12 scopes). Restore each key in scopes, rename it with knowledge.renameScopeDeclaration(from, to), or keep the key with no access rules to retire it.
+```
+
+重命名密鑰後`scopes`, move the stored scopes to the new key. Child scope keys such as `team:$org:$team/internal` move with it:
+
+```typescript
+await knowledge.renameScopeDeclaration('team:$org:$team', 'team:$orgId:$teamId')
+```
+
+重新命名一步完成，並且在被拒絕時不會發生任何更改：當舊密鑰仍在時`scopes`, the new key isn't, or a stored address doesn't match the new pattern.
+
+在捲動部署期間，具有新配置的執行個體拒絕執行，直到發生重命名。重命名後，仍使用舊配置的實例會遺失前綴並且`belongsTo` rules on those scopes. Deploy the new config, then run the rename straight away.
+
+若要在不移動其範圍的情況下退役類型，請將其密鑰保留在`scopes` with no `access` rules. Its scopes stay stored, and no rule reaches them.
+
+## 有關的 {/* #related */}
+
+* [範圍和存取權限](/docs/knowledge/scopes-and-access)
+* [`knowledgeMemoryScopes()`](/reference/knowledge/knowledge-memory-scopes)
+* [知識課](/reference/knowledge/knowledge-class)

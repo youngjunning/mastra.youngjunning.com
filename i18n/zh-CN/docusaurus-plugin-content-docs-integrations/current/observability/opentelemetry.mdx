@@ -1,0 +1,820 @@
+---
+title: 'OpenTelemetry | Observability'
+description: "Connect Mastra observability to OpenTelemetry with an exporter for traces and logs or a bridge for joining existing distributed trace contexts."
+packages:
+  - '@mastra/observability'
+  - '@mastra/otel-exporter'
+  - '@mastra/otel-bridge'
+---
+
+# 开放式遥测
+
+Mastra 通过导出器支持 OpenTelemetry (OTEL)，用于将跟踪和日志发送到 OTEL 兼容平台，并作为参与现有 OTEL 跟踪上下文的桥梁。
+
+## 出口商 {/* #exporter */}
+
+OpenTelemetry 导出器使用标准化发送您的跟踪和日志[OpenTelemetry Semantic Conventions for GenAI](https://opentelemetry.io/docs/specs/semconv/gen-ai/). This ensures broad compatibility with platforms like Datadog, New Relic, Sentry, SigNoz, MLflow, Latitude, Dash0, Traceloop, Laminar, telemetry.dev, Sazabi, and more.
+
+### 安装 {/* #installation */}
+
+每个Provider都需要特定的协议包。为您的Provider安装基本导出器和协议包：
+
+#### 对于 HTTP/Protobuf Provider（SigNoz、New Relic、Sentry、Laminar、MLflow、Latitude、telemetry.dev） {/* #for-httpprotobuf-providers-signoz-new-relic-sentry-laminar-mlflow-latitude-telemetrydev */}
+
+```bash npm2yarn
+npm install @mastra/otel-exporter@latest @opentelemetry/exporter-trace-otlp-proto
+```
+
+#### 为了`gRPC` providers (Dash0, Datadog) {/* #for-grpc-providers-dash0-datadog */}
+
+```bash npm2yarn
+npm install @mastra/otel-exporter@latest @opentelemetry/exporter-trace-otlp-grpc @grpc/grpc-js
+```
+
+#### 对于 HTTP/JSON Provider（Traceloop、Sazabi） {/* #for-httpjson-providers-traceloop-sazabi */}
+
+```bash npm2yarn
+npm install @mastra/otel-exporter@latest @opentelemetry/exporter-trace-otlp-http
+```
+
+### 环境变量 {/* #environment-variables */}
+
+所有Provider都支持通过环境变量进行零配置设置。设置适当的变量，导出器将自动使用它们：
+
+|Provider|环境变量|
+| - | - |
+|达世币0 |`DASH0_API_KEY` (required), `DASH0_ENDPOINT` (required), `DASH0_DATASET` (optional) |
+| SigNoz | `SIGNOZ_API_KEY` (required), `SIGNOZ_REGION` (optional), `SIGNOZ_ENDPOINT`（可选）|
+|新遗物|`NEW_RELIC_LICENSE_KEY`（必需的），`NEW_RELIC_ENDPOINT`（可选）|
+|跟踪循环|`TRACELOOP_API_KEY`（必需的），`TRACELOOP_DESTINATION_ID`, `TRACELOOP_ENDPOINT`（可选）|
+|层流 |`LMNR_PROJECT_API_KEY`（必需的），`LAMINAR_ENDPOINT`（可选）|
+
+### Provider配置 {/* #provider-configurations */}
+
+#### 哨兵 {/* #sentry */}
+
+[哨兵](https://sentry.io/)通过其 OTLP 端点接受 OpenTelemetry 跟踪和日志。在哨兵中，打开[**Project Settings** > **Client Keys (DSN)**](https://sentry.io/settings/projects/) and copy the OTLP traces endpoint and authentication header. Add both values to your environment:
+
+```bash title=".env"
+SENTRY_OTLP_ENDPOINT=https://o000000.ingest.sentry.io/api/0000000/integration/otlp/v1/traces
+SENTRY_OTLP_AUTH_HEADER="sentry sentry_key=..."
+```
+
+使用`custom` provider with HTTP/Protobuf:
+
+```typescript title="src/mastra/index.ts"
+new OtelExporter({
+  provider: {
+    custom: {
+      endpoint: process.env.SENTRY_OTLP_ENDPOINT!,
+      protocol: 'http/protobuf',
+      headers: {
+        'x-sentry-auth': process.env.SENTRY_OTLP_AUTH_HEADER!,
+      },
+    },
+  },
+})
+```
+
+看[Sentry's OTLP documentation](https://docs.sentry.io/concepts/otlp/) for endpoint setup, supported signals, and current ingestion limits.
+
+根据您的设置选择导出器：
+
+* `OtelExporter`：通过 OTLP 发送Provider中立的跟踪和日志。将其与现有 OpenTelemetry 管道一起使用或当您需要后端可移植性时。
+* [`SentryExporter`](/integrations/observability/sentry)：使用Sentry SDK将Mastra跨度类型映射到Sentry操作，添加AI监控属性，并将跨度错误捕获为Sentry问题。
+
+#### ML流 {/* #mlflow */}
+
+[ML流](https://mlflow.org/docs/latest/genai/tracing/integrations/listing/mastra)通过其 OTLP 端点支持本机 Mastra 跟踪`/v1/traces`. Use the `custom` provider with HTTP/Protobuf and include the experiment header so traces are routed to the correct MLflow experiment:
+
+```typescript title="src/mastra/index.ts"
+new OtelExporter({
+  provider: {
+    custom: {
+      endpoint: `${process.env.MLFLOW_TRACKING_URI}/v1/traces`,
+      protocol: 'http/protobuf',
+      headers: {
+        'x-mlflow-experiment-id': process.env.MLFLOW_EXPERIMENT_ID,
+      },
+    },
+  },
+})
+```
+
+#### 纬度 {/* #latitude */}
+
+[纬度](https://latitude.so)是一个开源 LLM 可观察性和评估平台，可提取 OTLP 痕迹。使用`custom` provider with HTTP/Protobuf, pointing at Latitude's ingestion endpoint and authenticating with your API key and project slug:
+
+```typescript title="src/mastra/index.ts"
+new OtelExporter({
+  provider: {
+    custom: {
+      endpoint: 'https://ingest.latitude.so/v1/traces',
+      protocol: 'http/protobuf',
+      headers: {
+        Authorization: `Bearer ${process.env.LATITUDE_API_KEY}`,
+        'X-Latitude-Project': process.env.LATITUDE_PROJECT,
+      },
+    },
+  },
+})
+```
+
+注册于[console.latitude.so](https://console.latitude.so/login), or self-host and point the endpoint at your own ingestion host.
+
+#### 遥测.dev {/* #telemetrydev */}
+
+[遥测.dev](https://telemetry.dev)摄取 OTLP/HTTP protobuf 跟踪并将 OpenTelemetry GenAI 语义约定标准化为模型、Provider、令牌、延迟和成本字段。使用`custom` provider with your project API key:
+
+```bash title=".env"
+TELEMETRY_DEV_API_KEY=td_live_...
+```
+
+```typescript title="src/mastra/index.ts"
+new OtelExporter({
+  provider: {
+    custom: {
+      endpoint: 'https://ingest.telemetry.dev/v1/traces',
+      protocol: 'http/protobuf',
+      headers: {
+        Authorization: `Bearer ${process.env.TELEMETRY_DEV_API_KEY}`,
+      },
+    },
+  },
+})
+```
+
+#### 沙扎比 {/* #sazabi */}
+
+[沙扎比](https://sazabi.com)是一个摄取 OTLP 痕迹的 AI 原生可观测平台。在 Sazabi 中，添加 Mastra 日志源并复制其接收 URL。 URL 带有您的项目密钥，因此不需要 auth 标头：
+
+```bash title=".env"
+SAZABI_INTAKE_URL=https://...
+```
+
+使用`custom` provider with HTTP/JSON:
+
+```typescript title="src/mastra/index.ts"
+new OtelExporter({
+  provider: {
+    custom: {
+      endpoint: process.env.SAZABI_INTAKE_URL!,
+      protocol: 'http/json',
+    },
+  },
+})
+```
+
+看[Sazabi's Mastra guide](https://docs.sazabi.com/catalogs/log-sources/send-to-an-endpoint/mastra) for the full setup.
+
+#### 冲刺0 {/* #dash0 */}
+
+[冲刺0](https://www.dash0.com/)提供实时可观察性和自动洞察力。
+
+##### 零配置设置 {/* #zero-config-setup */}
+
+设置环境变量并使用带有空配置的导出器：
+
+```bash title=".env"
+# Required
+DASH0_API_KEY=your-api-key
+DASH0_ENDPOINT=ingress.us-west-2.aws.dash0.com:4317
+
+# Optional
+DASH0_DATASET=production
+```
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { Observability } from '@mastra/observability'
+import { OtelExporter } from '@mastra/otel-exporter'
+
+export const mastra = new Mastra({
+  observability: new Observability({
+    configs: {
+      otel: {
+        serviceName: 'my-service',
+        exporters: [new OtelExporter({ provider: { dash0: {} } })],
+      },
+    },
+  }),
+})
+```
+
+##### 显式配置 {/* #explicit-configuration */}
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { Observability } from '@mastra/observability'
+import { OtelExporter } from '@mastra/otel-exporter'
+
+export const mastra = new Mastra({
+  observability: new Observability({
+    configs: {
+      otel: {
+        serviceName: 'my-service',
+        exporters: [
+          new OtelExporter({
+            provider: {
+              dash0: {
+                apiKey: process.env.DASH0_API_KEY,
+                endpoint: process.env.DASH0_ENDPOINT, // e.g., 'ingress.us-west-2.aws.dash0.com:4317'
+                dataset: 'production', // Optional dataset name
+              },
+            },
+            resourceAttributes: {
+              // Optional OpenTelemetry Resource Attributes for the trace
+              ['deployment.environment']: 'dev',
+            },
+          }),
+        ],
+      },
+    },
+  }),
+})
+```
+
+：：：笔记
+
+从仪表板获取 Dash0 端点。它应该是以下格式`ingress.{region}.aws.dash0.com:4317`.
+
+:::
+
+#### `SigNoz` {/* #signoz */}
+
+[签名Noz](https://signoz.io/)是一个开源 APM 替代方案，具有内置跟踪支持。
+
+##### 零配置设置 {/* #zero-config-setup-1 */}
+
+```bash title=".env"
+# Required
+SIGNOZ_API_KEY=your-api-key
+
+# Optional
+SIGNOZ_REGION=us  # 'us' | 'eu' | 'in'
+SIGNOZ_ENDPOINT=https://my-signoz.example.com  # For self-hosted
+```
+
+```typescript title="src/mastra/index.ts"
+new OtelExporter({ provider: { signoz: {} } })
+```
+
+##### 显式配置 {/* #explicit-configuration-1 */}
+
+```typescript title="src/mastra/index.ts"
+new OtelExporter({
+  provider: {
+    signoz: {
+      apiKey: process.env.SIGNOZ_API_KEY,
+      region: 'us', // 'us' | 'eu' | 'in'
+      // endpoint: 'https://my-signoz.example.com', // For self-hosted
+    },
+  },
+})
+```
+
+#### 新遗物 {/* #new-relic */}
+
+[新遗物](https://newrelic.com/)通过人工智能监控功能提供完整的可观察性。
+
+##### 零配置设置 {/* #zero-config-setup-2 */}
+
+```bash title=".env"
+# Required
+NEW_RELIC_LICENSE_KEY=your-license-key
+
+# Optional
+NEW_RELIC_ENDPOINT=https://otlp.eu01.nr-data.net  # For EU region
+```
+
+```typescript title="src/mastra/index.ts"
+new OtelExporter({ provider: { newrelic: {} } })
+```
+
+##### 显式配置 {/* #explicit-configuration-2 */}
+
+```typescript title="src/mastra/index.ts"
+new OtelExporter({
+  provider: {
+    newrelic: {
+      apiKey: process.env.NEW_RELIC_LICENSE_KEY,
+      // endpoint: 'https://otlp.eu01.nr-data.net', // For EU region
+    },
+  },
+})
+```
+
+#### 跟踪循环 {/* #traceloop */}
+
+[跟踪循环](https://www.traceloop.com/)专注于法学硕士可观察性和自动提示跟踪。
+
+##### 零配置设置 {/* #zero-config-setup-3 */}
+
+```bash title=".env"
+# Required
+TRACELOOP_API_KEY=your-api-key
+
+# Optional
+TRACELOOP_DESTINATION_ID=my-destination
+TRACELOOP_ENDPOINT=https://custom.traceloop.com
+```
+
+```typescript title="src/mastra/index.ts"
+new OtelExporter({ provider: { traceloop: {} } })
+```
+
+##### 显式配置 {/* #explicit-configuration-3 */}
+
+```typescript title="src/mastra/index.ts"
+new OtelExporter({
+  provider: {
+    traceloop: {
+      apiKey: process.env.TRACELOOP_API_KEY,
+      destinationId: 'my-destination', // Optional
+    },
+  },
+})
+```
+
+#### 层 {/* #laminar */}
+
+[层](https://laminar.sh/)提供专业的 LLM 可观察性和分析。
+
+##### 零配置设置 {/* #zero-config-setup-4 */}
+
+```bash title=".env"
+# Required
+LMNR_PROJECT_API_KEY=your-api-key
+
+# Optional
+LAMINAR_ENDPOINT=https://api.lmnr.ai/v1/traces
+```
+
+```typescript title="src/mastra/index.ts"
+new OtelExporter({ provider: { laminar: {} } })
+```
+
+##### 显式配置 {/* #explicit-configuration-4 */}
+
+```typescript title="src/mastra/index.ts"
+new OtelExporter({
+  provider: {
+    laminar: {
+      apiKey: process.env.LMNR_PROJECT_API_KEY,
+    },
+  },
+})
+```
+
+:::tip Laminar-Native 导出器
+
+对于 Laminar 特定的功能，例如本机跨度路径、元数据和 Laminar 仪表板中的标签渲染，请考虑使用专用的[`@mastra/laminar`](/integrations/observability/laminar) exporter instead. It provides optimized integration with Laminar's platform.
+
+:::
+
+#### 数据狗 {/* #datadog */}
+
+[数据狗](https://www.datadoghq.com/)APM 通过分布式跟踪提供应用程序性能监控。要通过 OTLP 将跟踪发送到 Datadog，您需要在启用 OTLP 摄取的情况下运行 Datadog Agent。
+
+Datadog 使用 gRPC 进行 OTLP 摄取，这需要显式导入和[bundler configuration](/reference/configuration#bundlerexternals) to work correctly:
+
+```typescript title="src/mastra/index.ts"
+// Explicitly import gRPC dependencies for the bundler
+import '@grpc/grpc-js'
+import '@opentelemetry/exporter-trace-otlp-grpc'
+import { Mastra } from '@mastra/core'
+import { Observability } from '@mastra/observability'
+import { OtelExporter, type ExportProtocol } from '@mastra/otel-exporter'
+
+export const mastra = new Mastra({
+  // Add grpc-js to externals so it's handled at runtime
+  bundler: {
+    externals: ['@grpc/grpc-js'],
+  },
+  observability: new Observability({
+    configs: {
+      default: {
+        serviceName: 'my-service',
+        exporters: [
+          new OtelExporter({
+            provider: {
+              custom: {
+                endpoint: process.env.OTEL_EXPORTER_OTLP_ENDPOINT || 'http://localhost:4317',
+                protocol: (process.env.OTEL_EXPORTER_OTLP_PROTOCOL || 'grpc') as ExportProtocol,
+                headers: {},
+              },
+            },
+          }),
+        ],
+      },
+    },
+  }),
+})
+```
+
+：：：笔记
+
+Datadog Agent 必须配置为启用 OTLP 摄取。将以下内容添加到您的`datadog.yaml`:
+
+```yaml
+otlp_config:
+  receiver:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+```
+
+默认 OTLP 端点是`http://localhost:4317` when running the Datadog Agent locally.
+
+:::
+
+：：：警告
+
+显式导入`@grpc/grpc-js` and `@opentelemetry/exporter-trace-otlp-grpc` at the top of the file, along with the [`bundler.externals`](/reference/configuration#bundlerexternals) configuration, are required for the gRPC transport to work correctly. Without these, you may encounter connection issues.
+
+:::
+
+:::提示 Datadog-Native Exporter
+
+对于 Datadog 特定的功能，例如自动跨度类型映射、LLM 跨度分类以及无需 gRPC 配置的简化设置，请考虑使用专用[`@mastra/datadog`](/integrations/observability/datadog) exporter instead. It provides optimized integration with Datadog's APM platform.
+
+:::
+
+#### 自定义/通用 OTEL 端点 {/* #customgeneric-otel-endpoints */}
+
+对于其他 OTEL 兼容平台或自定义收集器：
+
+```typescript title="src/mastra/index.ts"
+new OtelExporter({
+  provider: {
+    custom: {
+      endpoint: 'https://your-collector.example.com/v1/traces',
+      protocol: 'http/protobuf', // 'http/json' | 'http/protobuf' | 'grpc'
+      headers: {
+        'x-api-key': process.env.API_KEY,
+      },
+    },
+  },
+})
+```
+
+### 信号 {/* #signals */}
+
+导出器发送两个 OpenTelemetry 信号：
+
+* 痕迹：Mastra 跨越，通过导出`BatchSpanProcessor`.
+* 日志：Mastra 日志事件，通过导出`BatchLogRecordProcessor`. Logs that carry `traceId` and `spanId` are correlated with traces using both the OTEL log record's native trace context and `mastra.traceId` / `mastra.spanId` attributes, so backends like Datadog, Grafana, and Honeycomb can join logs to traces automatically.
+
+这两个信号默认启用并共享相同的提供程序配置。日志端点是从跟踪端点派生的，方法是替换`/v1/traces` suffix with `/v1/logs`.
+
+要禁用信号，请设置`signals` option:
+
+```typescript title="src/mastra/index.ts"
+new OtelExporter({
+  provider: {/* ... */},
+  signals: {
+    traces: true, // default
+    logs: false, // disable log export
+  },
+})
+```
+
+日志导出需要为您的协议安装匹配的 OTLP 日志导出程序包：
+
+```bash npm2yarn
+# HTTP/JSON
+npm install @opentelemetry/exporter-logs-otlp-http
+# HTTP/Protobuf
+npm install @opentelemetry/exporter-logs-otlp-proto
+# gRPC
+npm install @opentelemetry/exporter-logs-otlp-grpc @grpc/grpc-js
+```
+
+如果未安装匹配的日志导出程序包，日志导出将被静默禁用并且跟踪将继续工作。
+
+### 配置选项 {/* #configuration-options */}
+
+#### 完整配置 {/* #complete-configuration */}
+
+```typescript
+new OtelExporter({
+  // Provider configuration (required)
+  provider: {
+    // Use one of: dash0, signoz, newrelic, traceloop, laminar, custom
+  },
+
+  // Per-signal toggles. Both default to true.
+  signals: {
+    traces: true,
+    logs: true,
+  },
+
+  // Export configuration
+  timeout: 30000, // Export timeout in milliseconds
+  batchSize: 100, // Number of spans/logs per batch
+
+  // Debug options
+  logLevel: 'info', // 'debug' | 'info' | 'warn' | 'error'
+})
+```
+
+### `OpenTelemetry`语义约定 {/* #opentelemetry-semantic-conventions */}
+
+出口商如下[OpenTelemetry Semantic Conventions for GenAI v1.38.0](https://github.com/open-telemetry/semantic-conventions/tree/v1.38.0/docs/gen-ai), ensuring compatibility with observability platforms:
+
+#### 跨度命名 {/* #span-naming */}
+
+* **模型调用**: `chat {model}`
+* **生成循环**: `model_generation {model}`, with one `agent_step {agent_id}` per turn
+* **Tool执行**: `execute_tool {tool_name}`
+* **Agent运行**: `invoke_agent {agent_id}`
+* **Workflow程运行**: `invoke_workflow {workflow_id}`
+
+每个Agent轮流调用模型一次。这`chat` span is that call and is the only span that carries `gen_ai.request.model`, the messages, and `gen_ai.usage.*`, so backends that sum usage across spans count each call once. The `model_generation` span wraps the whole loop and `agent_step` wraps one turn (model call plus tool execution); neither carries usage.
+
+#### 关键属性 {/* #key-attributes */}
+
+* `gen_ai.operation.name`- 操作类型（聊天、Tool.执行等）
+* `gen_ai.provider.name`- AIProvider（openai、anthropic等）
+* `gen_ai.request.model`- 型号标识符
+* `gen_ai.input.messages`- 向模特提供聊天记录
+* `gen_ai.output.messages`- 模型返回的消息
+* `gen_ai.usage.input_tokens`- 输入令牌的数量
+* `gen_ai.usage.output_tokens`- 输出代币数量
+* `gen_ai.request.temperature`- 采样温度
+* `gen_ai.response.finish_reasons`- 完成原因
+
+### 协议选择指南 {/* #protocol-selection-guide */}
+
+根据您的Provider选择正确的协议包：
+
+|Provider|协议|所需套餐 |
+| - | - | - |
+|达世币0 | gRPC |`@opentelemetry/exporter-trace-otlp-grpc` |
+| Datadog | gRPC | `@opentelemetry/exporter-trace-otlp-grpc` |
+| SigNoz | HTTP/Protobuf | `@opentelemetry/exporter-trace-otlp-proto` |
+| New Relic | HTTP/Protobuf | `@opentelemetry/exporter-trace-otlp-proto` |
+| Traceloop | HTTP/JSON | `@opentelemetry/exporter-trace-otlp-http` |
+| Laminar | HTTP/Protobuf | `@opentelemetry/exporter-trace-otlp-proto` |
+| Custom | Varies | Depends on your collector |
+
+：：：警告
+
+确保为您的Provider安装正确的协议包。如果安装了错误的软件包，导出器将提供有用的错误消息。
+
+:::
+
+### 故障排除 {/* #troubleshooting */}
+
+#### 缺少依赖错误 {/* #missing-dependency-error */}
+
+如果您看到类似以下的错误：
+
+```text
+HTTP/Protobuf exporter is not installed (required for signoz).
+To use HTTP/Protobuf export, install the required package:
+  npm install @opentelemetry/exporter-trace-otlp-proto
+```
+
+为您的Provider安装建议的软件包。
+
+#### 常见问题 {/* #common-issues */}
+
+1. **协议包错误**：验证您为Provider安装了​​正确的导出器
+2. **端点无效**：检查端点格式是否符合Provider要求
+3. **认证失败**：验证 API 密钥和标头是否正确
+
+### 有关的 {/* #related */}
+
+* [追踪概述](/docs/observability/tracing/overview)
+* [开放遥测桥](#bridge)
+* [GenAI v1.38.0 的 OpenTelemetry 语义约定](https://github.com/open-telemetry/semantic-conventions/tree/v1.38.0/docs/gen-ai)
+* [OTEL 出口商参考](/reference/observability/tracing/exporters/otel)
+
+## 桥 {/* #bridge */}
+
+：：：警告
+
+OpenTelemetry Bridge 目前正在**experimental**. APIs and configuration options may change in future releases.
+
+:::
+
+OpenTelemetry (OTEL) 桥可实现 Mastra 跟踪系统和现有 OpenTelemetry 基础设施之间的双向集成。与将跟踪数据发送到外部平台的导出器不同，桥接器创建参与分布式跟踪上下文的本机 OTEL 跨度。
+
+### 何时使用桥 {/* #when-to-use-the-bridge */}
+
+使用`OtelBridge` when you:
+
+* 在您的应用程序中拥有现有的 OTEL Tool（HTTP 服务器、数据库客户端等）
+* 希望 Mastra 操作显示为现有 OTEL 跟踪的子范围
+* 需要 Mastra Tool内的 OTEL 检测代码来维持正确的父子关系
+* 正在构建一个分布式系统，其中跟踪上下文必须跨服务传播
+
+### 它是如何运作的 {/* #how-it-works */}
+
+这`OtelBridge` provides two-way integration:
+
+**从 OTEL 到 马斯特拉：**
+
+* 自动从 OTEL 环境上下文 (AsyncLocalStorage) 读取
+* 从活动 OTEL 范围继承跟踪 ID 和父范围 ID
+* 尊重 OTEL 采样决策：如果未对跟踪进行采样，Mastra 不会为其创建跨度
+* 当 OTEL 自动检测处于活动状态时，无需手动传递迹线 ID
+
+**从马斯特拉到 OTEL：**
+
+* 为 Mastra 操作创建原生 OTEL 范围（Agent、LLM 呼叫、Tool、Workflow程）
+* 在分布式跟踪中维护正确的父子关系
+* 允许 Mastra 操作中的 OTEL 检测代码（HTTP 客户端、数据库调用）正确嵌套
+* 将 Mastra 日志事件转发到全球注册的 OTEL`LoggerProvider`. Logs that originate inside a Mastra span are emitted under that span's OTEL context so backends correlate them with the trace. If no `LoggerProvider` is registered, log emission is a silent no-op.
+
+### 安装 {/* #installation-1 */}
+
+```bash npm2yarn
+npm install @mastra/otel-bridge
+```
+
+该桥可与您现有的 OpenTelemetry 设置配合使用。根据您的配置，您可能还需要以下一些软件包：
+
+* `@opentelemetry/sdk-node`- OTEL 的核心 Node.js SDK
+* `@opentelemetry/auto-instrumentations-node`- 常见库的自动检测
+* `@opentelemetry/exporter-trace-otlp-proto`- OTLP 导出器（Protobuf over HTTP）
+* `@opentelemetry/exporter-trace-otlp-http`- OTLP 导出器（通过 HTTP 的 JSON）
+* `@opentelemetry/exporter-trace-otlp-grpc`- OTLP 导出器 (gRPC)
+* `@opentelemetry/sdk-trace-base`- 基础跟踪 SDK（用于`BatchSpanProcessor`, etc.)
+* `@opentelemetry/core`- 核心实用程序（用于`W3CTraceContextPropagator`, etc.)
+* `@opentelemetry/sdk-logs`和 OTLP 日志导出器（例如`@opentelemetry/exporter-logs-otlp-http`) - Required if you want the bridge to forward Mastra log events too
+
+### 配置 {/* #configuration */}
+
+使用`OtelBridge` requires two steps:
+
+1. 在应用程序中配置 OpenTelemetry 检测
+2. 添加`OtelBridge` to your Mastra observability config
+
+#### 第 1 步：开放遥测仪器 {/* #step-1-opentelemetry-instrumentation */}
+
+创建一个初始化 OTEL 的检测文件。这必须在您的应用程序代码之前运行：
+
+```typescript title="instrumentation.ts"
+import { NodeSDK } from '@opentelemetry/sdk-node'
+import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node'
+import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-proto'
+import { BatchSpanProcessor } from '@opentelemetry/sdk-trace-base'
+import { W3CTraceContextPropagator } from '@opentelemetry/core'
+
+const sdk = new NodeSDK({
+  serviceName: 'my-service',
+  spanProcessors: [
+    new BatchSpanProcessor(
+      new OTLPTraceExporter({
+        url: process.env.OTEL_EXPORTER_OTLP_ENDPOINT || 'http://localhost:4318/v1/traces',
+      }),
+    ),
+  ],
+  instrumentations: [getNodeAutoInstrumentations()],
+  textMapPropagator: new W3CTraceContextPropagator(),
+})
+
+sdk.start()
+
+export { sdk }
+```
+
+#### 第 2 步：Mastra 配置 {/* #step-2-mastra-configuration */}
+
+添加`OtelBridge` to your Mastra observability config:
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { Observability } from '@mastra/observability'
+import { OtelBridge } from '@mastra/otel-bridge'
+
+export const mastra = new Mastra({
+  observability: new Observability({
+    configs: {
+      default: {
+        serviceName: 'my-service',
+        bridge: new OtelBridge(),
+      },
+    },
+  }),
+  agents: {/* your agents */},
+})
+```
+
+使用该桥时不需要 Mastra 出口商。跟踪通过您的 OTEL SDK 配置发送。如果您想将跟踪发送到其他目的地，您可以选择添加 Mastra 导出器。
+
+#### 转发日志（可选） {/* #forwarding-logs-optional */}
+
+该桥还将 Mastra 日志事件转发到全球注册的 OTEL`LoggerProvider`. To wire up logs alongside traces, register a log record processor on `NodeSDK`:
+
+```typescript title="instrumentation.ts"
+import { NodeSDK } from '@opentelemetry/sdk-node'
+import { OTLPLogExporter } from '@opentelemetry/exporter-logs-otlp-http'
+import { BatchLogRecordProcessor } from '@opentelemetry/sdk-logs'
+
+const sdk = new NodeSDK({
+  // ...trace config as usual
+  logRecordProcessors: [
+    new BatchLogRecordProcessor({
+      exporter: new OTLPLogExporter({
+        url: process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT || 'http://localhost:4318/v1/logs',
+      }),
+    }),
+  ],
+})
+```
+
+源自 Mastra 跨度内部的日志在该跨度的 OTEL 上下文下发出，因此 Datadog、Grafana 和 Honeycomb 等后端会自动将它们与周围的跟踪关联起来。没有跟踪上下文的日志使用当前活动的 OTEL 上下文。
+
+如果您没有注册`LoggerProvider`, log emission is a silent no-op. Traces continue to work as configured.
+
+#### 运行您的应用程序 {/* #running-your-application */}
+
+使用`--import` flag to ensure instrumentation loads before your application:
+
+```bash
+tsx --import ./instrumentation.ts ./src/index.ts
+```
+
+#### 退出前冲洗 {/* #flushing-before-exit */}
+
+马斯特拉的`flush()` and `shutdown()` ask the registered OTEL providers to flush, but a `BatchSpanProcessor` can still hold a batch it has already started exporting. In serverless or short-lived processes, also `await sdk.shutdown()` after Mastra's flush, so no spans are left in your OTEL SDK when the process exits. The provider's own `forceFlush()` is not enough: it does not wait for a batch the exporter is already sending.
+
+### 语义约定 {/* #semantic-conventions */}
+
+这`OtelBridge` exports Mastra spans using [OpenTelemetry Semantic Conventions for GenAI v1.38.0](https://github.com/open-telemetry/semantic-conventions/tree/v1.38.0/docs/gen-ai). This includes standardized span names (`chat {model}`, `execute_tool {tool_name}`, etc.) and attributes (`gen_ai.usage.input_tokens`, `gen_ai.request.model`, etc.).
+
+有关跨度命名和属性的详细信息，请参阅[OpenTelemetry Exporter semantic conventions](#opentelemetry-semantic-conventions).
+
+### 跟踪层次结构 {/* #trace-hierarchy */}
+
+随着`OtelBridge`, your traces maintain proper hierarchy across OTEL and Mastra boundaries:
+
+```text
+HTTP POST /api/chat (from Hono middleware)
+└── agent.assistant (from Mastra via OtelBridge)
+    └── model_generation __AI_SDK_OPENAI_MODEL_BASE__ (generation loop)
+        ├── agent_step assistant (turn 1)
+        │   ├── chat __AI_SDK_OPENAI_MODEL_BASE__ (LLM call)
+        │   └── execute_tool search (tool execution)
+        │       └── HTTP GET api.example.com (from OTEL auto-instrumentation)
+        └── agent_step assistant (turn 2)
+            └── chat __AI_SDK_OPENAI_MODEL_BASE__ (follow-up LLM call)
+```
+
+### 多服务分布式追踪 {/* #multi-service-distributed-tracing */}
+
+这`OtelBridge` enables trace propagation across service boundaries. When Service A calls Service B via HTTP, trace context propagates automatically:
+
+```text
+Service A: HTTP POST /api/process
+└── HTTP POST service-b/api/analyze (outgoing call)
+
+Service B: HTTP POST /api/analyze (incoming call - same trace!)
+└── agent.analyzer (Mastra agent inherits trace context)
+    └── model_generation __AI_SDK_OPENAI_MODEL_BASE__
+        └── agent_step analyzer
+            └── chat __AI_SDK_OPENAI_MODEL_BASE__
+```
+
+两项服务必须具有：
+
+1. OTEL仪表配置
+2. 启用 W3C 跟踪上下文传播器
+3. 马斯特拉与`OtelBridge` configured
+
+马斯特拉`MCPServer` request over HTTP follows the same rule. With this setup, it joins the caller's trace. Without HTTP instrumentation on the server, each request keeps its own trace. In both cases, when a request carries a W3C `traceparent`, in `_meta` or as an HTTP header, the request span links to the caller's span, and the exporter and the bridge send that link as an OpenTelemetry span link. See [Linking to the caller's trace](/reference/tools/mcp-server#linking-to-the-callers-trace).
+
+### 使用标签 {/* #using-tags */}
+
+标签可帮助您对 OTEL 后端中的跟踪进行分类和过滤。执行Agent或Workflow程时添加标签：
+
+```typescript
+const result = await agent.generate('Hello', {
+  tracingOptions: {
+    tags: ['production', 'experiment-v2', 'user-request'],
+  },
+})
+```
+
+标签导出为 JSON 字符串`mastra.tags` span attribute for broad backend compatibility. Common use cases include:
+
+* 环境标签：`"production"`, `"staging"`
+* 实验跟踪：`"experiment-v1"`, `"control-group"`
+* 优先级：`"priority-high"`, `"batch-job"`
+
+### 故障排除 {/* #troubleshooting-1 */}
+
+如果跟踪未按预期显示或连接：
+
+* 验证 OTEL SDK 在 Mastra 之前已初始化（使用`--import` flag or import at the top of the entry point)
+* 如果你看到`[OtelBridge] No OpenTelemetry tracer provider is registered globally`, the bridge can't find a tracer provider. Some frameworks create a provider without registering it globally. Pass that provider directly with `new OtelBridge({ tracerProvider })`. See [setup requirements](/reference/observability/tracing/bridges/otel#setup-requirements)
+* 确保`OtelBridge` is added to your observability config
+* 检查您的 OTEL 后端是否正在运行且可访问
+
+### 有关的 {/* #related-1 */}
+
+* [追踪概述](/docs/observability/tracing/overview)
+* [OtelBridge 参考](/reference/observability/tracing/bridges/otel)

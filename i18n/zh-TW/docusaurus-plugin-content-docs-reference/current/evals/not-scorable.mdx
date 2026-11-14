@@ -1,0 +1,70 @@
+---
+title: 'Reference: notScorable() | Evals'
+description: 'Return notScorable() from a scorer step when a run has nothing to evaluate. Remaining steps are skipped and the run stays out of aggregates.'
+packages:
+  - '@mastra/core'
+---
+
+# 不可評分()
+
+聲明目前運行沒有任何內容可供該記分員評估。通常從記分器函數步驟返回它`preprocess`。其餘步驟將被跳過，因此永遠不會調用裁判，並且平均值、門限和閾值僅包括該記分員實際評估的跑分。
+
+使用`notScorable()` when whether a run qualifies depends on the run's own input or output, such as whether a specific tool was called. Use an [eligibility filter](/docs/evals/overview#how-live-evaluations-work)相反，當條件可以從請求上下文或實體元資料表達時。看[自訂記分員：跳過跑動](/docs/evals/custom-scorers#skipping-runs-that-cant-be-scored)進行演練。
+
+## 使用範例 {/* #usage-example */}
+
+以下評分員以法學碩士來評斷退款處理。從未調用過的運行`refundCustomer` are declared not scorable before the judge is asked anything:
+
+```typescript title="src/mastra/scorers/refund-judge.ts"
+import { createScorer, notScorable } from '@mastra/core/evals'
+import { extractToolCalls } from '@mastra/evals/scorers/utils'
+
+export const refundJudge = createScorer({
+  id: 'refund-judge',
+  description: 'Judges how well refund requests were handled',
+  type: 'agent',
+  judge: {
+    model: '__GATEWAY_OPENAI_MODEL_LUNA__',
+    instructions: 'You are a strict QA reviewer for customer-support refund handling.',
+  },
+})
+  .preprocess(({ run }) => {
+    const { tools } = extractToolCalls(run.output)
+    return tools.includes('refundCustomer')
+      ? { tools }
+      : notScorable('refundCustomer was not called')
+  })
+  .generateScore({
+    description: 'Score the refund handling from 0 to 1',
+    createPrompt: ({ run }) =>
+      `Rate this refund handling from 0 to 1:\n${JSON.stringify(run.output)}`,
+  })
+```
+
+## 參數 {/* #parameters */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'reason',
+  type: 'string',
+  isOptional: true,
+  description: 'Why the run is not scorable. Surfaced on the run result and experiment results.',
+},
+]}
+/>
+
+**返回：** `NotScorable`. An opaque value recognized by the scorer pipeline. Return it directly from the step. Don't wrap it in another object.
+
+## 行為 {/* #behavior */}
+
+* 從任何功能步驟接受：`preprocess`, `analyze`, `generateScore`, or `generateReason`. Prompt-object steps can't return it because their output is produced by the model.
+* 已完成的步驟保留其結果。
+* `scorer.run()`解決與`notScorable: { step, reason? }` and no `score` key. See [`MastraScorer`](/reference/evals/mastra-scorer).
+* 即時計分不儲存分數行。[`runEvals()`](/reference/evals/run-evals) leaves the run out of averages, gates, thresholds, and the verdict, and counts it in `summary.notScorable`. Experiments set `score: null`, `error: null`, and `notScorable`.
+
+## 有關的 {/* #related */}
+
+* [`createScorer()`](/reference/evals/create-scorer)
+* [`filterRun()`](/reference/evals/filter-run)修剪記分員所看到的內容。它仍然會產生分數。
+* [自訂記分員：跳過跑動](/docs/evals/custom-scorers#skipping-runs-that-cant-be-scored)

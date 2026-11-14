@@ -1,0 +1,129 @@
+---
+title: "Azure App Services | Deploy"
+description: "Deploy a Mastra application to Azure App Service from GitHub, configure the service and environment, then verify the hosted server endpoint."
+---
+
+import Steps from "@site/src/components/Steps";
+import StepItem from "@site/src/components/StepItem";
+
+# Azure 應用程式服務
+
+將 Mastra 應用程式部署到 Azure 應用程式服務。
+
+:::注意
+本指南涵蓋了部署[Mastra server](/docs/server/overview). If you're using a [伺服器適配器](/docs/server/server-adapters)或者[網路框架](/docs/deployment/web-framework)，按照您通常為該框架部署的方式進行部署。
+:::
+
+## 開始之前 {/* #before-you-begin */}
+
+你需要：
+
+* 一個[Mastra application](/docs)
+* 一個[Azure account](https://azure.microsoft.com/) with an active subscription
+* 一個[GitHub repository](https://github.com/) containing your Mastra application
+
+:::警告
+在 Azure 應用程式服務上，檔案系統對於某些定價層來說是短暫的，因此任何本機資料庫檔案都會在部署之間遺失。如果您正在使用[LibSQLStore](/integrations/databases/libsql) with a local file, configure it to use a remote LibSQL-compatible database (for example, [Turso](https://turso.tech/)) instead.
+:::
+
+## 創建新的應用服務 {/* #create-a-new-app-service */}
+
+在這些步驟中，你將了解如何建立新的 Azure 應用程式服務來託管 Mastra 應用程式。這將為您的應用程式運行設定必要的基礎架構和環境。
+
+<Steps>
+  <StepItem>
+    登入[Azure Portal](https://portal.azure.com) and navigate to **[App Services](https://docs.microsoft.com/en-us/azure/app-service/)** or search for it in the top search bar. Select **Create** to create a new App Service, and in the drop-down, select **Web App**.
+  </StepItem>
+
+  <StepItem>
+    配置應用程式服務設定：
+
+    * **訂閱**：選擇您的 Azure 訂閱
+    * **資源組**：建立新資源組或選擇現有資源組
+    * **實例名稱**：為您的應用程式輸入一個唯一的名稱（這將是您的 URL 的一部分）
+    * **發布**： 選擇**Code**
+    * **運行時堆疊**： 選擇**Node 22 LTS**
+    * **作業系統**： 選擇**Linux**
+    * **地區**：選擇離您的使用者較近的區域
+    * **Linux計劃**：您可以根據您選擇的區域選擇計劃，選擇適合您需求的計劃。
+    * 選擇**Review + Create** and wait for validation to complete, then select **Create**.
+  </StepItem>
+
+  <StepItem>
+    已觸發新的部署。等待部署完成，然後選擇**Go to resource** under the next steps section.
+  </StepItem>
+
+  <StepItem>
+    在設定 GitHub 部署之前，請設定環境變數。導航至**Settings** > **Environment variables** in the left sidebar. Add your required environment variables, such as:
+
+    * 模型提供者 API 金鑰（例如，`OPENAI_API_KEY`)
+    * 資料庫連接字串
+    * 您的 Mastra 應用程式所需的任何其他配置值
+
+    選擇**Apply** to save the changes.
+  </StepItem>
+</Steps>
+
+## GitHub部署 {/* #github-deployment */}
+
+在這些步驟中，你將把 Azure 應用程式服務連接到 GitHub 儲存庫以啟用持續部署。這意味著每次將變更推送到儲存庫時，Azure 都會自動建置和部署您的應用程式。
+
+<Steps>
+  <StepItem>
+    導航至**Deployment Center** in the left sidebar and select **GitHub** as your source. Sign in to GitHub if you're not already authenticated with Azure.
+
+    在此範例中，您將保留[GitHub Actions](https://docs.github.com/en/actions) as your provider. Select your organization, repository, and branch.
+
+    Azure 將產生一個 GitHub Workflow文件，您可以在繼續之前預覽它。選擇**Save** (the save button is located at the top of the page).
+  </StepItem>
+
+  <StepItem>
+    Azure 建立Workflow後，它將觸發 GitHub Actions 運作並將Workflow檔案合併到您的分支中。**Cancel this initial run** as it will fail without the necessary modifications.
+
+    :::警告
+    Azure 產生的預設Workflow對於 Mastra 應用程式將會失敗，需要進行修改。
+    :::
+
+    將最新變更拉取至本機儲存庫並修改產生的Workflow檔案（`.github/workflows/main_<your-app-name>.yml`):
+  </StepItem>
+
+  <StepItem>
+    找到名為「npm install、build 和 test」的步驟，然後：
+
+    * 將步驟名稱更改為“npm install and build”
+    * 如果您尚未在 Mastra 應用程式中設定正確的測試，請刪除`npm test` command from the run section as the default test script will fail and disrupt deployment. If you have working tests, you can keep the test command.
+  </StepItem>
+
+  <StepItem>
+    找到「用於部署的 Zip 工件」步驟並將 zip 命令替換為：
+
+    ```yaml
+    run: (cd .mastra/output && zip ../../release.zip -r .)
+    ```
+
+    然後，部署包僅包含來自的建置輸出`.mastra/output`.
+  </StepItem>
+
+  <StepItem>
+    提交並推動您的Workflow修改。建置將在以下位置自動觸發**Deployment Center** in your Azure dashboard. Monitor the deployment progress until it completes successfully.
+  </StepItem>
+</Steps>
+
+## 驗證您的部署 {/* #verify-your-deployment */}
+
+建置成功後，請稍等片刻，讓應用程式啟動。您可以使用中提供的預設 URL 存取已部署的應用程式**Overview** tab in the Azure portal. Your application will be available at `https://<your-app-name>.azurewebsites.net`.
+
+從 Azure 入口網站複製 URL 並存取`https://<your-app-name>.azurewebsites.net/api/agents` in your browser. You should see a JSON list of your agents.
+
+現在您可以透過 HTTP 呼叫 Mastra 端點。
+
+:::警告
+設定[authentication](/docs/auth/overview) before exposing your endpoints publicly.
+:::
+
+## 後續步驟 {/* #next-steps */}
+
+* [Mastra 用戶端 SDK](/reference/client-js/mastra-client)
+* [配置自訂域](https://docs.microsoft.com/en-us/azure/app-service/app-service-web-tutorial-custom-domain)
+* [啟用 HTTPS](https://docs.microsoft.com/en-us/azure/app-service/configure-ssl-bindings)
+* [Azure 應用程式服務文檔](https://docs.microsoft.com/en-us/azure/app-service/)

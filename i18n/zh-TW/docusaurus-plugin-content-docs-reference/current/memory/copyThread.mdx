@@ -1,0 +1,126 @@
+---
+title: "Reference: Memory.copyThread() | Memory"
+description: "The .copyThread() method copies a conversation thread and its messages inside the storage backend without loading message content into memory."
+packages:
+  - "@mastra/memory"
+---
+
+# 記憶體.copyThread()
+
+這`.copyThread()`方法將現有線程及其訊息複製到新線程。它的行為就像[`cloneThread()`](/reference/memory/cloneThread)，包括工作記憶、觀察記憶和語義回憶嵌入，但它不會返回複製的訊息。在`@mastra/libsql`和`@mastra/pg`這些行被複製到資料庫內部，因此副本本身永遠不會將訊息內容載入到 Node.js 進程中。看[記憶體使用情況](#memory-usage)對於仍然讀取內容的情況。
+
+使用`copyThread()` when you only need the new thread ID, such as forking a conversation for a subagent. Use `cloneThread()` when you need the copied messages in the response.
+
+## 使用範例 {/* #usage-example */}
+
+```typescript
+import { Memory } from '@mastra/memory'
+import { LibSQLStore } from '@mastra/libsql'
+
+const memory = new Memory({
+  storage: new LibSQLStore({ id: 'memory-store', url: 'file:./memory.db' }),
+})
+
+const { thread, messageIdMap } = await memory.copyThread({
+  sourceThreadId: 'original-thread-123',
+})
+```
+
+## 參數 {/* #parameters */}
+
+`copyThread()`接受與以下相同的參數`cloneThread()`.
+
+<PropertiesTable
+  content={[
+{
+  name: 'sourceThreadId',
+  type: 'string',
+  description: 'The ID of the thread to copy',
+  isOptional: false,
+},
+{
+  name: 'newThreadId',
+  type: 'string',
+  description: 'Optional custom ID for the new thread. If not provided, one will be generated.',
+  isOptional: true,
+},
+{
+  name: 'resourceId',
+  type: 'string',
+  description: "Optional resource ID for the new thread. Defaults to the source thread's resourceId.",
+  isOptional: true,
+},
+{
+  name: 'title',
+  type: 'string',
+  description:
+    'Optional title for the new thread. If omitted, the copy uses `Clone of ${sourceThread.title}` when the source thread has a title. Otherwise, the title is empty.',
+  isOptional: true,
+},
+{
+  name: 'metadata',
+  type: 'Record<string, unknown>',
+  description:
+    "Optional metadata for the new thread. The new thread's metadata contains only the supplied metadata plus an automatically added `clone` record with `sourceThreadId`, `clonedAt`, and optional `lastMessageId`. Source-thread metadata isn't copied.",
+  isOptional: true,
+},
+{
+  name: 'options',
+  type: 'CloneOptions',
+  description: 'Optional filtering options. See cloneThread() for the full shape.',
+  isOptional: true,
+  properties: [
+    {
+      type: 'CloneOptions',
+      parameters: [
+        {
+          name: 'messageLimit',
+          type: 'number',
+          description: 'Maximum number of messages to copy. When set, copies the most recent N messages.',
+          isOptional: true,
+        },
+        {
+          name: 'messageFilter',
+          type: 'MessageFilter',
+          description: 'Filter criteria for selecting which messages to copy, by date range or message IDs.',
+          isOptional: true,
+        },
+      ],
+    },
+  ],
+},
+]}
+/>
+
+## 退貨 {/* #returns */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'thread',
+  type: 'StorageThreadType',
+  description: 'The newly created thread with clone metadata.',
+},
+{
+  name: 'messageIdMap',
+  type: 'Record<string, string>',
+  description: 'A mapping from source message IDs to their corresponding copied message IDs.',
+  isOptional: true,
+},
+]}
+/>
+
+## 記憶體使用情況 {/* #memory-usage */}
+
+`copyThread()`專為大螺紋設計：
+
+* `@mastra/libsql`和`@mastra/pg` copy messages with `INSERT … SELECT` statements, so the copy step doesn't read message content into the process.
+* 其他儲存適配器透過該適配器的現有儲存適配器複製訊息`cloneThread()` implementation, which may read and re-write each message. `copyThread()` still discards the payloads before returning.
+* 當啟用語義召回時，複製的訊息將被讀回以產生嵌入。這種情況按目標訊息 ID 以 100 為一批進行，因此記憶體中一次僅保存一批。
+
+`cloneThread()`來電`copyThread()` and then reads the new thread's messages back to populate `clonedMessages`.
+
+## 有關的 {/* #related */}
+
+* [克隆執行緒](/reference/memory/cloneThread)
+* [克隆實用方法](/reference/memory/clone-utilities)

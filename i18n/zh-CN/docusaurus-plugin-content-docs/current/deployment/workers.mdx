@@ -1,71 +1,84 @@
 ---
-title: "Workers | Deployment"
-description: "通过在专用 Worker 进程中运行 Workflow 执行、cron 调度和后台任务，将后台处理与 API 层分离。"
+title: 'Workers | Deploy'
+description: 'Run Mastra workflow orchestration, schedules, and long-running background tasks in dedicated workers to keep API processes responsive under load.'
 packages:
-  - "@mastra/core"
-  - "@mastra/redis-streams"
-  - "@mastra/google-cloud-pubsub"
-  - "@mastra/pg"
-  - "@mastra/libsql"
+  - '@mastra/core'
 ---
 
-import Tabs from '@theme/Tabs'
-import TabItem from '@theme/TabItem'
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
 
-# Workers
+# 工人
 
-:::experimental
+:::测试版
 
-此功能处于 beta 阶段。API 已足够稳定，可用于生产环境，但部分细节可能发生变化。有关目前的缺失功能，请参阅[已知限制](#known-limitations)。
+在 API 稳定之前，可能会在没有重大版本更新的情况下发生重大更改。看[known limitations](#known-limitations) for current gaps.
 
 :::
 
-Worker 在请求-响应周期之外处理后台工作。Workflow 步骤执行、基于 cron 的调度和长时间运行的 Tool 调用都在 Worker 中运行，使 API 保持响应。
+工作人员在请求-响应周期之外进行后台处理。Workflow程步骤执行、基于 cron 的调度和长时间运行的Tool调用都在工作线程中运行，从而保持 API 的响应能力。
 
-默认情况下，Worker 与 API 在同一进程中运行。对于生产工作负载，可以将它们拆分到独立进程或容器中，并分别扩缩容。
+默认情况下，worker 与 API 在同一进程中运行。对于生产工作负载，您可以将它们拆分为单独的进程或容器，并独立扩展每个进程或容器。
 
-## 何时使用 Worker {/* #when-to-use-workers */}
+## 何时使用工人 {/* #when-to-use-workers */}
 
-出现以下任一情况时，Worker 会很重要：
+当以下任何一项适用时，工人就很重要：
 
-- Workflow 步骤需要数秒以上，不应阻塞 API 响应
-- 需要事件持久性，使进行中的工作在进程重启后仍能继续
-- 系统的不同部分需要独立扩缩容（例如增加编排容量，而不增加 API 实例）
-- 后台 Tool 调用应在专用计算资源上运行
+* Workflow程步骤需要几秒钟以上的时间，不应阻止 API 响应
+* 您需要事件持久性，以便正在进行的工作能够在流程重新启动后继续存在
+* 系统的不同部分需要独立扩展（例如，无需更多 API 实例即可获得更多编排能力）
+* 后台Tool调用应在专用计算上运行
 
-如果应用流量较小且 Workflow 很快完成，默认的进程内设置就能正常工作。在需要 Worker 基础设施之前，可以暂不使用。
+如果您的应用程序处理少量流量并且Workflow程快速完成，则默认的进程内设置可以正常工作。跳过工作基础设施直到你需要它。
 
-## Worker 类型 {/* #worker-types */}
+## 工人类型 {/* #worker-types */}
 
-Mastra 内置三种 Worker。每种 Worker 处理特定类型的后台工作。
+Mastra 具有三种内置的工作人员类型。每个处理特定类型的后台处理。
 
-### 编排 Worker {/* #orchestration-worker */}
+### 编排工作者 {/* #orchestration-worker */}
 
-订阅 [PubSub](/docs/server/pubsub) 总线上的 Workflow 事件并执行 Workflow 步骤。每个 `workflow.start`、步骤转换和生命周期事件都会流经此 Worker。
+该工作人员订阅Workflow事件[PubSub](/docs/server/pubsub) bus and executes workflow steps. It handles each `workflow.start` and lifecycle event together with every step transition.
 
-在拆分部署中，编排 Worker 从分布式 PubSub 后端拉取事件，并通过 HTTP 将步骤执行委托回 API。在进程内模式下，它会直接运行步骤。
+在拆分部署中，编排工作人员从分布式 PubSub 后端提取事件，并通过 HTTP 将步骤执行委托回 API。在进程中，它直接运行步骤。
 
-编排 Worker 需要支持拉取模式的 PubSub 后端（例如 [`RedisStreamsPubSub`](/reference/pubsub/redis-streams) 或 [`GoogleCloudPubSub`](/reference/pubsub/google-cloud-pubsub)）。
+编排工作人员需要一个支持拉取模式的 PubSub 后端（例如，[`RedisStreamsPubSub`](/reference/pubsub/redis-streams), [`ValkeyStreamsPubSub`](/reference/pubsub/valkey-streams), or [`GoogleCloudPubSub`](/reference/pubsub/google-cloud-pubsub)).
 
-### 调度 Worker {/* #scheduler-worker */}
+### 调度员 {/* #scheduler-worker */}
 
-轮询 Storage 中到期的 cron Schedule，并发布 `workflow.start` 事件。它只作为生产者，创建工作供编排 Worker 获取。
+轮询存储以获取到期的 cron 计划并发布`workflow.start` event for each fire. It's a producer only, meaning it creates work for the orchestration worker to pick up:
 
-调度器会自动读取 Workflow 定义中的声明式 `schedule` 字段。有关如何声明 Schedule，请参阅[定时 Workflow](/docs/workflows/scheduled-workflows)。
+* **拆分流程**：预定的Workflow程在事件引擎上运行，编排工作人员逐步运行每个火灾。
+* **进程内模式**：计划的Workflow程在默认引擎上运行。同一进程中的编排工作人员在进程内运行每个火灾，就像直接`run.start()` does.
 
-**不要运行多个调度器实例。** 多个调度器轮询同一 Storage 会针对同一个 Schedule 触发重复事件。
+调度程序读取声明式`schedule` fields from your workflow definitions automatically. See [Scheduled workflows](/docs/workflows/scheduled-workflows) for how to declare schedules.
 
-### 后台任务 Worker {/* #background-task-worker */}
+调度程序仅在调度存在时轮询存储。启动时，没有声明调度的进程运行一个`listSchedules()` check. If that check finds no rows, the poll loop never starts, so idle deployments issue no recurring scheduler queries and can scale to zero.
 
-执行标记了 `background: { enabled: true }` 的 Agent Tool 调用。当 Agent 调用后台 Tool 时，API 会将任务分派给此 Worker，而不是阻塞响应流。
+在运行时创建计划时，Mastra 会在 PubSub 后端发布唤醒事件。运行默认工作程序集的任何进程都会启动其调度程序作为响应，这就是独立工作程序发现 API 进程创建的调度程序的方式。这需要两个进程共享相同的 PubSub 后端。
 
-后台任务 Worker 通过 PubSub 总线管理并发限制、任务生命周期和结果交付。
+要从启动时进行轮询，无论计划是否存在（例如，当您的进程不共享 PubSub 后端时），请设置`scheduler: { enabled: true }` on the worker or run it with `MASTRA_WORKERS=scheduler`.
 
-## Worker 的运行方式 {/* #how-workers-run */}
+您可以针对同一存储运行多个调度程序实例。在发布之前，调度程序会通过调度的下一次触发时间的比较和交换更新来声明每次发生的情况。只有一个实例赢得了索赔，其他实例则跳过该事件。内置存储适配器（PostgreSQL、LibSQL、MySQL、MongoDB、Spanner、Convex）均以原子方式执行此更新。自定义存储适配器必须执行相同的操作`updateScheduleNextFire`, or instances can fire the same occurrence twice.
+
+该声明阻止其他调度程序实例发布相同的事件。它不会只触发一次：
+
+* **声明和发布不是一件事务。**&#x5982;果赢得索赔的实例崩溃，或者在三次尝试后未能发布，则该事件可能会丢失。 Mastra 将失败的发布记录为`failed` trigger with an unknown publication outcome and doesn't replay it automatically.
+* **重试可以将事件发布两次。**&#x5982;果发布到达 PubSub 后端但仍报告错误，则重试会使用相同的运行 ID 再次发布该事件。对于默认引擎上的Workflow，工作线程会跳过已存在的运行的启动，但在存储第一次运行之前到达的副本仍可以启动。事件Workflow程没有此类检查：重复启动会将现有运行设置回`running` and executes it again.
+* **事件可能会重叠。**&#x5373;使前一个事件的运行尚未完成，新事件也会按时触发。
+
+额外的调度程序实例增加了可用性，而不是吞吐量。每个人都会在每次更新时轮询存储空间。
+
+### 后台任务工作者 {/* #background-task-worker */}
+
+执行标记为的AgentTool调用`background: { enabled: true }`. When an agent invokes a background tool, the API dispatches the task to this worker instead of blocking the response stream.
+
+后台任务工作人员通过 PubSub 总线管理并发限制、任务生命周期和结果交付。
+
+## 工人如何跑步 {/* #how-workers-run */}
 
 ### 进程内模式（默认） {/* #in-process-mode-default */}
 
-如果未进行配置，Mastra 会在 API 进程内创建并启动 Worker。事件通过内存 PubSub 流动，所有组件共享一个 Node.js 运行时。
+无需配置，Mastra 在 API 进程内运行工作线程。事件流经内存中的 PubSub，所有内容都共享一个 Node.js 运行时。
 
 ```typescript title="src/mastra/index.ts"
 import { Mastra } from '@mastra/core/mastra'
@@ -76,11 +89,19 @@ export const mastra = new Mastra({
 })
 ```
 
-除 Storage 适配器外，此设置不需要外部基础设施。它无法在进程崩溃后继续工作，也不能单独扩展各个组件。
+服务器生成的`mastra build` starts these workers automatically. If you use a [server adapter](/docs/server/server-adapters) instead, add a call to `mastra.startWorkers()` after your server starts listening. See [Start background workers](/docs/server/server-adapters#start-background-workers).
 
-### 拆分进程 {/* #split-processes */}
+除了存储适配器之外，此设置不需要任何外部基础设施。它无法在进程崩溃时幸存下来，并且您无法扩展单个组件。
 
-要在独立进程中运行 Worker，请配置分布式 [PubSub](/docs/server/pubsub) 后端，并使用 `MASTRA_WORKERS` 环境变量控制每个进程中启动哪些 Worker。
+：：：警告
+
+内存中的 PubSub 仅在发布事件的进程内传递事件。事件Workflow不支持在一个存储上运行多个 Mastra 实例：每个实例在启动时都会重新启动其他实例的活动运行。为多实例部署配置分布式 PubSub 后端。
+
+:::
+
+### 拆分流程 {/* #split-processes */}
+
+要在自己的进程中运行工作人员，请配置分布式[PubSub](/docs/server/pubsub) backend and use the `MASTRA_WORKERS` environment variable to control which workers start in each process.
 
 <Tabs>
   <TabItem value="redis" label="Redis Streams + PostgreSQL">
@@ -118,38 +139,298 @@ export const mastra = new Mastra({
   </TabItem>
 </Tabs>
 
-任何[受支持的 Storage 后端](/reference/workers/overview#supported-storage-backends)均可正常工作。请将 Storage 适配器替换为你选择的数据库。
+任何[supported storage backend](/reference/workers/overview#supported-storage-backends) works. Swap the storage adapter for your preferred database.
 
-在多个容器中运行同一构建产物，每个容器使用不同的 [`MASTRA_WORKERS`](/reference/workers/overview#mastra_workers) 值，以控制每个进程中启动的 Worker。
+在多个容器中运行相同的构建工件，每个容器都有不同的[`MASTRA_WORKERS`](/reference/workers/overview#mastra_workers) value to control which worker starts in each process.
 
-拆分部署需要分布式 PubSub 后端（[`RedisStreamsPubSub`](/reference/pubsub/redis-streams) 或 [`GoogleCloudPubSub`](/reference/pubsub/google-cloud-pubsub)）、共享的 [Storage 后端](/reference/workers/overview#supported-storage-backends)，以及编排 Worker 与 API 之间的网络连接。
+拆分部署需要分布式 PubSub 后端（[`RedisStreamsPubSub`](/reference/pubsub/redis-streams), [`ValkeyStreamsPubSub`](/reference/pubsub/valkey-streams), or [`GoogleCloudPubSub`](/reference/pubsub/google-cloud-pubsub)), a shared [storage backend](/reference/workers/overview#supported-storage-backends), and network connectivity between the orchestration worker and the API.
 
-[Worker 部署指南](/guides/deployment/mastra-workers)通过 Docker Compose 和 Kubernetes 示例介绍了此设置。
+### 选择工人 {/* #select-workers */}
+
+放[`MASTRA_WORKERS`](/reference/workers/overview#mastra_workers) to control which workers run in each process:
+
+|价值|行为 |
+| - | - |
+|`false` | Disable all workers. Use this for the API process in a fully split deployment. |
+| `orchestration` | Start the orchestration worker. |
+| `scheduler` | Start the scheduler worker. |
+| `backgroundTasks` | Start the background task worker. |
+| `orchestration,backgroundTasks` | Start multiple workers from a comma-separated allowlist. |
+
+您还可以将工作人员名称传递给 CLI。命令集`MASTRA_WORKERS` in the spawned process:
+
+```bash
+mastra worker start orchestration
+```
+
+放`MASTRA_WORKERS` on every process in a split deployment, including `false` on the API process. Any value switches workflows that declare `schedule` to the evented engine, and every process must run those workflows on the same engine. See [Scheduled workflows](/docs/workflows/scheduled-workflows#execution-engine). `mastra worker start` without a worker name doesn't set `MASTRA_WORKERS`, so pass a name or set the variable in the process environment.
 
 ## 网络架构 {/* #network-architecture */}
 
-Worker 是内部基础设施。它们不会向最终用户公开，也不需要自己的子域名、公开 URL 或入站 HTTP 路由。
+工人是内部基础设施。它们不会向最终用户公开，也不需要自己的子域或公共 URL，包括入站 HTTP 路由。
 
 在拆分部署中：
 
-- **API Server 是唯一面向公众的进程**：它处理所有客户端 HTTP 请求，包括 REST 端点、Agent 交互、Workflow 触发器和任何自定义路由。
-- **Worker 仅进行出站连接**：它们从分布式 PubSub 后端拉取事件，并对共享 Storage 数据库进行读写，不接受来自客户端的入站流量。
-- **编排 Worker 在内部调用 API**：它通过容器网络使用 `MASTRA_STEP_EXECUTION_URL` 向 API 发送步骤执行请求。这是内部服务间通信，并非公开端点。
+* **API服务器是唯一面向公众的进程**：它为所有客户端 HTTP 请求提供服务。这些请求包括 REST 端点和Agent交互，以及Workflow触发器和自定义路由。
+* **工作人员不服务客户流量**：它们从分布式 PubSub 后端提取事件并读/写到共享存储数据库。每个工作进程还监听`PORT` (default `4111`) for internal health checks. `/health` reports readiness and `/config` returns the worker configuration to authorized callers. Keep this port on the private network.
+* **编排工作人员在内部调用API**：它使用以下命令通过容器网络向 API 发送步骤执行请求`MASTRA_STEP_EXECUTION_URL`. This is internal service-to-service communication, not a public endpoint.
 
-三种 Worker（编排、调度、后台任务）都位于私有网络中的 API 后方。它们共享对 PubSub 后端和 Storage 数据库的访问权限，但绝不会直接接收客户端流量。如果 Worker 相关功能需要 HTTP 路由（例如为语音集成生成 token），该路由会在 API Server 上运行，而不是在 Worker 进程上运行。
+所有三种工作类型（编排、调度程序、后台任务）都位于专用网络上的 API 后面。它们共享对 PubSub 后端和存储数据库的访问权限，但从不直接从客户端接收流量。与工作线程相关的功能的 HTTP 路由在 API 服务器上运行，而不是在工作进程上运行。一个例子是为语音集成创建令牌。
 
-## 已知限制 {/* #known-limitations */}
+## 部署拆分工作人员 {/* #deploy-split-workers */}
 
-- **没有死信队列**：失败事件会被 nack 并重试，但事件在所有重试后仍失败时，不会进入 DLQ。
-- **没有内置健康检查端点**：Worker 不公开 HTTP 健康检查。请使用容器级存活探针或进程监控。
-- **调度器为单实例**：运行多个调度器进程会导致 Schedule 重复触发。
-- **API 崩溃后运行卡在“running”状态**：如果 API 进程在执行 Workflow 步骤时崩溃，该运行会保持 `running` 状态，且不会自动重试。对于[持久化 Agent](/docs/long-running-agents/durable-agents)，请在 Mastra 配置中将 `recovery.durableAgents` 设置为 `'auto'`，以便 Server 重启时自动重新驱动孤立运行。详情请参阅[崩溃恢复](/docs/long-running-agents/durable-agents#crash-recovery)。
+构建 API 和工作工件：
 
-## 相关内容 {/* #related */}
+```bash
+mastra build
+mastra worker build --output-dir .mastra/worker
+```
 
-- [Worker 部署指南](/guides/deployment/mastra-workers)：Docker Compose 和 Kubernetes 示例
-- [Worker 身份验证](/docs/server/auth/workers)：保护 Worker 到 API 的通信
-- [Workers Reference](/reference/workers/overview)：Worker 环境变量和类型的详细信息，以及受支持的 Storage 后端列表
-- [CLI Reference](/reference/cli/mastra#mastra-worker-build)：`mastra worker build` 和 `mastra worker start`
-- [PubSub](/docs/server/pubsub)：事件交付后端
-- [定时 Workflow](/docs/workflows/scheduled-workflows)：在 Workflow 上声明 cron Schedule
+`mastra build`在中创建 API 工件`.mastra/output/`. [`mastra worker build`](/reference/cli/mastra#mastra-worker-build) creates a worker artifact in `.mastra/worker/`. The following Dockerfile accepts either directory:
+
+```dockerfile title="Dockerfile"
+FROM node:22-alpine
+
+ARG MASTRA_OUTPUT=.mastra/output
+
+WORKDIR /app
+
+COPY ${MASTRA_OUTPUT}/package.json ${MASTRA_OUTPUT}/.npmrc* ./
+RUN npm install --omit=dev
+
+COPY ${MASTRA_OUTPUT}/ .
+
+EXPOSE 4111
+CMD ["node", "index.mjs"]
+```
+
+看[Deploy a Mastra server](/docs/deployment/mastra-server) for more information about the build output.
+
+### Docker 组合 {/* #docker-compose */}
+
+以下配置运行 PostgreSQL、Redis、API 以及每种工作线程类型的一个进程。每个进程都使用共享基础设施，并且工作进程使用工作工件。
+
+```yaml title="docker-compose.yml"
+x-worker: &worker
+  build:
+    context: .
+    args:
+      MASTRA_OUTPUT: .mastra/worker
+
+x-mastra-environment: &shared-environment
+  DATABASE_URL: postgres://mastra:${POSTGRES_PASSWORD}@postgres:5432/mastra
+  REDIS_URL: redis://redis:6379
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mastra
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: mastra
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U mastra']
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      args:
+        MASTRA_OUTPUT: .mastra/output
+    ports:
+      - '4111:4111'
+    environment:
+      <<: *shared-environment
+      WORKER_TOKEN: ${WORKER_TOKEN}
+      MASTRA_WORKERS: 'false'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://localhost:4111/api/agents']
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  orchestration-worker:
+    <<: *worker
+    environment:
+      <<: *shared-environment
+      MASTRA_WORKERS: orchestration
+      MASTRA_STEP_EXECUTION_URL: http://api:4111/api
+      MASTRA_WORKER_AUTH_TOKEN: ${WORKER_TOKEN}
+    depends_on:
+      api:
+        condition: service_healthy
+
+  scheduler-worker:
+    <<: *worker
+    environment:
+      <<: *shared-environment
+      MASTRA_WORKERS: scheduler
+    depends_on:
+      api:
+        condition: service_healthy
+
+  background-task-worker:
+    <<: *worker
+    environment:
+      <<: *shared-environment
+      MASTRA_WORKERS: backgroundTasks
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+```
+
+设置旁边的秘密`docker-compose.yml`, along with any model provider credentials your application needs:
+
+```bash title=".env"
+POSTGRES_PASSWORD=your-secure-password
+WORKER_TOKEN=your-shared-secret-token
+```
+
+配置 API 身份验证提供程序以接受`WORKER_TOKEN` before exposing the deployment. The orchestration worker sends the same value through `MASTRA_WORKER_AUTH_TOKEN`. The scheduler and background task workers don't call the step execution endpoint in this pull-based topology, so they don't need that variable.
+
+启动堆栈并验证容器和 API 是否可用：
+
+```bash
+docker compose up -d
+docker compose ps
+curl http://localhost:4111/api/agents
+```
+
+### 库伯内斯 {/* #kubernetes */}
+
+:::尖端头盔
+在 Kubernetes 上，[`mastra-projects` Helm chart](/integrations/deploy/kubernetes-helm#background-workers) renders these deployments for you, with the workers on the same image and environment as the server. It also refuses to install combinations that would run every worker twice. The manifests below are for writing them by hand.
+:::
+
+为 API、编排工作线程、调度程序工作线程和后台任务工作线程创建单独的部署。为每个 Deployment 使用相同的映像和 Secret。仅直接在每个容器上设置特定于角色的环境变量。
+
+编排工作线程 Deployment 具有以下形状：
+
+```yaml title="k8s/orchestration-worker.yaml"
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orchestration-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: orchestration-worker
+  template:
+    metadata:
+      labels:
+        app: orchestration-worker
+    spec:
+      containers:
+        - name: worker
+          image: your-registry/mastra-workers:latest
+          env:
+            - name: MASTRA_WORKERS
+              value: orchestration
+            - name: MASTRA_STEP_EXECUTION_URL
+              value: http://api:4111/api
+          envFrom:
+            - secretRef:
+                name: mastra-secrets
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+```
+
+使用`MASTRA_WORKERS: scheduler` and `MASTRA_WORKERS: backgroundTasks` for the other worker Deployments. Set `MASTRA_WORKERS: 'false'` on the API Deployment and expose the API with a Service. Give every process access to the same database and PubSub backend. Configure the API auth provider with a worker token, then expose that token to the orchestration worker as `MASTRA_WORKER_AUTH_TOKEN`. See [Deploy Mastra to Kubernetes](/integrations/deploy/kubernetes) for the base Kubernetes resources.
+
+应用清单，然后验证 pod 和 API：
+
+```bash
+kubectl apply -f k8s/
+kubectl get pods
+kubectl port-forward svc/api 4111:4111
+```
+
+在单独的终端中，请求 API 路由：
+
+```bash
+curl http://localhost:4111/api/agents
+```
+
+### 步骤执行 URL {/* #step-execution-url */}
+
+在完全拆分的部署中，编排工作人员通过 HTTP 将Workflow步骤执行委托给 API。放`MASTRA_STEP_EXECUTION_URL` to the API's internal URL, including the `/api` prefix:
+
+```bash
+MASTRA_STEP_EXECUTION_URL=http://api:4111/api
+```
+
+如果没有此变量，编排工作线程会尝试在自己的进程中执行步骤，而该进程无法访问拆分部署中的完整 Mastra 运行时。
+
+端点使用服务器的正常身份验证管道。如果 API 有身份验证提供者，请设置`MASTRA_WORKER_AUTH_TOKEN` to a bearer token that provider accepts. Mastra forwards the value as an `Authorization: Bearer` credential. The configured auth provider validates the token. See [Worker authentication](/docs/auth/workers) for server configuration and other credential formats.
+
+### 规模工人 {/* #scale-workers */}
+
+编排和后台任务工作人员可以水平扩展。 PubSub 消费者组在其实例之间分发事件：
+
+```bash
+docker compose up -d --scale orchestration-worker=3
+docker compose up -d --scale background-task-worker=2
+```
+
+对于 Kubernetes，手动更改部署副本计数或使用 Horizo​​ntalPodAutoscaler：
+
+```bash
+kubectl scale deployment/orchestration-worker --replicas=3
+kubectl scale deployment/background-task-worker --replicas=2
+```
+
+您可以运行多个调度程序工作者。每个计划事件都由一个实例声明，如中所述[Scheduler worker](#scheduler-worker).
+
+### 健康检查 {/* #health-checks */}
+
+Worker 构建工件暴露`GET /health` on `PORT`, or port `4111` when `PORT` isn't set. The endpoint returns `503` while `startWorkers()` is initializing and `200` after every selected worker starts successfully. Use this endpoint for deployment readiness checks. If you also use it for liveness checks, configure a startup probe or an initial delay that allows worker initialization to finish.
+
+### 崩溃恢复 {/* #crash-recovery */}
+
+分布式 PubSub 后端会保留未确认的事件，这使得编排和后台任务工作人员可以在重新启动后恢复。当 API 不可用时，失败的步骤执行请求会导致事件再次传递。
+
+当工作人员在事件Workflow步骤期间停止时，Agent会在之后将该步骤的事件重新传递给另一个工作人员`reclaimIdleMs` (60 seconds by default) with Redis or Valkey Streams, or after the ack deadline with Google Cloud Pub/Sub, so instances that boot meanwhile don't restart the run. Keep `reclaimIdleMs` at 30 seconds or more: an event reclaimed sooner can arrive while the stopped worker's hold on the step is still active, and is dropped.
+
+一个步骤可以运行多次。如果工作线程在某个步骤期间停止，或者在该步骤完成之后但在发布结果之前停止，则该步骤会在其事件重新传递时再次运行。使步骤具有幂等的副作用。看[restarting active workflow runs](/docs/workflows/overview#restarting-active-workflow-runs) for how to build an idempotency key for a step, and [make tools safe to repeat](/docs/harness/durable-agents#make-tools-safe-to-repeat) for agent tools.
+
+调度程序重新启动后从当前时间计算下一次触发时间。它不会重播在不可用时已过的时间表。
+
+如果在执行默认引擎Workflow运行时实例崩溃，[recovery loop](/docs/workflows/overview#recovery-loop) of an instance running the orchestration worker restarts the run at the first pass after the run's lease expired and `recovery.workflowGraceMs` passed. A `mastra worker` process calls `stopWorkers()` on `SIGTERM` and exits without `shutdown()`. The default-engine runs it was executing wait as long as a crashed instance's. See [known limitations](#known-limitations) and [durable agent crash recovery](/docs/harness/durable-agents#crash-recovery).
+
+## 已知的限制 {/* #known-limitations */}
+
+* **无死信队列**：失败的事件将被确认并重试，但对于所有重试后都失败的事件没有 DLQ。
+* **计划事件可能会丢失**：如果调度程序崩溃或在声明事件后无法发布，则该事件可能不会触发，并且 Mastra 不会自动重播它。
+* **API 崩溃后运行陷入“运行”状态**：Workflow程步骤执行期间发生崩溃，导致运行失败`running` status without an automatic retry. For [durable agents](/docs/harness/durable-agents), configure `recovery.durableAgents: 'auto'` so a server restart automatically re-drives orphaned runs. See [Crash recovery](/docs/harness/durable-agents#crash-recovery) for details.
+
+## 有关的 {/* #related */}
+
+* [工人认证](/docs/auth/workers)：安全的工作人员到 API 通信
+* [工人参考](/reference/workers/overview)：有关工作环境变量和类型的详细信息，以及支持的存储后端列表
+* [CLI 参考](/reference/cli/mastra#mastra-worker-build): `mastra worker build` and `mastra worker start`
+* [发布订阅](/docs/server/pubsub)：事件传递后端
+* [库伯内特斯（头盔）](/integrations/deploy/kubernetes-helm#background-workers)：按照官方图表部署worker角色
+* [预定的Workflow程](/docs/workflows/scheduled-workflows)：在Workflow上声明 cron 计划

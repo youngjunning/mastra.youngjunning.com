@@ -1,38 +1,42 @@
 ---
-title: "參考：MastraPlatformExporter | 可觀測性"
-description: MastraPlatformExporter（前稱 CloudExporter）的 API 參考
+title: "Reference: MastraPlatformExporter | Observability"
+description: "Configure MastraPlatformExporter to send traces to Mastra Platform with project credentials, batching, retries, and compatibility with CloudExporter."
 packages:
   - "@mastra/observability"
 ---
 
 import PropertiesTable from "@site/src/components/PropertiesTable";
 
-# MastraPlatformExporter
+# Mastra平台出口商
 
-**新增於：** `@mastra/observability@1.12.0`。較早版本（`@mastra/observability@1.8.0` 至 `1.11.x`）以已棄用的 `CloudExporter` 名稱匯出同一個 exporter。
+**添加於：** `@mastra/observability@1.12.0`。早期版本（`@mastra/observability@1.8.0`透過`1.11.x`) 匯出與已棄用的相同的匯出器`CloudExporter`.
 
-將 tracing span、日誌、指標、分數及意見傳送至 Mastra 平台，以供網上視覺化及監察。
+將追蹤範圍、日誌、指標、分數和回饋發送到 Mastra 平台以進行線上視覺化和監控。
 
-:::note
+：：：筆記
 
-`MastraPlatformExporter` 前稱 `CloudExporter`。原有的 `CloudExporter` 類別仍會從 `@mastra/observability` 匯出，讓現有 import 繼續運作，但該類別已被棄用，並將在未來的主要版本中移除。新程式碼應使用 `MastraPlatformExporter`。
+`MastraPlatformExporter`以前被稱為`CloudExporter`. The original `CloudExporter` class is still exported from `@mastra/observability` so existing imports keep working, but it's deprecated and will be removed in a future major version. New code should use `MastraPlatformExporter`.
 
 :::
 
+## 跨度預覽 {/* #span-previews */}
+
+`MastraPlatformExporter``inputPreview`, `outputPreview`, and `errorPreview` summaries based on the span type. Each preview contains up to 100 characters plus an ellipsis when truncated. Full payloads remain available separately.
+
 ## 建構函數 {/* #constructor */}
 
-```typescript prettier:false
+```typescript oxfmt:false
 new MastraPlatformExporter(config?: MastraPlatformExporterConfig)
 ```
 
 <PropertiesTable
   props={[
-  {
-    name: 'config',
-    type: 'MastraPlatformExporterConfig',
-    description: '配置選項',
-    required: false,
-  },
+{
+  name: 'config',
+  type: 'MastraPlatformExporterConfig',
+  description: 'Configuration options',
+  required: false,
+},
 ]}
 />
 
@@ -46,7 +50,14 @@ interface MastraPlatformExporterConfig extends BaseExporterConfig {
   /** Maximum wait time before flushing in milliseconds. Default: 5000 */
   maxBatchWaitMs?: number
 
-  /** Maximum retry attempts. Default: 3 */
+  /** Opt into byte-triggered batches and upload concurrency control */
+  byteBatching?: {
+    maxBatchBytes?: number // Default: 8 MiB
+    maxConcurrentUploads?: number // Default: 2
+    uploadTimeoutMs?: number // Default: 30000
+  }
+
+  /** Maximum retry attempts for collector batches. Default: 3 */
   maxRetries?: number
 
   /** Mastra Observability access token (from env or config) */
@@ -72,204 +83,258 @@ interface MastraPlatformExporterConfig extends BaseExporterConfig {
 
   /** Explicit feedback endpoint override */
   feedbackEndpoint?: string
+
+  /**
+   * When false, `accessToken`, `projectId` and the traces endpoint are taken
+   * from config only and the environment variables below are ignored. Use this
+   * when embedding Mastra in another tool so a user project's `.env` cannot
+   * redirect the host's own telemetry. Default: true
+   */
+  resolveFromEnv?: boolean
 }
 ```
 
-擴充 `BaseExporterConfig`，當中包括：
+延伸`BaseExporterConfig`, which includes:
 
-- `logger?: IMastraLogger` - Logger 實例
-- `logLevel?: LogLevel | 'debug' | 'info' | 'warn' | 'error'` - 日誌層級（預設：INFO）
+* `logger?: IMastraLogger`- 記錄器實例
+* `logLevel?: LogLevel | 'debug' | 'info' | 'warn' | 'error'`- 日誌等級（預設：INFO）
 
 ## 環境變數 {/* #environment-variables */}
 
-如果設定中未有提供，exporter 會讀取以下環境變數：
+如果配置中未提供，導出器將讀取這些環境變數：
 
-- `MASTRA_PLATFORM_ACCESS_TOKEN` - `MastraPlatformExporter` 請求的驗證權杖
-- `MASTRA_PROJECT_ID` - 推導項目範圍 collector 路由（例如 `/projects/:projectId/ai/spans/publish`）時使用的項目 ID
-- `MASTRA_PLATFORM_OBSERVABILITY_ENDPOINT` - 覆寫可觀測性端點。可傳入基礎來源或完整的 traces 發佈 URL。在 `@mastra/observability@1.9.2` 及之後版本中，預設為 `https://observability.mastra.ai`
+* `MASTRA_PLATFORM_ACCESS_TOKEN`- 身份驗證令牌`MastraPlatformExporter` requests
+* `MASTRA_PROJECT_ID`- 派生項目範圍的收集器路由時所使用的項目 ID，例如`/projects/:projectId/ai/spans/publish`
+* `MASTRA_PLATFORM_OBSERVABILITY_ENDPOINT`- 可觀察性端點覆蓋，由導出器讀取`@mastra/observability@1.17.4` and later. Pass either a base origin such as `https://observability.eu.mastra.ai` or a full traces publish URL ending in `/spans/publish`. The other signal endpoints are derived from it. Defaults to `https://observability.mastra.ai`
+* `MASTRA_CLOUD_TRACES_ENDPOINT`- 舊追蹤端點覆蓋。優先於`MASTRA_PLATFORM_OBSERVABILITY_ENDPOINT` when both are set
 
-## 屬性 {/* #properties */}
+當`resolveFromEnv` is `false`.
 
-```typescript prettier:false
+## 特性 {/* #properties */}
+
+```typescript oxfmt:false
 readonly name = 'mastra-platform-exporter';
 ```
 
-為保持向後兼容，已棄用的 `CloudExporter` 類別仍使用 `'mastra-cloud-observability-exporter'` 作為其 `name`。
+已棄用的`CloudExporter` class continues to use `'mastra-cloud-observability-exporter'` as its `name` for backward compatibility.
 
 ## 方法 {/* #methods */}
 
 ### `exportTracingEvent` {/* #exporttracingevent */}
 
-```typescript prettier:false
+```typescript oxfmt:false
 async exportTracingEvent(event: TracingEvent): Promise<void>
 ```
 
-處理要匯出至 Mastra 平台的 tracing 事件。
+處理導出到 Mastra 平台的追蹤事件。
 
-只會匯出 `SPAN_ENDED` tracing 事件。`SPAN_STARTED` 及 `SPAN_UPDATED` 會被忽略。符合條件的 span 會加入緩衝區，並在下一次 flush 時上載至 traces 端點。
+僅有的`SPAN_ENDED` tracing events are exported. `SPAN_STARTED` and `SPAN_UPDATED` are ignored. Matching spans are buffered and uploaded to the traces endpoint on the next flush.
 
 <PropertiesTable
   props={[
-  {
-    name: 'event',
-    type: 'TracingEvent',
-    description: '要匯出的 tracing 事件',
-    required: true,
-  },
+{
+  name: 'event',
+  type: 'TracingEvent',
+  description: 'The tracing event to export',
+  required: true,
+},
 ]}
 />
 
-**傳回：** tracing 事件獲接納並加入緩衝區或被忽略後，傳回 `Promise<void>`。
+**返回：** `Promise<void>` after the tracing event has been accepted for buffering or ignored.
 
 ### `onLogEvent` {/* #onlogevent */}
 
-```typescript prettier:false
+```typescript oxfmt:false
 async onLogEvent(event: LogEvent): Promise<void>
 ```
 
-處理要匯出的日誌訊號。
+處理日誌訊號以供導出。
 
-傳入此處理常式的每個 `LogEvent` 都會加入緩衝區，並匯出至從已設定基礎端點推導出的 logs 端點。與 tracing 不同，`MastraPlatformExporter` 層級不會進行額外的事件狀態篩選。如果 exporter 已停用，此方法不會執行任何操作。
+每一個`LogEvent` passed to this handler is buffered and exported to the logs endpoint derived from the configured base endpoint. Unlike tracing, there is no additional event-status filtering at the `MastraPlatformExporter` level. If the exporter is disabled, this method becomes a no-op.
 
 <PropertiesTable
   props={[
-  {
-    name: 'event',
-    type: 'LogEvent',
-    description: '要匯出的日誌事件',
-    required: true,
-  },
+{
+  name: 'event',
+  type: 'LogEvent',
+  description: 'The log event to export',
+  required: true,
+},
 ]}
 />
 
-**傳回：** 日誌事件獲接納並加入緩衝區後，傳回 `Promise<void>`。
+**返回：** `Promise<void>` after the log event has been accepted for buffering.
 
 ### `onMetricEvent` {/* #onmetricevent */}
 
-```typescript prettier:false
+```typescript oxfmt:false
 async onMetricEvent(event: MetricEvent): Promise<void>
 ```
 
-處理要匯出的指標訊號。
+處理導出的度量訊號。
 
-傳入此處理常式的每個 `MetricEvent` 都會加入緩衝區，並匯出至從已設定基礎端點推導出的 metrics 端點。`MastraPlatformExporter` 內不會按指標子類型或狀態作額外篩選。除非 exporter 已停用，否則會轉送收到的每個指標事件。
+每一個`MetricEvent` passed to this handler is buffered and exported to the metrics endpoint derived from the configured base endpoint. No additional filtering by metric subtype or status inside `MastraPlatformExporter` is performed. The exporter forwards every metric event it receives unless it's disabled.
 
 <PropertiesTable
   props={[
-  {
-    name: 'event',
-    type: 'MetricEvent',
-    description: '要匯出的指標事件',
-    required: true,
-  },
+{
+  name: 'event',
+  type: 'MetricEvent',
+  description: 'The metric event to export',
+  required: true,
+},
 ]}
 />
 
-**傳回：** 指標事件獲接納並加入緩衝區後，傳回 `Promise<void>`。
+**返回：** `Promise<void>` after the metric event has been accepted for buffering.
 
 ### `onScoreEvent` {/* #onscoreevent */}
 
-```typescript prettier:false
+```typescript oxfmt:false
 async onScoreEvent(event: ScoreEvent): Promise<void>
 ```
 
-處理要匯出的分數訊號。
-
-傳入此處理常式的每個 `ScoreEvent` 都會加入緩衝區，並匯出至從已設定基礎端點推導出的 scores 端點。exporter 層除了檢查 exporter 是否已停用之外，不會作額外篩選，因此此方法收到的所有分數事件都會被轉送。
+使用以下命令安排匯出分數[feedback and score delivery](#feedback-and-score-delivery) behavior. Events are ignored when the exporter is disabled or shutdown has started. If Platform needs to look up the trace, a missing trace ID causes the record to be dropped.
 
 <PropertiesTable
   props={[
-  {
-    name: 'event',
-    type: 'ScoreEvent',
-    description: '要匯出的分數事件',
-    required: true,
-  },
+{
+  name: 'event',
+  type: 'ScoreEvent',
+  description: 'The score event to export',
+  required: true,
+},
 ]}
 />
 
-**傳回：** 分數事件獲接納並加入緩衝區後，傳回 `Promise<void>`。
+**返回：** `Promise<void>` when the event has been scheduled or ignored. Call `flush()` to wait for pending deliveries, because this return value doesn't confirm delivery.
 
 ### `onFeedbackEvent` {/* #onfeedbackevent */}
 
-```typescript prettier:false
+```typescript oxfmt:false
 async onFeedbackEvent(event: FeedbackEvent): Promise<void>
 ```
 
-處理要匯出的意見訊號。
-
-傳入此處理常式的每個 `FeedbackEvent` 都會加入緩衝區，並匯出至從已設定基礎端點推導出的 feedback 端點。`MastraPlatformExporter` 內不會按意見類型作篩選。除非 exporter 已停用，否則此處收到的所有意見事件都會被轉送。
+使用以下方式安排匯出回饋[feedback and score delivery](#feedback-and-score-delivery) behavior. Events are ignored when the exporter is disabled or shutdown has started. If Platform needs to look up the trace, a missing trace ID causes the record to be dropped.
 
 <PropertiesTable
   props={[
-  {
-    name: 'event',
-    type: 'FeedbackEvent',
-    description: '要匯出的意見事件',
-    required: true,
-  },
+{
+  name: 'event',
+  type: 'FeedbackEvent',
+  description: 'The feedback event to export',
+  required: true,
+},
 ]}
 />
 
-**傳回：** 意見事件獲接納並加入緩衝區後，傳回 `Promise<void>`。
+**返回：** `Promise<void>` when the event has been scheduled or ignored. Call `flush()` to wait for pending deliveries, because this return value doesn't confirm delivery.
 
-### flush {/* #flush */}
+### 沖水 {/* #flush */}
 
-```typescript prettier:false
+```typescript oxfmt:false
 async flush(): Promise<void>
 ```
 
-強制將緩衝區內的所有事件 flush 至 Mastra 平台，而不關閉 exporter。這適用於無伺服器環境，讓你可以確保 span 在執行階段終止前已匯出。
+強制將所有緩衝事件刷新到 Mastra 平台，而無需關閉導出器。在無伺服器環境中很有用，您需要確保在執行時間終止之前導出跨度。
 
-### shutdown {/* #shutdown */}
+### 關閉 {/* #shutdown */}
 
-```typescript prettier:false
+```typescript oxfmt:false
 async shutdown(): Promise<void>
 ```
 
-Flush 餘下事件並執行清理。
+刷新剩餘事件並執行清理。
 
 ## 行為 {/* #behavior */}
 
 ### 驗證 {/* #authentication */}
 
-如果沒有透過設定或環境變數提供存取權杖，exporter 會：
+如果沒有透過配置或環境變數提供存取令牌，則導出器：
 
-- 記錄附有註冊資訊的警告
-- 不執行任何操作（捨棄所有事件）
+* 記錄帶有註冊資訊的警告
+*
 
-### 批次處理 {/* #batching */}
+### 食材 {/* #batching */}
 
-exporter 會將 tracing span、日誌、指標、分數及意見分批處理，以提高網絡使用效率：
+導出器批量追蹤、日誌和指標，以及已包含其追蹤詳細資訊的回饋和分數：
 
-- 緩衝區內的事件總數達到 `maxBatchSize` 時 flush
-- 從批次中第一個加入緩衝區的訊號起計，經過 `maxBatchWaitMs` 時 flush
-- 執行 `shutdown()` 時 flush
+* 當緩衝事件總數達到時刷新`maxBatchSize`
+* 沖洗時`maxBatchWaitMs` elapsed since the first buffered signal in the batch
+* 沖水`shutdown()`
+
+### 回饋和分數交付 {/* #feedback-and-score-delivery */}
+
+導出器收到的回饋和分數可以使用其追蹤 ID 和可選的跨度 ID 引用平台中儲存的追蹤。如果記錄需要來自該追蹤的詳細信息，匯出器會立即發送它，而不是等待批次。
+
+稱呼`flush()` before ending a short-lived process, or `shutdown()` when stopping the exporter, to wait for pending deliveries and retries. These methods finish when records have been accepted or dropped after a failure. Accepted feedback and scores may take time to appear in Platform.
+
+### 位元組批次 {/* #byte-batching */}
+
+放`byteBatching` to flush by serialized byte size and control concurrent uploads:
+
+```typescript
+import { MastraPlatformExporter } from '@mastra/observability'
+
+const exporter = new MastraPlatformExporter({
+  byteBatching: {
+    maxBatchBytes: 8 * 1024 * 1024,
+    maxConcurrentUploads: 2,
+    uploadTimeoutMs: 30_000,
+  },
+})
+```
+
+沒有`byteBatching`, the exporter keeps its existing count-based batching behavior.
+
+* `maxBatchBytes` 預設情況下，當批次達到 8 MiB 時觸發上傳。較大的記錄會完整發送，不會被截斷或基於大小的丟棄。
+* `maxConcurrentUploads`控制並發收集器批次上傳。預設為兩個。
+* `uploadTimeoutMs`設定上傳截止日期，包括重試。預設值為 30 秒。
+
+記錄計數和基於計時器的刷新觸發器仍然適用。當上傳落後時，排隊的記錄將被保留，因此佇列記憶體可能會成長。
+
+檢查目前隊列`exporter.getByteBatchingStats()`.
 
 ### 錯誤處理 {/* #error-handling */}
 
-- 使用指數退避重試，最多嘗試 `maxRetries` 次
-- 所有重試均失敗後捨棄批次
-- 記錄錯誤，但繼續處理新事件
+* 對收集器批次使用指數退避重試`maxRetries` attempts
+* 所有重試失敗後刪除批次
+* 記錄錯誤但繼續處理新事件
 
-`MastraPlatformExporter` 引發的錯誤使用 `MASTRA_PLATFORM_EXPORTER_*` `id` 前綴。已棄用的 `CloudExporter` 則繼續發出採用 `CLOUD_EXPORTER_*` `id` 的錯誤。
+引發的錯誤`MastraPlatformExporter` use the `MASTRA_PLATFORM_EXPORTER_*` `id` prefix. The deprecated `CloudExporter` continues to emit `CLOUD_EXPORTER_*` `id`s.
+
+### 配額暫停 {/* #quota-pause */}
+
+當組織用盡可觀察性配額時，Mastra 平台會拒絕發布請求`402 Payment Required` plus the `x-mastra-observability: disabled` header. When the exporter sees a `402` (or the header) on any publish route, it:
+
+* 刪除被拒絕的批次而不重試
+* 暫停收集器批次以取得追蹤、日誌、指標、分數和回饋，刪除緩衝的和傳入的批次記錄
+* 記錄遙測已暫停的警告
+* 使用空批次定期偵測平台，使用來自`x-mastra-observability-retry-after` header (seconds), or every 5 minutes if the header is absent
+* 一旦平台停止拒絕，自動恢復匯出並記錄警告`402`
+
+偵測計時器不會使 Node.js 進程保持活動狀態，因此短暫的無伺服器進程在暫停時會正常退出。
+
+每個收集器請求（批量上傳和追蹤恢復探測）都包括`x-mastra-observability-capabilities: quota-pause-v1` header. This tells the platform that the client understands the quota-pause contract, so it can safely respond with `402` instead of silently dropping telemetry for older clients that would retry it.
 
 ### 端點路由 {/* #endpoint-routing */}
 
-- 從基礎來源自動推導訊號端點
-- 沒有 `projectId` 時，推導出的路由使用 `/ai/{signal}/publish`
-- 設有 `projectId` 或 `MASTRA_PROJECT_ID` 時，推導出的路由使用 `/projects/:projectId/ai/{signal}/publish`
-- 即使已設定 `projectId`，明確指定的完整發佈 URL 仍會原樣使用
+* 基本起源自動導出訊號端點
+* 沒有`projectId`, derived routes use `/ai/{signal}/publish`
+* 和`projectId` or `MASTRA_PROJECT_ID`, derived routes use `/projects/:projectId/ai/{signal}/publish`
+* 即使在以下情況下，也會按原樣使用明確完整發佈 URL：`projectId` is configured
 
-### 訊號處理 {/* #signal-processing */}
+### 事件處理 {/* #event-processing */}
 
-- `exportTracingEvent()` 只匯出 `SPAN_ENDED` tracing 事件
-- `onLogEvent()`、`onMetricEvent()`、`onScoreEvent()` 及 `onFeedbackEvent()` 會將收到的每個相應訊號類型事件加入緩衝區
-- 執行 `flush()` 及 `shutdown()` 時，所有受支援的訊號批次都會上載至相應的發佈端點
+* `exportTracingEvent()`只出口`SPAN_ENDED` tracing events
+* `onLogEvent()`和`onMetricEvent()` buffer events
+* `onScoreEvent()`和`onFeedbackEvent()` deliver records as described in [Feedback and score delivery](#feedback-and-score-delivery)
+* 所有支援的訊號批次都會在期間上傳到其匹配的發布端點`flush()` and `shutdown()`
 
-## Span 傳輸格式 {/* #span-wire-format */}
+## 跨線格式 {/* #span-wire-format */}
 
-以下記錄傳送至 Mastra 平台的每個 span 的形狀，僅供參考：此類型不會從 `@mastra/observability` 匯出，因此不應將其 import。exporter 會展開原有的 `AnyExportedSpan`（因此會保留來源欄位名稱），並在其上加入少量方便平台使用的別名：
+發送到 Mastra 平台的每個跨度的形狀記錄在此處僅供參考：它不是從`@mastra/observability` and shouldn't be imported. The exporter spreads the original `AnyExportedSpan` (so the source field names are preserved) and layers a small set of platform-friendly aliases on top:
 
 ```typescript
 type MastraPlatformSpanRecord = AnyExportedSpan & {
@@ -286,7 +351,7 @@ type MastraPlatformSpanRecord = AnyExportedSpan & {
 }
 ```
 
-展開的 `AnyExportedSpan` 亦包含原有的 `id`、`type`、`name`、`traceId`、`parentSpanId`、`isRootSpan`、`isEvent`、`startTime`、`endTime`、`entityType`、`entityId`、`entityName`、`tags`、`attributes`、`metadata`、`input`、`output` 及 `errorInfo`。有關 `AnyExportedSpan`，請參閱[介面](/reference/observability/tracing/interfaces)。
+傳播`AnyExportedSpan` also carries the original `id`, `type`, `name`, `traceId`, `parentSpanId`, `isRootSpan`, `isEvent`, `startTime`, `endTime`, `entityType`, `entityId`, `entityName`, `tags`, `attributes`, `metadata`, `input`, `output`, and `errorInfo`. See [Interfaces](/reference/observability/tracing/interfaces) for `AnyExportedSpan`.
 
 ## 用法 {/* #usage */}
 
@@ -306,9 +371,9 @@ const customExporter = new MastraPlatformExporter({
 })
 ```
 
-## 從 `CloudExporter` 遷移 {/* #migrating-from-cloudexporter */}
+## 遷移自`CloudExporter` {/* #migrating-from-cloudexporter */}
 
-兩個類別採用相同的建構函數簽名、環境變數及行為。要進行遷移，請取代 import 及建構函數：
+這兩個類別共享相同的建構子簽章、環境變數和行為。若要遷移，請替換導入和建構函數：
 
 ```typescript
 // Before
@@ -320,23 +385,22 @@ import { MastraPlatformExporter } from '@mastra/observability'
 const exporter = new MastraPlatformExporter()
 ```
 
-原有的 `CloudExporter` 會原封不動保留，因此符合先前 `CLOUD_EXPORTER_*` 錯誤 ID 或 `mastra-cloud-observability-exporter` exporter 名稱的 dashboard 或警示規則，在你完成遷移前仍可繼續運作。
+原來的`CloudExporter` is preserved unchanged so dashboards or alert rules that match the previous `CLOUD_EXPORTER_*` error IDs or `mastra-cloud-observability-exporter` exporter name keep working until you migrate.
 
-## 另請參閱 {/* #see-also */}
+## 參見 {/* #see-also */}
 
 ### 文件 {/* #documentation */}
 
-- [Tracing 概覽](/docs/observability/tracing/overview)：完整指南
-- [Exporter](/docs/observability/integrations/overview#exporters)：Exporter 概念
+* [追蹤概述](/docs/observability/tracing/overview)：完整指南
 
-### 其他 Exporter {/* #other-exporters */}
+### 其他出口商 {/* #other-exporters */}
 
-- [MastraStorageExporter](/reference/observability/tracing/exporters/mastra-storage-exporter)：持久儲存
-- [ConsoleExporter](/reference/observability/tracing/exporters/console-exporter)：除錯輸出
-- [Langfuse](/reference/observability/tracing/exporters/langfuse)：Langfuse 整合
-- [Braintrust](/reference/observability/tracing/exporters/braintrust)：Braintrust 整合
+* [MastraStorageExporter](/reference/observability/tracing/exporters/mastra-storage-exporter)：儲存持久化
+* [控制台導出器](/reference/observability/tracing/exporters/console-exporter)：調試輸出
+* [朗福斯](/reference/observability/tracing/exporters/langfuse): 朗弗斯集成
+* [智囊團](/reference/observability/tracing/exporters/braintrust)：智囊團整合
 
 ### 參考 {/* #reference */}
 
-- [配置](/reference/observability/tracing/configuration)：配置選項
-- [介面](/reference/observability/tracing/interfaces)：類型定義
+* [配置](/reference/observability/tracing/configuration)：配置選項
+* [介面](/reference/observability/tracing/interfaces)：類型定義

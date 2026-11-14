@@ -1,0 +1,173 @@
+---
+title: "Neon Object Storage | File Storage"
+description: "Store Mastra workspace files in Neon Object Storage, an S3-compatible bucket that branches with your Neon Postgres database."
+packages:
+  - "@mastra/s3"
+---
+
+# Neon 对象存储
+
+[Neon 对象存储](https://neon.com/docs/storage/overview)是 Neon 项目中内置的 S3 兼容存储。存储桶属于一个分支，子分支以其父文件的写时复制副本开始。 Mastra 通过以下方式连接到它[`S3Filesystem`](/integrations/file-storage/amazon-s3)，因此Agent获取与您的行中的行一起分支的Workspace文件[霓虹灯 Postgres](/integrations/databases/neon)数据库。接口详情请参见[工作空间文件系统接口](/reference/workspace/filesystem).
+
+## 开始之前 {/* #before-you-begin */}
+
+你需要：
+
+* 一个[Neon](https://neon.com) project in a region that supports Object Storage: `aws-us-east-1`, `aws-us-east-2`, `aws-eu-central-1`, or `aws-ap-southeast-1`
+* 这[Neon CLI](https://neon.com/docs/cli/install)
+
+## 安装 {/* #installation */}
+
+```bash npm2yarn
+npm install @mastra/s3 @neon/config
+```
+
+## 创建一个桶 {/* #create-a-bucket */}
+
+将存储桶声明为`neon.ts` at the root of your project:
+
+```typescript title="neon.ts"
+import { defineConfig } from '@neon/config/v1'
+
+export default defineConfig({
+  buckets: {
+    'agent-files': {},
+  },
+})
+```
+
+默认情况下，存储桶是私有的。放`access: 'public_read'` to allow anonymous reads.
+
+将目录链接到您的 Neon 项目，然后在链接的分支上创建存储桶：
+
+```bash
+neon link
+neon deploy
+```
+
+`neon deploy`创建存储桶并将分支的存储凭证写入`.env`, or to `.env.local` when no `.env` exists. `mastra dev` loads either file.
+
+创建一个没有的存储桶`neon.ts`, run `neon bucket create agent-files`, then pull the credentials yourself:
+
+```bash
+neon env pull --service object-storage
+```
+
+## 环境变量 {/* #environment-variables */}
+
+Neon 为对象存储设置了四个变量：
+
+|变量|价值|
+| - | - |
+|`AWS_ACCESS_KEY_ID` | Access key for a branch credential |
+| `AWS_SECRET_ACCESS_KEY` | Secret key for that credential |
+| `AWS_ENDPOINT_URL_S3` | S3 endpoint of the branch |
+| `AWS_REGION` | Region of the project, such as `us-east-2` |
+
+凭证适用于为其颁发的分支以及该分支的子分支。里面一个[Neon Function](/integrations/deploy/neon), Neon injects these variables, so you don't need a `.env` file.
+
+## 用法 {/* #usage */}
+
+将变量传递给`S3Filesystem` and assign the workspace to an agent:
+
+```typescript title="src/mastra/agents/file-agent.ts"
+import { Agent } from '@mastra/core/agent'
+import { Workspace } from '@mastra/core/workspace'
+import { S3Filesystem } from '@mastra/s3'
+
+const workspace = new Workspace({
+  filesystem: new S3Filesystem({
+    bucket: 'agent-files',
+    region: process.env.AWS_REGION!,
+    endpoint: process.env.AWS_ENDPOINT_URL_S3,
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+  }),
+})
+
+export const fileAgent = new Agent({
+  id: 'file-agent',
+  name: 'file-agent',
+  instructions: 'You manage files in the workspace.',
+  model: '__GATEWAY_ANTHROPIC_MODEL_OPUS__',
+  workspace,
+})
+```
+
+始终设置`endpoint`. Neon only accepts path-style requests, and `S3Filesystem` switches to them only when `endpoint` is set. Without it, the AWS SDK still reads `AWS_ENDPOINT_URL_S3` but sends virtual-hosted requests (`agent-files.<endpoint-host>`), which fail TLS verification.
+
+`S3Filesystem`识别 Neon 端点。它设置`icon` to `'neon'` and `displayName` to `Neon Object Storage`, so Studio shows a Neon mount in the file tree.
+
+使用`prefix` to give each agent, user, or thread its own folder in one bucket:
+
+```typescript
+const filesystem = new S3Filesystem({
+  bucket: 'agent-files',
+  prefix: `users/${userId}`,
+  region: process.env.AWS_REGION,
+  endpoint: process.env.AWS_ENDPOINT_URL_S3,
+  accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+})
+```
+
+前缀限制了文件系统地址的键。它不是授权边界。
+
+## 分支机构 {/* #branches */}
+
+每个分支都有自己的存储端点。当您创建分支时，它会从该时间点其父级的每个存储桶和文件开始。对子级的写入和删除不会更改父级，并且稍后对父级的写入不会出现在子级中。
+
+使用它可以为预览部署、测试运行或实验Agent提供生产文件的完整副本，而无需复制任何数据：
+
+```bash
+neon checkout preview/new-tools --create
+```
+
+`neon checkout --create`创建分支，将其固定`.neon`, and pulls the child branch's variables into `.env`, including its endpoint. The parent's credential also works on the child, but the endpoint must be the child's. Delete the branch to discard its files.
+
+## 技能块存储 {/* #skill-blob-storage */}
+
+`S3BlobStore`拥有可内容寻址的技能块[`MastraEditor`](/reference/editor/mastra-editor) produces. It takes the same connection options:
+
+```typescript
+import { S3BlobStore } from '@mastra/s3'
+
+const blobStore = new S3BlobStore({
+  bucket: 'agent-files',
+  region: process.env.AWS_REGION!,
+  endpoint: process.env.AWS_ENDPOINT_URL_S3,
+  accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+})
+```
+
+## 文件SDK适配器 {/* #filessdk-adapter */}
+
+如果你使用[`FilesSDKFilesystem`](/integrations/file-storage/vercel-files), the `neon` adapter reads the same `AWS_*` variables. Install it with the AWS SDK packages it loads:
+
+```bash npm2yarn
+npm install @mastra/files-sdk files-sdk @aws-sdk/client-s3 @aws-sdk/s3-presigned-post @aws-sdk/s3-request-presigner
+```
+
+```typescript
+import { Workspace } from '@mastra/core/workspace'
+import { FilesSDKFilesystem } from '@mastra/files-sdk'
+import { Files } from 'files-sdk'
+import { neon } from 'files-sdk/neon'
+
+const workspace = new Workspace({
+  filesystem: new FilesSDKFilesystem({
+    files: new Files({ adapter: neon({ bucket: 'agent-files' }) }),
+    icon: 'neon',
+    displayName: 'Neon Object Storage',
+  }),
+})
+```
+
+## 有关的 {/* #related */}
+
+* [S3文件系统参考](/integrations/file-storage/amazon-s3)
+* [霓虹灯 Postgres](/integrations/databases/neon)
+* [部署到 Neon](/integrations/deploy/neon)
+* [Neon 对象存储文档](https://neon.com/docs/storage/overview)
+* [Neon 上的 S3 兼容性](https://neon.com/docs/storage/s3-compatibility)

@@ -1,15 +1,21 @@
 ---
-title: '參考：DurableAgent | Agents'
-description: 'DurableAgent 的 API 參考；DurableAgent 以持久執行及可恢復串流包裝 Agent。'
+title: 'Reference: DurableAgent | Agents'
+description: 'DurableAgent wraps an existing Agent with durable execution and resumable streams.'
 packages:
   - '@mastra/core'
 ---
 
-# DurableAgent
+# 耐久劑
 
-`DurableAgent` 以持久執行及可恢復串流包裝現有的 [`Agent`](/reference/agents/agent)。它會執行 Agent 迴圈，讓客戶端即使中斷連線再重新連線，也不會錯過事件，並透過 [PubSub](/docs/server/pubsub) 串流傳送這些事件。當一次執行必須超越單一請求的生命週期，或需要在連線中斷後繼續時，便應使用它。
+:::測試版
 
-你可使用 [`createDurableAgent`](#createdurableagentoptions) factory 建立它；如要在內置 Workflow 引擎上進行「發出後不理」式執行，則使用 [`createEventedAgent`](#createeventedagentoptions)。如要使用由 Inngest 驅動的執行，請使用 `@mastra/inngest` 的 [`createInngestAgent`](/reference/agents/inngest-agent)。
+在 API 穩定之前，可能會在沒有重大版本更新的情況下發生重大變更。
+
+:::
+
+`DurableAgent`包裝現有的[`Agent`](/reference/agents/agent) with durable execution and resumable streams. It runs the agentic loop so that a client can disconnect and reconnect without missing events, and it streams those events over [PubSub](/docs/server/pubsub)。當運行必須比單一請求更持久或在連線中斷時繼續存在時，請使用它。
+
+創建一個與[`createDurableAgent`](#createdurableagentoptions) factory, or use [`createEventedAgent`](#createeventedagentoptions) for fire-and-forget execution on the built-in workflow engine. For Inngest-powered execution, use [`createInngestAgent`](/reference/agents/inngest-agent) from `@mastra/inngest`.
 
 ## 使用範例 {/* #usage-example */}
 
@@ -32,7 +38,7 @@ export const mastra = new Mastra({
 })
 ```
 
-串流傳送回應並讀取結果。完成該次執行後，`cleanup` 函式會取消訂閱 PubSub：
+串流回應並讀取結果。這`cleanup` function unsubscribes from PubSub when you are done with the run:
 
 ```typescript
 const { output, runId, cleanup } = await durableAgent.stream('Hello!')
@@ -42,32 +48,13 @@ const text = await output.text
 cleanup()
 ```
 
-### 使用 `durable` 設定旗標 {/* #using-the-durable-config-flag */}
+### 普通Agent流配置 {/* #plain-agent-stream-configuration */}
 
-在 `AgentConfig` 設定 `durable: true`；當 Agent 附加至 `Mastra` 實例時，系統便會自動以 `createDurableAgent` 包裝它。如要傳遞 `cache`、`pubsub`、`maxSteps` 或 `cleanupTimeoutMs` 等進階選項，請使用物件。
-
-```typescript title="src/mastra/index.ts"
-import { Mastra } from '@mastra/core'
-import { Agent } from '@mastra/core/agent'
-
-const myAgent = new Agent({
-  id: 'my-agent',
-  name: 'My Agent',
-  instructions: 'You are a helpful assistant',
-  model: '__GATEWAY_OPENAI_MODEL__',
-  durable: true, // or: { maxSteps: 10, cleanupTimeoutMs: 60_000 }
-})
-
-export const mastra = new Mastra({
-  agents: { myAgent },
-})
-```
-
-`mastra.getAgent('myAgent')` 會傳回已包裝的 `DurableAgent`。獨立 Agent（已建構但從未在 `Mastra` 實例註冊）不會變成持久 Agent。包裝會在註冊時套用。
+這`durable` option on a plain `Agent` controls resumable streams only. It never wraps the agent or enables checkpoints. Use `createDurableAgent({ agent })` explicitly for durable execution, and pass execution options such as `maxSteps` and `shouldPersistSnapshot` to that factory.
 
 ## `createDurableAgent(options)` {/* #createdurableagentoptions */}
 
-以持久執行及可恢復串流包裝 `Agent`。這是建立 `DurableAgent` 的建議方式。
+包裹一個`Agent` with durable execution and resumable streams. This is the recommended way to create a `DurableAgent`.
 
 ```typescript
 import { createDurableAgent } from '@mastra/core/agent/durable'
@@ -75,58 +62,73 @@ import { createDurableAgent } from '@mastra/core/agent/durable'
 const durableAgent = createDurableAgent({ agent })
 ```
 
-傳回：`DurableAgent`
+返回：`DurableAgent`
 
 ### 參數 {/* #parameters */}
 
 <PropertiesTable
   content={[
-  {
-    name: 'agent',
-    type: 'Agent',
-    isOptional: false,
-    description: '要以持久執行功能包裝的 Agent。Agent 方法會委派至此 Agent。',
-  },
-  {
-    name: 'id',
-    type: 'string',
-    isOptional: true,
-    description: 'ID 覆寫。',
-    defaultValue: 'agent.id',
-  },
-  {
-    name: 'name',
-    type: 'string',
-    isOptional: true,
-    description: '名稱覆寫。',
-    defaultValue: 'agent.name',
-  },
-  {
-    name: 'cache',
-    type: 'MastraServerCache | false',
-    isOptional: true,
-    description:
-      '用於儲存串流事件的快取，以啟用可恢復串流。如省略，Agent 會繼承 Mastra 實例的快取，或使用 InMemoryServerCache。設為 `false` 可停用快取，令串流無法恢復。',
-  },
-  {
-    name: 'pubsub',
-    type: 'PubSub',
-    isOptional: true,
-    description: '用於串流傳送事件的 PubSub 實例。',
-    defaultValue: 'EventEmitterPubSub',
-  },
-  {
-    name: 'maxSteps',
-    type: 'number',
-    isOptional: true,
-    description: 'Agent 迴圈的最大步驟數目。',
-  },
+{
+  name: 'agent',
+  type: 'Agent',
+  isOptional: false,
+  description: 'The Agent to wrap with durable execution capabilities. Agent methods delegate to this agent.',
+},
+{
+  name: 'id',
+  type: 'string',
+  isOptional: true,
+  description: 'ID override.',
+  defaultValue: 'agent.id',
+},
+{
+  name: 'name',
+  type: 'string',
+  isOptional: true,
+  description: 'Name override.',
+  defaultValue: 'agent.name',
+},
+{
+  name: 'cache',
+  type: 'MastraServerCache | false',
+  isOptional: true,
+  description:
+    'Cache for stored stream events, which enables resumable streams. If omitted, the agent inherits the cache from the Mastra instance, or uses an InMemoryServerCache. Set to `false` to disable caching, which makes streams non-resumable.',
+},
+{
+  name: 'pubsub',
+  type: 'PubSub',
+  isOptional: true,
+  description:
+    'PubSub instance for streaming events. Takes precedence over `mastra.pubsub`. When omitted, a registered agent publishes on `mastra.pubsub` and an unregistered agent uses an in-process `EventEmitterPubSub`.',
+  defaultValue: 'mastra.pubsub, or EventEmitterPubSub when unregistered',
+},
+{
+  name: 'maxSteps',
+  type: 'number',
+  isOptional: true,
+  description: 'Maximum number of steps for the agentic loop.',
+},
+{
+  name: 'shouldCache',
+  type: '(topic: string) => boolean',
+  isOptional: true,
+  description:
+    'Per-topic opt-out of the replay cache. Return `false` to publish a topic straight to the underlying PubSub without recording it; subscribers of that topic receive live events only and cannot resume from an offset. Useful for trading replay for minimum publish latency on hot topics when the cache is remote (for example, cross-region Redis). Run-local topics are always excluded, regardless of this option.',
+},
+{
+  name: 'shouldPersistSnapshot',
+  type: '(params: { stepResults, workflowStatus }) => boolean',
+  isOptional: true,
+  description:
+    "Predicate controlling which workflow snapshots the durable run persists. The default always persists `pending`, `paused`, and `suspended` (required for human-in-the-loop resume) and persists `running` checkpoints only when the Mastra instance is configured with `recovery.durableAgents: 'auto'`. Pass a predicate that includes `running` to keep crash-recovery checkpoints for manual `listActiveRuns()` / `recoverActiveRuns()` without enabling automatic recovery. Mastra logs a warning when a predicate excludes `suspended` or `paused`, or excludes `running` while `recovery.durableAgents` is `'auto'`.",
+},
 ]}
 />
 
 ## `createEventedAgent(options)` {/* #createeventedagentoptions */}
 
-在內置 Workflow 引擎上，以「發出後不理」式持久執行包裝 `Agent`。它與 `createDurableAgent` 一樣會傳回可供串流讀取的結果，但底層 Workflow 會以非阻塞方式（透過 `startAsync`）執行，而非在接通串流前一直執行至完成。當你希望該次執行可獨立於呼叫者繼續進行時，便應使用它。它不接受 `id` 或 `name` 覆寫。
+包裹一個`Agent` with fire-and-forget durable execution on the built-in evented workflow engine. Like `createDurableAgent`, it returns a result you stream from, but the run is started without being awaited: events on the Mastra instance's PubSub drive execution independently of the caller. Register the agent on a `Mastra` instance with storage to get evented execution; without one, the agent falls back to the default in-process engine and logs a warning. It doesn't accept `id` or `name` overrides.
 
 ```typescript
 import { createEventedAgent } from '@mastra/core/agent/durable'
@@ -134,95 +136,125 @@ import { createEventedAgent } from '@mastra/core/agent/durable'
 const eventedAgent = createEventedAgent({ agent })
 ```
 
-傳回：`EventedAgent`（`DurableAgent` 的子類別）
+返回：`EventedAgent` (a subclass of `DurableAgent`)
 
 ### 參數 {/* #parameters-1 */}
 
 <PropertiesTable
   content={[
-  {
-    name: 'agent',
-    type: 'Agent',
-    isOptional: false,
-    description: '要以事件式持久執行功能包裝的 Agent。',
-  },
-  {
-    name: 'cache',
-    type: 'MastraServerCache | false',
-    isOptional: true,
-    description:
-      '用於儲存串流事件的快取，以啟用可恢復串流。如省略，Agent 會繼承 Mastra 實例的快取，或使用 InMemoryServerCache。設為 `false` 可停用快取。',
-  },
-  {
-    name: 'pubsub',
-    type: 'PubSub',
-    isOptional: true,
-    description: '用於串流傳送事件的 PubSub 實例。',
-    defaultValue: 'EventEmitterPubSub',
-  },
-  {
-    name: 'maxSteps',
-    type: 'number',
-    isOptional: true,
-    description: 'Agent 迴圈的最大步驟數目。',
-  },
+{
+  name: 'agent',
+  type: 'Agent',
+  isOptional: false,
+  description: 'The Agent to wrap with evented durable execution capabilities.',
+},
+{
+  name: 'cache',
+  type: 'MastraServerCache | false',
+  isOptional: true,
+  description:
+    'Cache for stored stream events, which enables resumable streams. If omitted, the agent inherits the cache from the Mastra instance, or uses an InMemoryServerCache. Set to `false` to disable caching.',
+},
+{
+  name: 'pubsub',
+  type: 'PubSub',
+  isOptional: true,
+  description:
+    'PubSub instance for streaming events. Once the agent is registered, evented run frames use `mastra.pubsub` instead, because evented steps publish there.',
+  defaultValue: 'mastra.pubsub, or EventEmitterPubSub when unregistered',
+},
+{
+  name: 'maxSteps',
+  type: 'number',
+  isOptional: true,
+  description: 'Maximum number of steps for the agentic loop.',
+},
+{
+  name: 'shouldCache',
+  type: '(topic: string) => boolean',
+  isOptional: true,
+  description:
+    'Per-topic opt-out of the replay cache. Return `false` to publish a topic straight to the underlying PubSub without recording it; subscribers of that topic receive live events only and cannot resume from an offset. Useful for trading replay for minimum publish latency on hot topics when the cache is remote (for example, cross-region Redis). Run-local topics are always excluded, regardless of this option.',
+},
+{
+  name: 'shouldPersistSnapshot',
+  type: '(params: { stepResults, workflowStatus }) => boolean',
+  isOptional: true,
+  description:
+    'Accepted for API symmetry with `createDurableAgent`, but ignored: the evented engine requires the full snapshot set (`pending`, `paused`, `suspended`, `running`) because the initial `running` write creates the base row that suspend-merges and multi-worker coordination build on. A warning is logged if set.',
+},
 ]}
 />
 
-## 建構函式參數 {/* #constructor-parameters */}
+## 建構函數參數 {/* #constructor-parameters */}
 
-`DurableAgent` 類別接受與 `createDurableAgent` 相同的選項，另加 `cleanupTimeoutMs`。除非需要建立子類別，否則建議使用 factory。
+這`DurableAgent` class accepts the same options as `createDurableAgent`, plus `cleanupTimeoutMs`. Prefer the factory unless you need to subclass.
 
 <PropertiesTable
   content={[
-  {
-    name: 'agent',
-    type: 'Agent',
-    isOptional: false,
-    description: '要以持久執行功能包裝的 Agent。',
-  },
-  {
-    name: 'id',
-    type: 'string',
-    isOptional: true,
-    description: 'ID 覆寫。',
-    defaultValue: 'agent.id',
-  },
-  {
-    name: 'name',
-    type: 'string',
-    isOptional: true,
-    description: '名稱覆寫。',
-    defaultValue: 'agent.name',
-  },
-  {
-    name: 'cache',
-    type: 'MastraServerCache | false',
-    isOptional: true,
-    description:
-      '用於儲存串流事件的快取。如省略，會繼承 Mastra 實例的快取或使用 InMemoryServerCache。設為 `false` 可停用快取。',
-  },
-  {
-    name: 'pubsub',
-    type: 'PubSub',
-    isOptional: true,
-    description: '用於串流傳送事件的 PubSub 實例。',
-    defaultValue: 'EventEmitterPubSub',
-  },
-  {
-    name: 'maxSteps',
-    type: 'number',
-    isOptional: true,
-    description: 'Agent 迴圈的最大步驟數目。',
-  },
-  {
-    name: 'cleanupTimeoutMs',
-    type: 'number',
-    isOptional: true,
-    description:
-      '串流完成或發生錯誤後，自動清理 registry 項目前的寬限時間（毫秒）。設為 0 可停用自動清理，並要求手動呼叫 `cleanup()`。自動清理不會在暫停事件上觸發。',
-    defaultValue: '30000',
-  },
+{
+  name: 'agent',
+  type: 'Agent',
+  isOptional: false,
+  description: 'The Agent to wrap with durable execution capabilities.',
+},
+{
+  name: 'id',
+  type: 'string',
+  isOptional: true,
+  description: 'ID override.',
+  defaultValue: 'agent.id',
+},
+{
+  name: 'name',
+  type: 'string',
+  isOptional: true,
+  description: 'Name override.',
+  defaultValue: 'agent.name',
+},
+{
+  name: 'cache',
+  type: 'MastraServerCache | false',
+  isOptional: true,
+  description:
+    'Cache for stored stream events. If omitted, inherits from the Mastra instance or uses an InMemoryServerCache. Set to `false` to disable caching.',
+},
+{
+  name: 'pubsub',
+  type: 'PubSub',
+  isOptional: true,
+  description:
+    'PubSub instance for streaming events. Takes precedence over `mastra.pubsub`. When omitted, a registered agent publishes on `mastra.pubsub` and an unregistered agent uses an in-process `EventEmitterPubSub`.',
+  defaultValue: 'mastra.pubsub, or EventEmitterPubSub when unregistered',
+},
+{
+  name: 'maxSteps',
+  type: 'number',
+  isOptional: true,
+  description: 'Maximum number of steps for the agentic loop.',
+},
+{
+  name: 'shouldCache',
+  type: '(topic: string) => boolean',
+  isOptional: true,
+  description:
+    'Per-topic opt-out of the replay cache. Return `false` to publish a topic straight to the underlying PubSub without recording it; subscribers of that topic receive live events only and cannot resume from an offset. Useful for trading replay for minimum publish latency on hot topics when the cache is remote (for example, cross-region Redis). Run-local topics are always excluded, regardless of this option.',
+},
+{
+  name: 'shouldPersistSnapshot',
+  type: '(params: { stepResults, workflowStatus }) => boolean',
+  isOptional: true,
+  description:
+    "Predicate controlling which workflow snapshots the durable run persists. The default always persists `pending`, `paused`, and `suspended` (required for human-in-the-loop resume) and persists `running` checkpoints only when the Mastra instance is configured with `recovery.durableAgents: 'auto'`.",
+},
+{
+  name: 'cleanupTimeoutMs',
+  type: 'number',
+  isOptional: true,
+  description:
+    'Grace period in milliseconds before registry entries are cleaned up automatically after a stream finishes or errors. Set to 0 to disable auto-cleanup and require a manual `cleanup()` call. Auto-cleanup does not fire on suspended events.',
+  defaultValue: '30000',
+},
 ]}
 />
 
@@ -232,7 +264,7 @@ const eventedAgent = createEventedAgent({ agent })
 
 #### `stream(messages, options?)` {/* #streammessages-options */}
 
-使用持久執行串流傳送回應。此方法會立即傳回結果，而結果的 `output` 會隨該次執行進行而產生事件。
+使用持久執行串流響應。立即傳回結果，其結果`output` produces events as the run progresses.
 
 ```typescript
 const { output, runId, cleanup } = await durableAgent.stream('Hello!', {
@@ -244,11 +276,11 @@ const text = await output.text
 cleanup()
 ```
 
-傳回：[`Promise<DurableAgentStreamResult>`](#durableagentstreamresult)
+返回：[`Promise<DurableAgentStreamResult>`](#durableagentstreamresult)
 
 #### `resume(runId, resumeData, options?)` {/* #resumerunid-resumedata-options */}
 
-恢復已暫停的執行，例如在 Tool 獲批後。請傳入原始串流的 `runId`，以及該次執行正在等候的資料。如該次執行沒有 registry 項目，便會擲回錯誤。
+恢復暫停的運行，例如在Tool批准後。透過`runId` from the original stream and the data the run was waiting on. Throws if no registry entry exists for the run. If another execution holds the run, `resume()` waits up to 5 seconds for it to finish, then throws `DURABLE_AGENT_EXECUTION_CONFLICT`. See [run ownership](/docs/harness/durable-agents#run-ownership).
 
 ```typescript
 const { output, cleanup } = await durableAgent.resume(runId, {
@@ -259,22 +291,65 @@ await output.text
 cleanup()
 ```
 
-傳回：[`Promise<DurableAgentStreamResult>`](#durableagentstreamresult)
+返回：[`Promise<DurableAgentStreamResult>`](#durableagentstreamresult)
 
 #### `observe(runId, options?)` {/* #observerunid-options */}
 
-重新連線至現有執行，先重播快取事件，再傳送即時事件。請在網絡連線中斷後使用此方法。傳入 `offset` 可由已知位置開始重播。
+`offset` to replay all available cached events before receiving live events.
+
+觀察劑必須具有相同的有效`id` as the agent that started the run, both for live observations in the same process and for persisted observations from another process. The effective ID is the DurableAgent's `id`, including any ID override, rather than the wrapped agent's original ID. Different DurableAgent instances with the same effective ID can observe the same run.
+
+`observe()` throws `DURABLE_AGENT_OBSERVE_AGENT_MISMATCH`. Legacy live entries without owner metadata retain their existing behavior.
+
+對於運行配置為`structuredOutput`, an observer in another process reconstructs `output.object` from the persisted schema and replayed text.
 
 ```typescript
-const { output, cleanup } = await durableAgent.observe(runId, {
-  offset: 0,
+const { output } = await durableAgent.observe(runId, {
   onChunk: chunk => console.log(chunk),
 })
 
 await output.text
 ```
 
-預設情況下，`observe()` 會無限期等候事件。如果執行該次運行的程序意外停止，該次執行會停止產生事件，卻不會發出完成事件，因此被觀察的串流會永遠等候。傳入 `idleTimeoutMs` 可限制等候時間：靜默達指定毫秒數後，串流便會結束。系統會先查詢選用的 `isAlive` 檢查。當該次執行仍在處理中（例如正在進行長時間的 Tool 呼叫，或已暫停以等候人手輸入）時，傳回 `true` 可繼續等候。傳回 `false` 或省略 `isAlive`，串流便會以錯誤結束。`isAlive` 暫時擲回錯誤時，系統會視為「仍然存活」，因此短暫的檢查失敗不會結束仍在運作的串流。
+這`offset` option is an inclusive, zero-based PubSub event index. It counts every cached event published to the run topic, including lifecycle events, rather than counting chunks. A chunk read from the run log carries the index of its event as `chunk.index`, on `stream()`, `observe()`, and the HTTP `/stream` and `/observe` endpoints. To resume after a dropped connection, pass `index + 1` of the last chunk that has an index, or omit `offset` if nothing arrived. Lifecycle events take an index but produce no chunk, so indexes have gaps and a chunk count isn't a valid offset.
+
+有些塊沒有`index`. The client builds `object` chunks itself rather than reading them from the log. An `abort` chunk is sent beside the `finish` of the same run-log entry, and only the `finish` carries the index, so a client that reconnects between the two gets the `abort` again.
+
+使用結構化模型的運行發布了其`object-result` to the run log, so that chunk carries an `index` and replays like any other. A core `observe()` caller holding the schema can also rebuild structured output from replayed text, but gets `object-result` only when it replays the text that produced it. HTTP `/observe` replays the log and doesn't rebuild it. To rebuild it after a reconnect, observe without an `offset` and skip chunks whose `index` you already processed. That replay also rebuilds `object` chunks you already received, and they have no `index` to skip by. Each `object` chunk is a snapshot of the object so far, so keep the latest one. Indexes come from the replay cache, so a chunk whose cache write failed, or any chunk when caching is off, has no `index`, so no offset can resume at it. Omitting `offset` replays whatever the transport itself retains, such as a Redis stream, and can repeat chunks you already received. The paragraphs below cover offsets past the end and transports without numeric offsets.
+
+`index`是可加的並且`offset` keeps its meaning, so code that already passes a log position, or replays from `0`, needs no change. Code that passed a count of chunks received should switch to the last `index + 1`.
+
+以下範例記錄串流時的復原偏移量並將其傳遞給`observe()` after a reconnect:
+
+```typescript
+let offset: number | undefined
+const { output } = await durableAgent.stream(messages, { runId })
+for await (const chunk of output.fullStream) {
+  if (chunk.index === undefined) continue
+  offset = chunk.index + 1
+}
+
+// After a dropped connection:
+const { output: resumed } = await durableAgent.observe(runId, { offset })
+```
+
+非零偏移量可以跳過較早的事件。聚合值僅根據傳遞給該觀察者的區塊來建構。如果偏移跳過較早的文字增量，`output.text` is partial and structured output may be incomplete or fail validation or parsing.
+
+當 PubSub 傳輸支援數位偏移量時，只有當發布的索引達到請求的偏移量時，觀察者才會收到編號事件。超出最高保留索引的偏移不會重播任何內容，並且也會跳過索引較低的即時事件。
+
+沒有一個事件`index`, such as one whose cache write failed, is delivered as it arrives whatever the offset.
+
+如果保留的日誌過期或被清除並且編號重新開始於`0` while an observer is attached, that observer resyncs to the new log and receives its events, including ones below the requested offset. Detection is best effort. If the cache can't be read at that moment, or the new log has numbered past the observer's position before its first event arrives, the observer can miss the restart and skip those events instead. An observer that reconnects after the restart with an offset from the old log can't tell the logs apart and skips the new log's events below that offset, so omit `offset` to replay the new log.
+
+在沒有數位偏移支援的傳輸上，例如`RedisStreamsPubSub` with caching off, `observe()` with any offset, including `0`, starts with new live events and doesn't replay retained events. This is the same in core and over HTTP `/observe`. Omit `offset` to replay them. (HTTP `/observe` on a plain `Agent` replays the retained events instead, which can repeat events already received.)
+
+索引重播僅限於配置的快取中仍然可用的事件。當快取被停用時，快取沒有任何可重播的內容，`shouldCache` excludes the run topic, or retained events have been cleared. Omitting `offset` then replays only what the transport itself retains, if anything.
+
+失敗的快取寫入只會遺失快取中的該事件。它沒有`index`, and the events written before and after it still replay when the cache numbers and appends an event in one step. The in-memory and Valkey caches always do. `RedisServerCache` does while Redis scripting works, and switches to two steps when the client has no `eval` or Redis Cluster rejects the script with `CROSSSLOT`. A custom cache that keeps the default `listPushIndexed()` also takes two steps. A two-step cache can leave a gap that makes offset replay skip later events, so replay such a log without an `offset` and skip indexes already processed. Cache replay can't recover an event the cache never stored. A transport that retains it, such as `RedisStreamsPubSub`, can still deliver it without an `index`.
+
+事件Agent（`createEventedAgent()`) on a cross-process PubSub, such as Redis Streams, can use the default in-memory server cache when its steps run in the process that started the run. That process numbers the events. Use a shared cache such as `RedisServerCache` on the `Mastra` instance when steps run in another process, such as a dedicated worker started with `workers: true`. That process can't share the in-memory counter, so its events aren't numbered and an offset can't skip them. Mastra logs a warning in the worker when this happens. Also use a shared cache when an observer reconnects through another process, such as a different server replica, because it can't replay from the starting process's in-memory cache.
+
+預設情況下`observe()` waits indefinitely for events. If the process running the run stops unexpectedly, the run stops producing events but never emits a completion event, so the observed stream would wait forever. Pass `idleTimeoutMs` to end the stream after a bounded period of silence. Before timing out, `observe()` can consult an optional `isAlive` check. Return `true` while work continues, such as during a long-running tool call or a pause for human input. A `false` result ends the stream with an error, as does omitting `isAlive`. A transient throw from `isAlive` is treated as "still alive", so a momentary check failure never ends a live stream.
 
 ```typescript
 const { output } = await durableAgent.observe(runId, {
@@ -283,19 +358,19 @@ const { output } = await durableAgent.observe(runId, {
 })
 ```
 
-因閒置逾時而結束執行時，系統會進行與執行發生錯誤時相同的清理（請參閱下方警告），因此會釋放而非保留其快取狀態。兩個選項都須明確啟用。如要沿用以往無限期等候的行為，請省略它們。
+結束空閒逾時運行與發生錯誤的運行執行相同的清理操作（請參閱下面的警告），因此其快取狀態將被釋放而不是保留。這兩個選項都是可選的。對於先前的無限期等待行為，請忽略它們。
 
-傳回：`Promise<DurableAgentStreamResult>`
+返回：`Promise<DurableAgentStreamResult>`
 
-:::warning
+：：：警告
 
-`observe()` 傳回的 `cleanup()` 會銷毀該次執行的 registry 項目及快取事件。只應在完成該次執行後呼叫它。如果該次執行已暫停，而你打算稍後恢復，請勿呼叫 `cleanup()`。讓自動清理計時器在執行完成或發生錯誤後處理。自動清理不會在暫停事件上觸發。
+這`cleanup()` returned by `observe()` destroys the run's registry entries and cached events. Only call it when you are done with the run. If the run is suspended and you intend to resume later, don't call `cleanup()`. Let the auto-cleanup timer handle it after the run finishes or errors. Auto-cleanup doesn't fire on suspended events.
 
 :::
 
 #### `prepare(messages, options?)` {/* #preparemessages-options */}
 
-準備一次持久執行，但不啟動它。此方法會在內部 registry 註冊該次執行，並傳回已序列化的 Workflow 輸入。當你需要控制何時及如何觸發 Workflow 時，便應使用此方法。
+為持久執行準備運行而不啟動它。在內部註冊表中註冊運行並返回序列化的Workflow輸入。當您需要控制Workflow的觸發時間和方式時，請使用此選項。
 
 ```typescript
 const { runId, messageId, workflowInput, threadId, resourceId } = await durableAgent.prepare(
@@ -306,7 +381,7 @@ const { runId, messageId, workflowInput, threadId, resourceId } = await durableA
 )
 ```
 
-傳回：
+返回：
 
 ```typescript
 interface PrepareResult {
@@ -319,28 +394,174 @@ interface PrepareResult {
 }
 ```
 
-### 復原 {/* #recovery */}
+### 消除 {/* #cancellation */}
+
+#### `abortRunStream(runId)` {/* #abortrunstreamrunid */}
+
+停止任何共享Agent程式的 ID 運行[PubSub](/docs/server/pubsub). Only the `runId` from `stream()` or `prepare()` is needed, so a later request can stop a run it didn't start. The run ends the same way as `abort()` on the stream result: the stream emits an `abort` chunk, `onAbort` fires, and `observe()` consumers see the stream end.
+
+```typescript
+const { runId } = await durableAgent.stream('Summarize the document')
+
+// later, from a different request handler
+durableAgent.abortRunStream(runId)
+```
+
+透過 PubSub 發布中​​止請求需要多進程部署中的共用後端，例如[`RedisStreamsPubSub`](/reference/pubsub/redis-streams). The default `EventEmitterPubSub` only reaches runs in the same process. A run parked on a tool approval is cancelled only in this process: another process sharing the storage can still approve it. To cancel a parked run on every server, call the server's `POST /agents/:agentId/runs/:runId/abort` route, which records the cancellation in storage so a later approval or resume is refused with `409 Conflict` (`AGENT_RESUME_ABORTED_RUN`).
+
+`InngestAgent` 沒有實作這個方法。使用以下命令取消 Ingest 運行`abort()` returned by its `stream()`.
+
+停止持久運行`abortRunStream()` or `abortThreadStream()` requires `@mastra/core@1.62.0` or later. Earlier versions record the abort without stopping the run.
+
+返回：`boolean`. `true` when this process aborted the run locally or can see it executing. The abort request is published either way.
+
+#### `abortThreadStream({ threadId, resourceId?, expectedRunId? })` {/* #abortthreadstream-threadid-resourceid-expectedrunid- */}
+
+使用與以下相同的中止請求中止記憶體執行緒上的活動運行`abortRunStream()`. The run is resolved from this process's thread runtime, so it must have been started here or observed through `subscribeToThread()` on this process. The server route `POST /agents/:agentId/threads/abort` uses this method.
+
+經過`expectedRunId` when the request must only stop a specific run. If another queued run becomes active before the request is handled, the method returns `false` without aborting the successor. Omit `expectedRunId` to abort whichever run is active when the request is handled.
+
+```typescript
+const aborted = durableAgent.abortThreadStream({
+  resourceId: 'user-1',
+  threadId: 'thread-1',
+  expectedRunId: runId,
+})
+```
+
+返回：`boolean`. `false` when this process has no active run recorded for the thread or the active run doesn't match `expectedRunId`. No abort request is sent in either case.
+
+### 恢復 {/* #recovery */}
+
+：：：警告
+
+恢復從最後一個持久快照重新驅動運行。 Mastra 將子Agent委託視為生成的委託`agent-<name>` tool step and doesn't checkpoint its inner LLM or tool calls independently. If recovery replays that step, the entire sub-agent run can execute again, including already-completed tool side effects. Make tools used by sub-agents idempotent, or deduplicate their external side effects. See [crash recovery](/docs/harness/durable-agents#crash-recovery) for operational guidance.
+
+:::
+
+#### `listActiveRuns(options?)` {/* #listactiverunsoptions */}
+
+列出持久快照所在的此Agent程式的運行`running` status: runs whose agentic loop was mid-execution when the workflow engine last saved state. On a live process they transition to `suspended` or a terminal status. After a crash or restart they stay `running` with nothing driving them, which is what `recoverActiveRuns()` re-drives. Runs started by other durable agents on the same storage aren't included.
+
+`running`快照僅在以下情況下寫入`recovery.durableAgents` is `'auto'` or a custom `shouldPersistSnapshot` includes `running`. Without one of those, this method returns no runs. See [snapshot persistence](/docs/harness/durable-agents#snapshot-persistence).
+
+```typescript
+const { runs, total } = await durableAgent.listActiveRuns({ resourceId: 'user-1' })
+
+for (const run of runs) {
+  await durableAgent.recoverActiveRuns({ runId: run.runId })
+}
+```
+
+讀取Agent註冊的 Mastra 實例上的工作流快照存儲，如果Agent未註冊，則拋出異常。使用持久性儲存：預設的記憶體儲存在重新啟動時會遺失這些行，從而孤立它們。
+
+只運行在`running` status are returned. Suspended runs keep their snapshots but aren't included, and finished runs aren't retained. Filter by `resourceId` to scope the list to one user.
+
+返回：
+
+```typescript
+interface DurableAgentListActiveRunsResult {
+  runs: Array<{
+    runId: string
+    status: 'running'
+    threadId?: string
+    resourceId?: string
+    updatedAt: Date
+  }>
+  total: number
+}
+```
+
+<PropertiesTable
+  content={[
+{
+  name: 'options.threadId',
+  type: 'string',
+  isOptional: true,
+  description: 'Only return runs that belong to this memory thread.',
+},
+{
+  name: 'options.resourceId',
+  type: 'string',
+  isOptional: true,
+  description: 'Only return runs that belong to this memory resource.',
+},
+{
+  name: 'options.fromDate',
+  type: 'Date',
+  isOptional: true,
+  description: 'Only return runs created at or after this date.',
+},
+{
+  name: 'options.toDate',
+  type: 'Date',
+  isOptional: true,
+  description: 'Only return runs created at or before this date.',
+},
+{
+  name: 'options.perPage',
+  type: 'number',
+  isOptional: true,
+  description: 'Runs per page. Applies only when `page` is also set. Must be a positive integer.',
+},
+{
+  name: 'options.page',
+  type: 'number',
+  isOptional: true,
+  description: 'Zero-indexed page number. Applies only when `perPage` is also set. Must be a non-negative integer.',
+},
+]}
+/>
 
 #### `recoverActiveRuns(options?)` {/* #recoveractiverunsoptions */}
 
-找出此 Agent 卡在 `running` 狀態的執行，並由上次保存的快照重新驅動。最多復原 `options.limit` 次執行（預設：100）。傳回復原內容的摘要。
+發現跑步陷入困境`running` status for this agent and re-drives them from the last persisted snapshot. Accepts the same filters and pagination as `listActiveRuns()`, plus `runId`. Returns the outcome for each run.
+
+最多同時進行五個運行等待，並按發現順序傳回結果。每次嘗試都有 30 秒的等待預算，涵蓋`recover()` setup and settlement of the whole recovered workflow. When the budget expires, another run can use the slot. The timeout returns `status: 'skipped'` with `reason: 'recovery-timeout'` and `retryAt` set 30 seconds ahead, without canceling setup or execution, releasing a live claim, or counting as success or failure. The attempt continues in the background, and its eventual outcome doesn't change the returned results. The concurrency limit bounds waiting, not live executions.
+
+[`mastra.recoverAllDurableAgents()`](/reference/core/mastra-class#recoveralldurableagents)自動安排超時重新檢查。直接呼叫者`recoverActiveRuns()` must schedule their own calls after `retryAt`. While the original bulk attempt remains pending, re-checks defer with another `recovery-timeout` and a future `retryAt`, without invoking `recover()` again. Once it settles, recovery checks the persisted snapshot and ownership before retrying. Finished or suspended runs aren't restarted.
+
+預算僅適用於每次運行嘗試`recoverActiveRuns()`, not to discovery, a direct `recover()` call, or overridden custom recovery methods. When shutdown begins, recovery stops dispatching new runs. The original attempt remains tracked for Mastra's shared shutdown drain even after the wait times out.
 
 ```typescript
 const result = await durableAgent.recoverActiveRuns()
-// { recovered: [{ runId, status }], succeeded: 2, failed: 0 }
+// {
+//   recovered: [
+//     { runId: 'run-1', status: 'success' },
+//     { runId: 'run-2', status: 'skipped', reason: 'run-active', retryAt: 1760123456789 },
+//   ],
+//   succeeded: 1,
+//   failed: 0,
+// }
 ```
 
-傳入 `runId` 可復原單次已知執行：
+透過一個`runId` to recover a single known run:
 
 ```typescript
 await durableAgent.recoverActiveRuns({ runId: 'run-abc-123' })
 ```
 
-傳回：
+對於另一個執行仍然驅動的運行，`recoverActiveRuns()` returns `status: 'skipped'` and a `reason`, leaving that execution in control. Checking the run again requires a separate call. For a run held by another process, `retryAt` is the time after which that claim lapses unless renewed. Call `recoverActiveRuns({ runId })` after it to recover the run if its process crashed. [`mastra.recoverAllDurableAgents()`](/reference/core/mastra-class#recoveralldurableagents) schedules these re-checks itself.
+
+| `reason` | Meaning |
+| - | - |
+| `run-active` | Another execution, possibly in another process, holds the run. Sets `retryAt`. |
+| `run-active-locally` | This process is executing the run. |
+| `already-in-progress` | This process is already recovering the run. |
+| `recovery-timeout` | The wait expired or an earlier bulk recovery attempt is still pending. Sets `retryAt` without duplicating the pending attempt on re-checks. |
+
+返回：
 
 ```typescript
 interface DurableAgentRecoverActiveRunsResult {
-  recovered: Array<{ runId: string; status: 'success' | 'failed'; error?: Error }>
+  recovered: Array<{
+    runId: string
+    status: 'success' | 'failed' | 'skipped'
+    error?: Error
+    reason?: 'run-active' | 'run-active-locally' | 'already-in-progress' | 'recovery-timeout'
+    // Epoch milliseconds
+    retryAt?: number
+  }>
   succeeded: number
   failed: number
 }
@@ -348,30 +569,18 @@ interface DurableAgentRecoverActiveRunsResult {
 
 <PropertiesTable
   content={[
-  {
-    name: 'options.runId',
-    type: 'string',
-    isOptional: true,
-    description: '按 ID 復原指定執行。設定後會忽略探索篩選條件。',
-  },
-  {
-    name: 'options.limit',
-    type: 'number',
-    isOptional: true,
-    description: '可探索的有效執行數目上限。預設為 100。',
-  },
-  {
-    name: 'options.createdBefore',
-    type: 'Date',
-    isOptional: true,
-    description: '只復原在此日期前建立的執行。',
-  },
+{
+  name: 'options.runId',
+  type: 'string',
+  isOptional: true,
+  description: 'Recover a specific run by ID. When set, the discovery filters and pagination are ignored.',
+},
 ]}
 />
 
 #### `recover(runId, options?)` {/* #recoverrunid-options */}
 
-按 ID 復原單次執行。傳回形狀與 `stream()` 相同的可串流結果。當你需要即時觀察復原串流時，便應使用此方法。
+按 ID 恢復單次運作。傳回形狀相同的可流式結果`stream()`. Use this when you need to observe the recovery stream in real time.
 
 ```typescript
 const { output, cleanup } = await durableAgent.recover('run-abc-123', {
@@ -383,249 +592,290 @@ await output.text
 cleanup()
 ```
 
-傳回：[`Promise<DurableAgentStreamResult>`](#durableagentstreamresult)
+復原從持久啟動重新啟動`durable-agentic-loop` checkpoint. The nested execution row alone isn't sufficient. Before starting a run, enable `recovery: { durableAgents: 'auto' }` on `Mastra`, or provide a `shouldPersistSnapshot` policy that includes `'running'`. Recovery is unavailable until the first running checkpoint is saved, even with persistence enabled. Enabling persistence after a crash can't reconstruct a missing checkpoint.
 
-## 串流選項 {/* #stream-options */}
+檢查點之後的模型和Tool呼叫可能會再次運行。使Tool副作用具有冪等性。恢復並不能保證一次性執行。
 
-`stream()` 接受 `DurableAgentStreamOptions` 物件。它支援以下 Agent 執行選項及生命週期 callback。
+`recover()`拋出不可用的檢查點和非孤立的運作：
+
+|錯誤ID |拋出時 |
+| - | - |
+|`DURABLE_AGENT_RECOVER_CHECKPOINT_NOT_AVAILABLE` | The loop row is still `pending` without a workflow input. No restartable checkpoint is available. No recovered execution starts, and any acquired recovery claim is released. |
+| `DURABLE_AGENT_RUN_ACTIVE` | Another execution holds the run, and `force` isn't set. |
+| `DURABLE_AGENT_RECOVER_RUN_ACTIVE_LOCALLY` | This process is executing the run. `force` doesn't override this. |
+| `DURABLE_AGENT_RECOVER_ALREADY_IN_PROGRESS` | This process is already recovering the run. |
+| `DURABLE_AGENT_RECOVER_RUN_SUSPENDED` | The run is suspended. Continue it with `resume()`. |
+| `DURABLE_AGENT_RECOVER_RUN_NOT_ACTIVE` | The snapshot isn't restartable and isn't suspended. |
+| `DURABLE_AGENT_EXECUTION_CONFLICT` | With `force`, another execution claimed the run during the takeover. |
+
+伺服器的`POST /agents/:agentId/recover` route returns ownership, already-in-progress, suspended-run, and inactive-run conflicts as `409 Conflict`. An unavailable checkpoint returns `500 Internal Server Error`.
 
 <PropertiesTable
   content={[
-  {
-    name: 'runId',
-    type: 'string',
-    isOptional: true,
-    description: '此次執行的唯一識別碼。稍後可配合 `resume()` 或 `observe()` 使用。',
-  },
-  {
-    name: 'instructions',
-    type: "AgentExecutionOptions['instructions']",
-    isOptional: true,
-    description: '覆寫 Agent 在此次執行的預設指示。接受靜態字串，或 Agent 所支援的相同動態指示值。',
-  },
-  {
-    name: 'context',
-    type: 'ModelMessage[]',
-    isOptional: true,
-    description: '提供予 Agent 的額外內容訊息。',
-  },
-  {
-    name: 'memory',
-    type: 'object',
-    isOptional: true,
-    description: '用於保存及擷取對話的記憶體設定。',
-  },
-  {
-    name: 'requestContext',
-    type: 'RequestContext',
-    isOptional: true,
-    description: '承載此次執行動態設定及狀態的請求內容。',
-  },
-  {
-    name: 'maxSteps',
-    type: 'number',
-    isOptional: true,
-    description: '此串流可執行的最大步驟數目。',
-  },
-  {
-    name: 'toolsets',
-    type: 'object',
-    isOptional: true,
-    description: '此次執行可用的額外 Tool 集合。',
-  },
-  {
-    name: 'clientTools',
-    type: 'object',
-    isOptional: true,
-    description: '執行期間可用的客戶端 Tool。',
-  },
-  {
-    name: 'toolChoice',
-    type: "'auto' | 'none' | 'required' | { type: 'tool'; toolName: string }",
-    isOptional: true,
-    description: 'Tool 選擇策略。',
-  },
-  {
-    name: 'activeTools',
-    type: 'string[]',
-    isOptional: true,
-    description: '將執行限制於 Agent Tool 中指定名稱的子集。',
-  },
-  {
-    name: 'modelSettings',
-    type: 'object',
-    isOptional: true,
-    description:
-      '模型專用設定，例如 temperature。已序列化的快照跨越程序邊界前，會移除含有憑證的 header（`Authorization`、`X-Api-Key` 及同類 header）。',
-  },
-  {
-    name: 'stopWhen',
-    type: "AgentExecutionOptions['stopWhen']",
-    isOptional: true,
-    description:
-      '提早結束 Agent 迴圈的 predicate 或組合。closure 存放於程序內的執行 registry；跨程序恢復時只會降級使用 `maxSteps`。',
-  },
-  {
-    name: 'system',
-    type: 'string | string[]',
-    isOptional: true,
-    description: '附加於 Agent 指示之後、使用者訊息之前的額外系統訊息。',
-  },
-  {
-    name: 'requireToolApproval',
-    type: 'boolean | ((args: { toolName: string; args: unknown; requestContext: RequestContext; workspace?: string }) => boolean | Promise<boolean>)',
-    isOptional: true,
-    description:
-      '要求批准 Tool 呼叫。傳入 `true` 或 `false` 以管制全部或完全不管制，亦可傳入函式以設定逐次呼叫政策。函式形式的政策存放於程序內的執行 registry；跨程序恢復時會退回使用值為 `true` 的影子設定。',
-  },
-  {
-    name: 'autoResumeSuspendedTools',
-    type: 'boolean',
-    isOptional: true,
-    description: '自動恢復已暫停的 Tool，而非等候外部 `resume()` 呼叫。',
-  },
-  {
-    name: 'toolCallConcurrency',
-    type: 'number',
-    isOptional: true,
-    description: '可並行執行的 Tool 呼叫數目上限。',
-  },
-  {
-    name: 'includeRawChunks',
-    type: 'boolean',
-    isOptional: true,
-    description: '在串流輸出中包含原始 Provider 資料區塊。',
-  },
-  {
-    name: 'maxProcessorRetries',
-    type: 'number',
-    isOptional: true,
-    description: '每次生成中，處理器可重試的最大次數。',
-  },
-  {
-    name: 'structuredOutput',
-    type: 'object',
-    isOptional: true,
-    description: '結構化輸出設定。',
-  },
-  {
-    name: 'untilIdle',
-    type: 'boolean | { maxIdleMs?: number }',
-    isOptional: true,
-    description:
-      '設定後，跨背景工作延續期間會保持串流開啟，直至 Agent 閒置。傳入 `true` 可使用預設 5 分鐘閒置逾時，亦可傳入 `{ maxIdleMs }` 自訂。等同已棄用的 `streamUntilIdle()` 方法。`resume()` 亦支援此選項。',
-  },
-  {
-    name: 'disableBackgroundTasks',
-    type: 'boolean',
-    isOptional: true,
-    description: '停用此次執行的背景工作分派。符合背景執行資格的 Tool 會改為內嵌執行。',
-  },
-  {
-    name: 'tracingOptions',
-    type: "AgentExecutionOptions['tracingOptions']",
-    isOptional: true,
-    description:
-      '轉送至 Agent 及模型 span 的 Trace metadata、標籤、Trace ID、父 span ID 及 `requestContextKeys`。完全可序列化為 JSON。',
-  },
-  {
-    name: 'actor',
-    type: "AgentExecutionOptions['actor']",
-    isOptional: true,
-    description: '轉送至 FGA 檢查及 Tool 執行的逐次呼叫 actor 訊號。',
-  },
-  {
-    name: 'transform',
-    type: "AgentExecutionOptions['transform']",
-    isOptional: true,
-    description:
-      '逐次叫用的 Tool payload 轉換政策。`transformToolPayload` closure 存放於程序內的執行 registry；只會序列化可安全用於 JSON 的 `targets` 影子設定。',
-  },
-  {
-    name: 'prepareStep',
-    type: "AgentExecutionOptions['prepareStep']",
-    isOptional: true,
-    description:
-      '在每次反覆運算開始時，以 `PrepareStepProcessor` 叫用的逐步準備 hook。只限 closure，並儲存於程序內的執行 registry。跨程序恢復會失去此 hook。',
-  },
-  {
-    name: 'isTaskComplete',
-    type: "AgentExecutionOptions['isTaskComplete']",
-    isOptional: true,
-    description:
-      '逐次呼叫的完成政策。Scorer 實例及 `onComplete` 存放於程序內的執行 registry；可安全用於 JSON 的 primitive（`strategy`、`timeout`、`parallel`、`suppressFeedback`、`scorerNames`）會序列化，以供跨程序觀察。',
-  },
-  {
-    name: 'delegation',
-    type: "AgentExecutionOptions['delegation']",
-    isOptional: true,
-    description:
-      '子 Agent 委派 hook（`onDelegationStart`、`onDelegationComplete`、`messageFilter`）。準備時，callback 會嵌入子 Agent 的 Tool wrapper。跨程序恢復會失去這些 callback。',
-  },
-  {
-    name: 'versions',
-    type: 'object',
-    isOptional: true,
-    description: '子 Agent 委派的版本覆寫。',
-  },
-  {
-    name: 'abortSignal',
-    type: 'AbortSignal',
-    isOptional: true,
-    description:
-      '外部中止訊號。訊號會轉送至持久執行的內部 `AbortController`，因此任何一方都可取消執行。跨程序恢復無法復原訊號；如需在恢復後保留中止能力，請向 `resume()` 傳入新訊號。',
-  },
-  {
-    name: 'onChunk',
-    type: '(chunk: ChunkType) => void | Promise<void>',
-    isOptional: true,
-    description: '每個串流資料區塊都會呼叫。',
-  },
-  {
-    name: 'onStepFinish',
-    type: '(result: AgentStepFinishEventData) => void | Promise<void>',
-    isOptional: true,
-    description: 'Agent 迴圈中的步驟完成時呼叫。',
-  },
-  {
-    name: 'onFinish',
-    type: '(result: AgentFinishEventData) => void | Promise<void>',
-    isOptional: true,
-    description: '執行完成時呼叫。',
-  },
-  {
-    name: 'onError',
-    type: '(error: Error) => void | Promise<void>',
-    isOptional: true,
-    description: '執行發生錯誤時呼叫。',
-  },
-  {
-    name: 'onSuspended',
-    type: '(data: AgentSuspendedEventData) => void | Promise<void>',
-    isOptional: true,
-    description: '執行暫停時呼叫，例如等候 Tool 批准。',
-  },
-  {
-    name: 'onAbort',
-    type: "AgentExecutionOptions['onAbort']",
-    isOptional: true,
-    description: '透過 `abortSignal` 或 `result.abort()` 中止執行時呼叫。',
-  },
-  {
-    name: 'onIterationComplete',
-    type: "AgentExecutionOptions['onIterationComplete']",
-    isOptional: true,
-    description:
-      '每次 Agent 迴圈反覆運算後呼叫，並提供最新的 `messageList`、`finishReason` 及 `isFinal` 旗標。在持久 Agent 上只供觀察：傳回 `continue: false` 或意見回饋不會影響迴圈。',
-  },
+{
+  name: 'options.force',
+  type: 'boolean',
+  isOptional: true,
+  defaultValue: 'false',
+  description:
+    'Take the run over even while another execution holds it. That execution loses the run and stops, and streams for the run drop the events it still publishes. Its writes are rejected when the storage adapter supports [run fencing](/docs/harness/durable-agents#run-ownership). Tools still running in that execution can finish, so the same tool call can run twice. See [make tools safe to repeat](/docs/harness/durable-agents#make-tools-safe-to-repeat).',
+},
 ]}
 />
 
-`resume()` 及 `observe()` 接受相同的生命週期 callback（`onChunk`、`onStepFinish`、`onFinish`、`onError`、`onSuspended`）。`observe()` 亦接受 `offset`，以控制重播的開始位置。
+返回：[`Promise<DurableAgentStreamResult>`](#durableagentstreamresult)
 
-## DurableAgentStreamResult {/* #durableagentstreamresult */}
+## 串流媒體選項 {/* #stream-options */}
 
-由 `stream()`、`resume()`、`observe()` 及 `recover()` 傳回的物件。
+`stream()`接受一個`DurableAgentStreamOptions` object. It supports the agent execution options below, plus lifecycle callbacks.
+
+<PropertiesTable
+  content={[
+{
+  name: 'runId',
+  type: 'string',
+  isOptional: true,
+  description: 'Unique identifier for this run. Use it later with `resume()`, `observe()`, or `abortRunStream()`.',
+},
+{
+  name: 'instructions',
+  type: "AgentExecutionOptions['instructions']",
+  isOptional: true,
+  description:
+    "Overrides the agent's default instructions for this run. Accepts a static string or the same dynamic instructions value the agent supports.",
+},
+{
+  name: 'context',
+  type: 'ModelMessage[]',
+  isOptional: true,
+  description: 'Additional context messages to provide to the agent.',
+},
+{
+  name: 'memory',
+  type: 'object',
+  isOptional: true,
+  description: 'Memory configuration for conversation persistence and retrieval.',
+},
+{
+  name: 'requestContext',
+  type: 'RequestContext',
+  isOptional: true,
+  description: 'Request context carrying dynamic configuration and state for this run.',
+},
+{
+  name: 'maxSteps',
+  type: 'number',
+  isOptional: true,
+  description: 'Maximum number of steps to run for this stream.',
+},
+{
+  name: 'toolsets',
+  type: 'object',
+  isOptional: true,
+  description: 'Additional tool sets available for this run.',
+},
+{
+  name: 'clientTools',
+  type: 'object',
+  isOptional: true,
+  description: 'Client-side tools available during execution.',
+},
+{
+  name: 'toolChoice',
+  type: "'auto' | 'none' | 'required' | { type: 'tool'; toolName: string }",
+  isOptional: true,
+  description: 'Tool selection strategy.',
+},
+{
+  name: 'activeTools',
+  type: 'string[]',
+  isOptional: true,
+  description: "Restricts execution to the named subset of the agent's tools.",
+},
+{
+  name: 'modelSettings',
+  type: 'object',
+  isOptional: true,
+  description:
+    'Model-specific settings such as temperature. Credential-bearing headers (`Authorization`, `X-Api-Key`, and similar) are stripped from the serialized snapshot before it crosses process boundaries.',
+},
+{
+  name: 'stopWhen',
+  type: "AgentExecutionOptions['stopWhen']",
+  isOptional: true,
+  description:
+    'Predicate or composition that ends the agentic loop early. If it throws, `fullStream` rejects without emitting a `step-finish` or `error` chunk. Durable transports preserve the error name and message, but not its stack, cause, or subclass identity. The closure rides on the in-process run registry; cross-process resumes degrade to `maxSteps` only.',
+},
+{
+  name: 'system',
+  type: 'string | string[]',
+  isOptional: true,
+  description: 'Additional system message appended after the agent instructions and before user messages.',
+},
+{
+  name: 'requireToolApproval',
+  type: 'boolean | ((args: { toolName: string; args: unknown; requestContext: RequestContext; workspace?: string }) => boolean | Promise<boolean>)',
+  isOptional: true,
+  description:
+    'Require approval for tool calls. Pass `true` or `false` to gate all or none, or a function for per-call policy. Function-form policies live on the in-process run registry; cross-process resumes fall back to a `true` shadow.',
+},
+{
+  name: 'autoResumeSuspendedTools',
+  type: 'boolean',
+  isOptional: true,
+  description: 'Automatically resume tools that suspended, instead of waiting for an external `resume()` call.',
+},
+{
+  name: 'closeOnSuspend',
+  type: 'boolean',
+  isOptional: true,
+  defaultValue: 'false',
+  description:
+    'When `true`, close the stream when the run suspends (for example for tool approval) so `fullStream`, `text`, and `getFullOutput()` resolve at the suspension boundary instead of staying open, matching non-durable `Agent.stream()`. Useful for callers such as AG-UI or A2A that need the stream to end. Defaults to `false`, which keeps the stream open across suspension so a later resume can continue streaming on the same reader. `resume()`/`resumeStream()` always return a fresh stream.',
+},
+{
+  name: 'toolCallConcurrency',
+  type: 'number',
+  isOptional: true,
+  description: 'Maximum number of tool calls to execute concurrently.',
+},
+{
+  name: 'includeRawChunks',
+  type: 'boolean',
+  isOptional: true,
+  description: 'Include raw provider chunks in the stream output.',
+},
+{
+  name: 'maxProcessorRetries',
+  type: 'number',
+  isOptional: true,
+  description: 'Maximum number of processor retries per generation.',
+},
+{
+  name: 'structuredOutput',
+  type: 'object',
+  isOptional: true,
+  description: 'Structured output configuration.',
+},
+{
+  name: 'untilIdle',
+  type: 'boolean | { maxIdleMs?: number }',
+  isOptional: true,
+  description:
+    'When set, keeps the stream open across background-task continuations until the agent is idle. Pass `true` for the default 5-minute idle timeout, or `{ maxIdleMs }` to customise. Equivalent to the deprecated `streamUntilIdle()` method. Also supported on `resume()`.',
+},
+{
+  name: 'disableBackgroundTasks',
+  type: 'boolean',
+  isOptional: true,
+  description: 'Disable background-task dispatch for this run. Background-eligible tools execute inline instead.',
+},
+{
+  name: 'tracingOptions',
+  type: "AgentExecutionOptions['tracingOptions']",
+  isOptional: true,
+  description:
+    'Tracing metadata, tags, trace ID, parent span ID, and `requestContextKeys` forwarded to the agent and model spans. Fully JSON-serializable.',
+},
+{
+  name: 'actor',
+  type: "AgentExecutionOptions['actor']",
+  isOptional: true,
+  description: 'Per-call actor signal forwarded to FGA checks and tool execution.',
+},
+{
+  name: 'transform',
+  type: "AgentExecutionOptions['transform']",
+  isOptional: true,
+  description:
+    'Per-invocation tool payload transform policy. The `transformToolPayload` closure lives on the in-process run registry; only the JSON-safe `targets` shadow is serialized. Recovery after a process restart cannot restore the closure. For crash-survivable transcript transforms, configure `transform.transcript` on the tool with `createTool()` so the durable worker can re-resolve it from the registered tool.',
+},
+{
+  name: 'prepareStep',
+  type: "AgentExecutionOptions['prepareStep']",
+  isOptional: true,
+  description:
+    'Per-step preparation hook invoked as a `PrepareStepProcessor` at the start of every iteration. Closure-only — stored on the in-process run registry. Cross-process resumes lose the hook.',
+},
+{
+  name: 'isTaskComplete',
+  type: "AgentExecutionOptions['isTaskComplete']",
+  isOptional: true,
+  description:
+    'Per-call completion policy. Scorer instances and `onComplete` live on the in-process run registry; the JSON-safe primitives (`strategy`, `timeout`, `parallel`, `suppressFeedback`, `scorerNames`) are serialized for cross-process observability.',
+},
+{
+  name: 'delegation',
+  type: "AgentExecutionOptions['delegation']",
+  isOptional: true,
+  description:
+    "Sub-agent delegation hooks (`onDelegationStart`, `onDelegationComplete`, `messageFilter`). Callbacks passed per call are baked into the sub-agent tool wrappers at prepare time, and cross-process resumes lose them, so a fresh worker falls back to default delegation behavior. Hooks configured in the agent's `defaultOptions.delegation` are merged back in when recovery rebuilds tools, so put hooks that must survive a restart there.",
+},
+{
+  name: 'versions',
+  type: 'object',
+  isOptional: true,
+  description: 'Version overrides for sub-agent delegation.',
+},
+{
+  name: 'abortSignal',
+  type: 'AbortSignal',
+  isOptional: true,
+  description:
+    "External abort signal. Forwarded to the durable run's internal `AbortController`, so either source can cancel the run. Cross-process resumes cannot recover the signal — pass a fresh one to `resume()` if you need post-resume abortability.",
+},
+{
+  name: 'onChunk',
+  type: '(chunk: ChunkType) => void | Promise<void>',
+  isOptional: true,
+  description: 'Called for each streamed chunk.',
+},
+{
+  name: 'onStepFinish',
+  type: '(result: AgentStepFinishEventData) => void | Promise<void>',
+  isOptional: true,
+  description: 'Called when a step in the agentic loop finishes.',
+},
+{
+  name: 'onFinish',
+  type: '(result: AgentFinishEventData) => void | Promise<void>',
+  isOptional: true,
+  description: 'Called when the run completes successfully. Aborted runs call `onAbort`; failed runs call `onError`.',
+},
+{
+  name: 'onError',
+  type: '(error: Error) => void | Promise<void>',
+  isOptional: true,
+  description: 'Called when the run errors.',
+},
+{
+  name: 'onSuspended',
+  type: '(data: AgentSuspendedEventData) => void | Promise<void>',
+  isOptional: true,
+  description: 'Called when the run suspends, for example for tool approval.',
+},
+{
+  name: 'onAbort',
+  type: "AgentExecutionOptions['onAbort']",
+  isOptional: true,
+  description:
+    'Called when the run is aborted via `abortSignal`, `result.abort()`, `abortRunStream()`, or `abortThreadStream()`. Receives the steps completed before the abort and, in `text`, the assistant text streamed so far.',
+},
+{
+  name: 'onIterationComplete',
+  type: "AgentExecutionOptions['onIterationComplete']",
+  isOptional: true,
+  description:
+    'Called after every agentic-loop iteration with the latest `messageList`, `finishReason`, and `isFinal` flag. Return `continue: true` to request another iteration or `continue: false` to stop. Feedback is added as a synthetic assistant message when the loop runs another iteration. If the model has stopped, feedback alone or `continue: false` with feedback does not start another iteration. When the loop was already going to continue, `continue: false` with feedback runs one final feedback-guided iteration before stopping.',
+},
+]}
+/>
+
+`resume()`, `observe()`, and `recover()` accept the same lifecycle callbacks (`onChunk`, `onStepFinish`, `onFinish`, `onError`, `onAbort`, `onSuspended`). `observe()` also accepts an `offset` to control where replay starts.
+
+## 持久Agent流結果 {/* #durableagentstreamresult */}
+
+傳回的對象`stream()`, `resume()`, `observe()`, and `recover()`.
 
 ```typescript
 interface DurableAgentStreamResult<OUTPUT = undefined> {
@@ -641,50 +891,50 @@ interface DurableAgentStreamResult<OUTPUT = undefined> {
 
 <PropertiesTable
   content={[
-  {
-    name: 'output',
-    type: 'MastraModelOutput',
-    description: '串流輸出。等候 `output.text` 可取得完整文字，亦可取用 `output.fullStream`。',
-  },
-  {
-    name: 'fullStream',
-    type: 'ReadableStream',
-    description: '完整事件串流，委派至 `output.fullStream`。',
-  },
-  {
-    name: 'runId',
-    type: 'string',
-    description: '唯一執行 ID。將它傳入 `resume()` 或 `observe()` 以重新連線。',
-  },
-  {
-    name: 'threadId',
-    type: 'string',
-    isOptional: true,
-    description: '使用記憶體時的 thread ID。',
-  },
-  {
-    name: 'resourceId',
-    type: 'string',
-    isOptional: true,
-    description: '使用記憶體時的資源 ID。',
-  },
-  {
-    name: 'cleanup',
-    type: '() => void',
-    description: '取消訂閱 PubSub，並清除該次執行的 registry 項目。完成執行後請呼叫此函式。',
-  },
-  {
-    name: 'abort',
-    type: '() => void',
-    description:
-      '透過切換內部 `AbortController` 中止執行。這會在持久 LLM 執行步驟內顯示為 `AbortError`，並觸發 `onAbort` callback。執行完成後呼叫亦屬安全；在此情況下不會進行任何操作。',
-  },
+{
+  name: 'output',
+  type: 'MastraModelOutput',
+  description: 'The streaming output. Await `output.text` for the full text, or consume `output.fullStream`.',
+},
+{
+  name: 'fullStream',
+  type: 'ReadableStream',
+  description: 'The full event stream, delegating to `output.fullStream`.',
+},
+{
+  name: 'runId',
+  type: 'string',
+  description: 'The unique run ID. Pass it to `resume()` or `observe()` to reconnect.',
+},
+{
+  name: 'threadId',
+  type: 'string',
+  isOptional: true,
+  description: 'Thread ID when using memory.',
+},
+{
+  name: 'resourceId',
+  type: 'string',
+  isOptional: true,
+  description: 'Resource ID when using memory.',
+},
+{
+  name: 'cleanup',
+  type: '() => void',
+  description: 'Unsubscribes from PubSub and clears registry entries for the run. Call it when done with the run.',
+},
+{
+  name: 'abort',
+  type: '() => void',
+  description:
+    'Aborts the run by flipping the internal `AbortController`. Surfaces as an `AbortError` inside the durable LLM-execution step and fires the `onAbort` callback. Safe to call after the run has finished — a no-op in that case.',
+},
 ]}
 />
 
-## 相關內容 {/* #related */}
+## 有關的 {/* #related */}
 
-- [`createInngestAgent()`](/reference/agents/inngest-agent)
-- [Agent 類別](/reference/agents/agent)
-- [PubSub](/docs/server/pubsub)
-- [`.getMemory()`](/reference/agents/getMemory)
+* [`createInngestAgent()`](/reference/agents/inngest-agent)
+* [Agent類](/reference/agents/agent)
+* [發布訂閱](/docs/server/pubsub)
+* [`.getMemory()`](/reference/agents/getMemory)

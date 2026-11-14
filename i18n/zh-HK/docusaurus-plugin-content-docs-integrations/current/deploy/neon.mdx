@@ -1,0 +1,196 @@
+---
+title: "Neon | Deploy"
+description: "Deploy a Mastra server as a long-running Neon Function, configure a Hono fetch handler, branch environment variables, build output, and public access."
+---
+
+import Steps from "@site/src/components/Steps";
+import StepItem from "@site/src/components/StepItem";
+
+# 氖
+
+將您的 Mastra 伺服器部署為[Neon Function](https://neon.com/docs/compute/functions/overview)（一個長期運行的 Node.js 進程）在您的 Neon 分支上。該函數獲取公共 HTTPS URL 並`DATABASE_URL`從分支的 Postgres 資料庫注入。
+
+霓虹燈功能是`fetch` handler. This guide uses the [Hono server adapter](/docs/server/server-adapters) rather than `mastra build` / `mastra start`。如果您使用的是[網路框架](/docs/deployment/web-framework)，按照您通常為該框架部署的方式進行部署。
+
+Neon Functions 處於測試階段，僅在 AWS 美國東部（俄亥俄州）可用（`aws-us-east-2`). You'll need to create your project in that region.
+
+## 開始之前 {/* #before-you-begin */}
+
+你需要：
+
+* 一個[Mastra application](/docs)
+* 一個[Neon](https://neon.com) account
+* 一個霓虹燈項目`aws-us-east-2`
+* Node.js`v22.13.0` or later
+
+Neon 函數可以驅逐空閒隔離，因此記憶體和本地文件儲存會遺失。使用[PostgresStore with Neon](/integrations/databases/neon) instead of [LibSQLStore](/integrations/databases/libsql) with a file URL. For workspace files, use [Neon Object Storage](/integrations/file-storage/neon) instead of [`LocalFilesystem`](/reference/workspace/local-filesystem).
+
+## 安裝 {/* #installation */}
+
+安裝[Neon CLI](https://neon.com/docs/cli/install):
+
+```bash npm2yarn
+npm install -g neon
+```
+
+新增 Hono 適配器、Hono 和`@neon/config`:
+
+```bash npm2yarn
+npm install @mastra/hono@latest hono @neon/config
+```
+
+## 配置`neon.ts` {/* #configure-neonts */}
+
+在專案的根目錄下，建立一個名為`neon.ts`. `neon deploy` and `neon dev` read this file:
+
+```typescript title="neon.ts"
+import { defineConfig } from '@neon/config/v1'
+
+export default defineConfig({
+  preview: {
+    aiGateway: true,
+    functions: {
+      mastra: {
+        name: 'Mastra server',
+        source: './src/index.ts',
+      },
+    },
+  },
+})
+```
+
+物件鍵 (`mastra`) is the function slug. It can't be renamed after the first deploy.
+
+`aiGateway: true`規定[Neon AI Gateway](/models/gateways/neon) on the branch. `neon deploy` injects `NEON_AI_GATEWAY_BASE_URL` and `NEON_AI_GATEWAY_TOKEN`. Mastra reads those variables for `neon/` model ids.
+
+對於提供者 API 金鑰而不是網關，請在函數的下方聲明它`env` field and use that provider's model id, not a `neon/` id. Values are read from `process.env` when `neon deploy` runs:
+
+```typescript title="neon.ts"
+import { defineConfig } from '@neon/config/v1'
+
+export default defineConfig({
+  preview: {
+    functions: {
+      mastra: {
+        name: 'Mastra server',
+        source: './src/index.ts',
+        env: {
+          OPENAI_API_KEY: process.env.OPENAI_API_KEY!,
+        },
+      },
+    },
+  },
+})
+```
+
+```bash
+neon deploy --env .env
+```
+
+`--env`載入檔案以進行配置評估。僅列出的鍵`env` are deployed. See [Neon Functions environment variables](https://neon.com/docs/compute/functions/environment-variables).
+
+## 導出 Hono 取得處理程序 {/* #export-a-hono-fetch-handler */}
+
+接線[Hono adapter](/reference/server/hono-adapter) and export the app. Neon Functions invoke the default export's `fetch` method.
+
+```typescript title="src/index.ts"
+import { Hono } from 'hono'
+import { HonoBindings, HonoVariables, MastraServer } from '@mastra/hono'
+import { mastra } from './mastra'
+
+const app = new Hono<{ Bindings: HonoBindings; Variables: HonoVariables }>()
+const server = new MastraServer({ app, mastra })
+
+await server.init()
+
+export default app
+```
+
+註冊Agent`mastra` instance in `src/mastra/index.ts`.
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core/mastra'
+import { Agent } from '@mastra/core/agent'
+
+const assistant = new Agent({
+  id: 'assistant',
+  name: 'Assistant',
+  instructions: 'You are a helpful assistant',
+  model: 'neon/claude-fable-5',
+})
+
+export const mastra = new Mastra({
+  agents: { assistant },
+})
+```
+
+請參閱[Neon AI Gateway](/models/gateways/neon) for the model list.
+
+## 部署 {/* #deploy */}
+
+<Steps>
+  <StepItem>
+    從專案目錄中，連結現有 Neon 專案（或建立一個）：
+
+    ```bash
+    neon link
+    ```
+
+    `neon link`將項目上下文寫入`.neon` and pulls the current branch's environment variables.
+  </StepItem>
+
+  <StepItem>
+    部署功能：
+
+    ```bash
+    neon deploy
+    ```
+
+    CLI 將處理程序與 esbuild 捆綁在一起，上傳它，然後等待部署狀態為`completed`. If you declared function `env` values, pass `--env <file>` so `neon.ts` can read them.
+  </StepItem>
+
+  <StepItem>
+    取得公共網址：
+
+    ```bash
+    neon functions get mastra
+    ```
+
+    這`invocation_url` looks like `https://<branch-id>-mastra.compute.<cell>.us-east-2.aws.neon.tech/`.
+  </StepItem>
+
+  <StepItem>
+    驗證部署`https://<branch-id>-mastra.compute.<cell>.us-east-2.aws.neon.tech/api/agents`, which should return a JSON list of your agents.
+
+    由於 Mastra 伺服器為每個 API 端點添加前綴`/api`, add it to your URLs when making requests.
+
+    `DATABASE_URL`從分支注入。網關憑證在以下情況下注入`aiGateway: true` is set in `neon.ts`.
+  </StepItem>
+
+  <StepItem>
+    現在您可以透過 HTTP 呼叫 Mastra 端點。
+
+    :::警告
+    設定[authentication](/docs/auth/overview) before exposing your endpoints publicly. The function URL is public; see [Neon Functions authentication](https://neon.com/docs/compute/functions/authentication).
+    :::
+  </StepItem>
+</Steps>
+
+## 當地發展 {/* #local-development */}
+
+`neon dev`服務於中聲明的每個函數`neon.ts` with hot reload, and injects the linked branch's environment variables:
+
+```bash
+neon dev
+```
+
+Mastra 伺服器位於`http://localhost:8787/api/agents`.
+
+## 有關的 {/* #related */}
+
+* [霓虹燈功能](https://neon.com/docs/compute/functions/overview)
+* [榮譽適配器](/reference/server/hono-adapter)
+* [霓虹燈 Postgres](/integrations/databases/neon)
+* [Neon 物件存儲](/integrations/file-storage/neon)
+* [霓虹人工智慧網關](/models/gateways/neon)
+* [with-mastra 範例](https://github.com/neondatabase/examples/tree/main/with-mastra)

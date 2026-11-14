@@ -1,0 +1,341 @@
+---
+title: "Fine-Grained Authorization (FGA) | Auth"
+description: "Configure Mastra Fine-Grained Authorization for resource-level permissions that map routes to actions and scope stored resources for enterprise users."
+packages:
+  - "@mastra/auth-workos"
+  - "@mastra/core"
+  - "@mastra/mcp"
+---
+
+# 细粒度授权 (FGA)
+
+：：：笔记
+
+FGA 在生产中需要 Mastra 企业版 (EE) 许可证。它在开发过程中无需许可证即可运行。看[what requires an EE license](/docs/license#what-requires-an-ee-license). [联系销售人员](https://mastra.ai/contact)了解更多信息。
+
+:::
+
+细粒度授权 (FGA) 为您的 Mastra 应用程序添加了资源级权限检查。 RBAC 回答“这个角色可以执行此操作吗？”，FGA 回&#x7B54;**"can this user do this action on this specific resource?"**
+
+## 何时使用 FGA {/* #when-to-use-fga */}
+
+FGA 专为多租户 B2B 产品而设计，其中权限与上下文相关：
+
+* 用户可能是**admin** of Team A but only a **member** of Team B
+* 线程访问应仅限于用户自己的组织
+* Workflow程执行范围应限于特定团队或项目
+* Tool访问取决于用户与资源的关系
+
+## 配置 {/* #configuration */}
+
+在 Mastra 服务器配置中配置 FGA 以及身份验证和 RBAC：
+
+```typescript
+import { Mastra } from '@mastra/core/mastra'
+import { MastraFGAPermissions } from '@mastra/core/auth/ee'
+import { MastraAuthWorkos, MastraFGAWorkos } from '@mastra/auth-workos'
+
+const mastra = new Mastra({
+  server: {
+    auth: new MastraAuthWorkos({
+      /* ... */
+      fetchMemberships: true,
+      mapUserToResourceId: user => user.teamId,
+    }),
+    fga: new MastraFGAWorkos({
+      resourceMapping: {
+        agent: { fgaResourceType: 'team', deriveId: ctx => ctx.user.teamId },
+        workflow: { fgaResourceType: 'team', deriveId: ctx => ctx.user.teamId },
+        thread: { fgaResourceType: 'workspace-thread', deriveId: ({ resourceId }) => resourceId },
+      },
+      permissionMapping: {
+        [MastraFGAPermissions.AGENTS_EXECUTE]: 'manage-workflows',
+        [MastraFGAPermissions.WORKFLOWS_EXECUTE]: 'manage-workflows',
+        [MastraFGAPermissions.MEMORY_READ]: 'read',
+        [MastraFGAPermissions.MEMORY_WRITE]: 'update',
+      },
+    }),
+    storedResources: {
+      scope: true,
+    },
+  },
+})
+```
+
+使用时`MastraFGAWorkos`, set `fetchMemberships: true` on `MastraAuthWorkos`. WorkOS FGA checks need the user's organization memberships to resolve the correct membership ID for authorization.
+
+使用`thread` as the resource-mapping key for memory authorization. `MastraFGAWorkos` still accepts the legacy alias `memory`, but new configs should prefer `thread`.
+
+什么时候`server.fga` is configured, Mastra enforces FGA on protected actions. If a protected action has no authenticated user, Mastra denies it. If `server.fga` isn't configured, these FGA checks are skipped and Mastra keeps the previous behavior.
+
+### 资源映射 {/* #resource-mapping */}
+
+这`resourceMapping` tells Mastra how to resolve FGA resource types and IDs from request context. Keys are Mastra resource types, values define the FGA resource type and how to derive the ID:
+
+```typescript oxfmt:false
+resourceMapping: {
+  // When checking "can user execute agent X?", resolve the FGA resource
+  // as the user's team (type: 'team', id: user.teamId)
+  agent: {
+    fgaResourceType: 'team',
+    deriveId: (ctx) => ctx.user.teamId,
+  },
+}
+```
+
+`deriveId()`收到：
+
+* `user`：经过身份验证的用户
+* `resourceId`：拥有的 Mastra 资源 ID（如果可用）（例如，线程的`resourceId`)
+* `requestContext`：高级租户解析的当前请求上下文
+
+返回`undefined` from `deriveId()` to fall back to the original Mastra resource ID.
+
+对于线程和内存检查，Mastra 仍然通过原始`threadId` as the resource being checked, but it also forwards the thread's owning `resourceId` into `deriveId()`. This lets you map thread permissions to composite tenant IDs such as `userId-teamId-orgId`.
+
+### 权限映射 {/* #permission-mapping */}
+
+这`permissionMapping` translates Mastra's internal permission strings to your FGA provider's permission slugs:
+
+```typescript oxfmt:false
+import { MastraFGAPermissions } from '@mastra/core/auth/ee';
+
+permissionMapping: {
+  [MastraFGAPermissions.AGENTS_EXECUTE]: 'manage-workflows', // Mastra permission -> WorkOS permission slug
+  [MastraFGAPermissions.MEMORY_READ]: 'read',
+}
+```
+
+如果权限不存在映射，则传递原始字符串。
+
+使用`validatePermissions()` to validate the full set of permissions Mastra may emit at startup. Use this when a provider requires every Mastra permission to have an explicit provider permission slug.
+
+### 存储资源范围 {/* #stored-resource-scoping */}
+
+FGA 授权对资源的访问。它不会自动过滤共享存储中的存储记录。当在多租户应用程序中使用内置存储资源 API 时，启用存储资源范围。
+
+```typescript
+const mastra = new Mastra({
+  server: {
+    auth: new MastraAuthWorkos({
+      /* ... */
+      mapUserToResourceId: user => user.teamId,
+    }),
+    storedResources: {
+      scope: true,
+    },
+  },
+})
+```
+
+和`scope: true`, Mastra reads `MASTRA_RESOURCE_ID_KEY` from the request context. `mapUserToResourceId()` sets this value after authentication. Stored resource handlers persist the scope in record metadata and filter list, read, update, publish, and delete operations by that scope.
+
+当范围需要自定义请求逻辑时使用对象：
+
+```typescript oxfmt:false
+storedResources: {
+  scope: {
+    metadataKey: 'teamId',
+    resolve: ({ user }) => user.teamId,
+    requireScope: true,
+  },
+},
+```
+
+如果`requireScope` is `true` or omitted, scoped stored resource routes fail when no scope can be resolved.
+
+### 航线政策覆盖范围 {/* #route-policy-coverage */}
+
+Mastra 包括用于内置资源路由的路由级 FGA 元数据，包括Agent、Workflow、Tool、MCP Tool、内存线程、响应、对话和存储的资源。存储资源路由覆盖范围包括`/stored/agents`, `/stored/mcp-clients`, `/stored/prompt-blocks`, `/stored/scorers`, `/stored/skills`, and `/stored/workspaces`. A route is checked when it has route-level `fga` metadata, when Mastra can derive built-in metadata for that route, or when the provider supplies metadata with `resolveRouteFGA()`.
+
+要拒绝不解析 FGA 元数据的受保护路由，请在 FGA 提供程序上配置路由策略覆盖范围：
+
+```typescript
+const fga = new MastraFGAWorkos({
+  resourceMapping: {
+    project: { fgaResourceType: 'project' },
+  },
+  permissionMapping: {
+    'projects:read': 'read',
+  },
+  requireForProtectedRoutes: true,
+  auditProtectedRoutes: 'warn',
+  validatePermissions: async permissions => {
+    // Throw if a Mastra permission is missing from permissionMapping.
+  },
+})
+```
+
+放`auditProtectedRoutes: 'error'` to fail startup when protected routes are missing built-in FGA metadata. If `requireForProtectedRoutes` is enabled, Mastra logs this audit as a warning by default.
+
+对于自定义路由，首选路由级别`fga` metadata. This keeps authorization policy next to the route:
+
+```typescript
+import { createRoute } from '@mastra/server/server-adapter'
+
+export const getProjectRoute = createRoute({
+  method: 'GET',
+  path: '/projects/:projectId',
+  responseType: 'json',
+  requiresAuth: true,
+  fga: {
+    resourceType: 'project',
+    resourceIdParam: 'projectId',
+    permission: 'projects:read',
+  },
+  handler: async () => {
+    return { project: null }
+  },
+})
+```
+
+使用`resolveRouteFGA()` only when route metadata must be derived centrally from route, params, or request context. A route map scales better than string-prefix checks:
+
+```typescript
+import type { FGARouteConfig, FGARouteResolver } from '@mastra/core/auth/ee'
+
+const routeFGA = {
+  'GET /billing/:accountId': {
+    resourceType: 'account',
+    resourceIdParam: 'accountId',
+    permission: 'billing:read',
+  },
+} satisfies Record<string, FGARouteConfig>
+
+const resolveRouteFGA: FGARouteResolver = ({ route }) => routeFGA[`${route.method} ${route.path}`]
+
+const fga = new MastraFGAWorkos({
+  /* ... */
+  resolveRouteFGA,
+})
+```
+
+## 执行点 {/* #enforcement-points */}
+
+配置 FGA 提供程序后，Mastra 会自动在这些生命周期点检查授权：
+
+|生命周期点|已检查权限 |资源类型|资源 ID |
+| - | - | - | - |
+|Agent执行（`generate`, `stream`) | `agents:execute` | `agent` | `agentId` |
+| Built-in workflow HTTP execution routes and `Workflow.execute()` | `workflows:execute` | `workflow` | `workflowId` |
+| Standalone tool execution | `tools:execute` | `tool` | `toolName` |
+| Agent tool execution | `tools:execute` | `tool` | `${agentId}:${toolName}` |
+| MCP tool execution | `tools:execute` | `tool` by default, or the server-level `fga.resourceMapping` override | `JSON.stringify([serverName, toolName])` by default, or the server-level derived ID |
+| Thread and memory access | `memory:read`, `memory:write`, `memory:delete` | `thread` | `threadId`|
+|存储资源路线|路由操作的存储资源权限 |存储资源类型|路由记录 ID，或收集路由的存储资源范围 |
+| HTTP 资源路由 |按路线配置|按路线配置|按路线配置|
+
+对于 OAuth 保护的 MCP 服务器，HTTP MCP 传输将经过身份验证的数据传递为`extra.authInfo`. If an `MCPServer` is registered on an FGA-enabled Mastra instance, configure `mapAuthInfoToUser` so Mastra can set `requestContext.get('user')` before checking `tools/list` and `tools/call`. Use the server-level `fga` option when MCP tool checks need different resource or permission mapping than internal agent and workflow tool checks. See [MCPServer authentication context](/reference/tools/mcp-server#map-auth-data-for-fga).
+
+直接 SDK 调用`createRun().start()`, `resume()`, or `restart()` aren't independently checked by core FGA in this release. Make those calls from a protected route or guard them in application code. Pass a `requestContext` with an authenticated user when invoking protected entry points directly.
+
+核心Agent、内部Workflow程、Tool和内存检查也通过`requestContext` and action metadata to the FGA provider. Route checks pass `requestContext`. Thread checks pass the owning `resourceId` when available.
+
+## 定制 FGA Provider {/* #custom-fga-provider */}
+
+实施`IFGAProvider` to use any FGA backend:
+
+```typescript
+import { FGADeniedError } from '@mastra/core/auth/ee'
+import type { FGACheckParams, IFGAProvider, MastraFGAPermissionInput } from '@mastra/core/auth/ee'
+
+class MyFGAProvider implements IFGAProvider {
+  async check(user: any, params: FGACheckParams): Promise<boolean> {
+    // Your authorization logic
+    return true
+  }
+
+  async require(user: any, params: FGACheckParams): Promise<void> {
+    const allowed = await this.check(user, params)
+    if (!allowed) {
+      throw new FGADeniedError(user, params.resource, params.permission)
+    }
+  }
+
+  async filterAccessible<T extends { id: string }>(
+    user: any,
+    resources: T[],
+    resourceType: string,
+    permission: MastraFGAPermissionInput,
+  ): Promise<T[]> {
+    // Filter resources the user can access
+    return resources
+  }
+}
+```
+
+:::注意
+请参阅[`IFGAProvider` reference](/reference/auth/fga) for every method, parameter, and the `ActorSignal` type.
+:::
+
+## 系统参与者 {/* #system-actors */}
+
+自主Agent和计划Agent在没有最终用户的情况下运行。使用参与者信号标记这些调用，以便 FGA 可以将它们与用户请求区分开来：
+
+* `true`或者`{ actorKind: 'system' }` identifies an anonymous system actor.
+* 对象形式还可以携带`agentId`, `permissions`, and `scope` to identify and constrain the acting agent.
+
+默认情况下，受信任的参与者会跳过以用户为中心的`require()` check after a tenant-scope check. To enforce per-agent least privilege, implement the optional `requireActor` method on your provider. The method receives the actor with the same `FGACheckParams` as `require` and denies access by throwing `FGADeniedError`. Providers that omit `requireActor` preserve the trusted-actor bypass, which makes the addition backward compatible.
+
+```typescript
+import { FGADeniedError } from '@mastra/core/auth/ee'
+import type { ActorSignal, FGACheckParams, IFGAProvider } from '@mastra/core/auth/ee'
+
+class MyFGAProvider implements IFGAProvider {
+  // ...check, require, filterAccessible...
+
+  async requireActor(actor: ActorSignal, params: FGACheckParams): Promise<void> {
+    const agentId = actor === true ? undefined : actor.agentId
+    // Resolve the agent's real grants from a trusted source keyed by agentId.
+    const granted = await this.grantsForAgent(agentId)
+    const required = Array.isArray(params.permission) ? params.permission : [params.permission]
+    if (!required.some(permission => granted.includes(permission))) {
+      throw new FGADeniedError(null, params.resource, params.permission)
+    }
+  }
+}
+```
+
+### 将参与者传播到Workflow程步骤中 {/* #propagating-an-actor-into-workflow-steps */}
+
+Workflow程运行的`actor` reaches each step's execute context, but it isn't passed to the agent and tool calls that step makes. Steps that call an agent without an `actor` fall back to user membership resolution, which fails on system runs that have no user.
+
+放`propagate: true` on the actor to have the framework forward it into the agent and tool calls it makes for declarative `.then(agent)` and `.then(tool)` steps in the run:
+
+```typescript
+await run.start({
+  inputData: { city: 'London' },
+  actor: { actorKind: 'system', sourceWorkflow: 'nightly-report', propagate: true },
+})
+```
+
+传播是选择性加入的并且故意缩小范围：
+
+* 这`true` shorthand never propagates. Use the object form to opt in.
+* 自定义步骤`execute` functions are never covered. Read `actor` from the step context and pass it explicitly, so a step that acts on a user's behalf can't silently inherit system trust.
+* 经过`actor` when creating the step to override the run actor for that step, including `actor: undefined` to drop back to user authorization mid-run.
+
+```typescript
+// Runs as the system actor even though it loads user-supplied data.
+workflow.then(createStep(reportAgent))
+// Explicitly runs as the user instead.
+workflow.then(createStep(summaryAgent, { actor: undefined }))
+```
+
+### 信任要求 {/* #trust-requirements */}
+
+参与者信号是可信输入，因此在服务器端构建它：
+
+* 对待`actor` as a per-call signal. Durable workflows forward it when a run starts, but don't restore the initial actor on resume. Pass it explicitly on every trusted resume, or resolve a fresh actor through agent `defaultOptions`. Without a current actor, user authorization applies and a missing user fails closed.
+* 马斯特拉条`actor` from execution options handled by its built-in agent HTTP routes. Set it in server-side code, for example a scheduled job or a workflow, never from client input.
+* 建立租户范围服务器端。内置Agent HTTP 路由忽略客户端提供的`organizationId` in the request context, and the trusted-actor path requires an `organizationId` to be set.
+* 持久恢复保留其现有的请求上下文恢复和合并行为。这不会使持久参与者在后续Workflow程段中受到信任。
+* 租户范围检查确认受信任的`organizationId` exists. It doesn't verify that `actor.agentId` belongs to that organization. When that relationship matters, verify it in `requireActor` using authoritative provider data.
+* 对待`actor.permissions` as an unverified claim. To enforce least privilege, resolve the agent's permissions from a trusted source, such as a manifest or your FGA backend keyed by `agentId`. Don't trust the inline values.
+* 一旦Provider实施`requireActor`, errors from that method stop execution. Mastra doesn't fall back to organization-only authorization.
+
+## 有关的 {/* #related */}
+
+* [`IFGAProvider`参考](/reference/auth/fga)
+* [身份验证概述](/docs/auth/overview)
+* [WorkOS 身份验证](/integrations/auth/workos)

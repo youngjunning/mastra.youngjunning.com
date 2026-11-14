@@ -1,6 +1,6 @@
 ---
-title: "參考：儲存概覽 | Storage"
-description: Mastra 儲存系統的核心資料結構描述及資料表結構。
+title: "Reference: Storage"
+description: "Mastra storage is organized into domains. Each domain owns a set of tables or collections."
 packages:
   - "@mastra/core"
 ---
@@ -9,435 +9,454 @@ import { SchemaTable } from "@site/src/components/SchemaTable";
 import Tabs from "@theme/Tabs";
 import TabItem from "@theme/TabItem";
 
-# 儲存概覽
+# 貯存
 
-Mastra 儲存按域劃分。每個域擁有一組資料表或 collection。視乎你的 adapter 及設定，你可以使用所有域或只使用其中一部分。
+Mastra 儲存體被組織成域。每個網域都擁有一組表或集合。根據您的適配器和配置，您可以使用所有網域或僅使用其中的子集。
 
 ## 儲存域 {/* #storage-domains */}
 
-`MastraCompositeStore` 可以路由以下域 key：
+`MastraCompositeStore`可以路由以下域密鑰：
 
-並非每個儲存 adapter 都會實作所有域。當 adapter 套件有匯出對應的域 class 時，複合儲存可讓你為每個域混合使用 adapter。
+並非每個儲存適配器都實作每個網域。當適配器包匯出對應的網域類別時，複合儲存可讓您混合每個網域的適配器。
 
-| Domain | 說明 |
+|網域 |描述 |
 | - | - |
-| `memory` | 持久儲存對話：訊息、thread 及 resource（包括 working memory）。 |
-| `workflows` | 用於暫停及恢復的 Workflow 執行快照。 |
-| `workflowDefinitions` | 持久儲存的[動態 Workflow](/docs/workflows/dynamic-workflows) 定義（beta）。啟動時載入並即時註冊。 |
-| `scores` | Evals 執行產生的評估分數記錄。 |
-| `observability` | observability exporter 及 Studio 所用的 Trace 與 span。 |
-| `datasets` | 實驗所用的 dataset 記錄、版本化項目及 dataset 版本。 |
-| `experiments` | 實驗執行及逐項實驗結果。 |
+|`memory` | Conversation persistence: messages, threads, and resources (including working memory). |
+| `workflows` | Workflow run snapshots used for suspend and resume. |
+| `workflowDefinitions`|堅持[動態Workflow](/docs/workflows/dynamic-workflows)定義（測試版）。在啟動時載入並即時註冊。 |
+|`scores`|評估運行的評估分數記錄。 |
+|`observability`|Observability導出器和 Studio 使用的追蹤和跨度。 |
+|`datasets`|實驗使用的資料集記錄、版本化專案和資料集版本。 |
+|`experiments`|實驗運行和每個項目的實驗結果。 |
+|`agents`|儲存的Agent定義及其版本，供 Mastra 編輯器使用。 |
+|`promptBlocks`|儲存的提示區塊及其版本，供 Mastra 編輯器使用。 |
+|`scorerDefinitions`|儲存的記分器定義，供 Mastra 編輯器使用。 |
+|`mcpClients`|儲存的 MCP 用戶端配置，供 Mastra 編輯器使用。 |
+|`mcpServers`|儲存的 MCP 伺服器配置，供 Mastra 編輯器使用。 |
+|`workspaces`|儲存的Workspace配置，供 Mastra 編輯器使用。 |
+|`skills`|儲存的技能及其版本，供 Mastra 編輯器使用。 |
+|`favorites`|每個使用者對儲存實體的收藏夾。 |
+|`blobs`|由 SHA-256 雜湊鍵控的內容可尋址 blob。儲存用於技能版本控制的文件內容。 |
+|`backgroundTasks`|後台任務狀態：建立、狀態更新與清理。 |
+|`schedules`|由調度程序輪詢以觸發Workflow和Agent運行的調度。 |
+|`channels`|多平台整合的通道安裝和配置。 |
+|`harness`|利用會話記錄。 |
+|`toolProviderConnections`|使用者為Tool提供者連線指派的名稱。 |
+|`notifications`|通知記錄。 |
+|`threadState`|持久的每執行緒狀態，例如任務清單和目標。 |
+|`knowledge`|知識圖節點與記錄（實驗）。 |
 
-以下結構描述定義涵蓋 `memory`、`workflows`、`scores` 及 `observability` 的內置資料庫支援資料表。其他域及非資料庫 adapter 會使用實作特定的儲存結構。
+下面的模式定義涵蓋了記錄的內建資料庫支援的表`memory`, `workflows`, `scores`, and `observability`. Other domains, and non-database adapters, use implementation-specific storage structures.
 
-## 核心結構描述 {/* #core-schema */}
+## 核心架構 {/* #core-schema */}
 
 <Tabs>
-  <TabItem value="messages" label="訊息">
-    儲存對話訊息及其 metadata。每則訊息均屬於一個 thread，並包含實際內容，以及傳送者 role 及訊息類型的 metadata。
+  <TabItem value="messages" label="Messages">
+    儲存對話訊息及其元資料。每個訊息都屬於一個線程，並包含實際內容以及有關發送者角色和訊息類型的元資料。
 
     <SchemaTable
       columns={[
-  {
-    name: 'id',
-    type: 'uuidv4',
-    description: '訊息的唯一識別碼（格式：`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`）',
-    constraints: [{ type: 'primaryKey' }, { type: 'nullable', value: false }],
-  },
-  {
-    name: 'thread_id',
-    type: 'uuidv4',
-    description: '上層 thread 參照',
-    constraints: [
-      { type: 'foreignKey', value: 'threads.id' },
-      { type: 'nullable', value: false },
-    ],
-  },
-  {
-    name: 'resourceId',
-    type: 'uuidv4',
-    description: '擁有此訊息的 resource ID',
-    constraints: [{ type: 'nullable', value: true }],
-  },
-  {
-    name: 'content',
-    type: 'text',
-    description: 'V2 格式的訊息內容 JSON。範例：`{ format: 2, parts: [...] }`',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'role',
-    type: 'text',
-    description: '`user | assistant` 列舉值',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'createdAt',
-    type: 'timestamp',
-    description: '用於排列 thread 訊息',
-    constraints: [{ type: 'nullable', value: false }],
-  },
+{
+  name: 'id',
+  type: 'text',
+  description: 'Unique identifier for the message',
+  constraints: [{ type: 'primaryKey' }, { type: 'nullable', value: false }],
+},
+{
+  name: 'thread_id',
+  type: 'text',
+  description: 'Parent thread reference',
+  constraints: [
+    { type: 'foreignKey', value: 'threads.id' },
+    { type: 'nullable', value: false },
+  ],
+},
+{
+  name: 'resourceId',
+  type: 'text',
+  description: 'ID of the resource that owns this message',
+  constraints: [{ type: 'nullable', value: true }],
+},
+{
+  name: 'content',
+  type: 'text',
+  description: 'JSON of the message content in V2 format. Example: `{ format: 2, parts: [...] }`',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'role',
+  type: 'text',
+  description: 'Enum of `user | assistant`',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'createdAt',
+  type: 'timestamp',
+  description: 'Used for thread message ordering',
+  constraints: [{ type: 'nullable', value: false }],
+},
 ]}
     />
 
-    訊息的 `content` 欄包含符合 `MastraMessageContentV2` 類型的 JSON 物件；此類型的設計與 AI SDK `UIMessage` 訊息結構緊密配合。
+    訊息`content` column contains a JSON object conforming to the `MastraMessageContentV2` type, which is designed to align closely with the AI SDK `UIMessage` message shape.
 
     <SchemaTable
       columns={[
-  {
-    name: 'format',
-    type: 'integer',
-    description: '訊息格式版本（目前為 2）',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'parts',
-    type: 'array (JSON)',
-    description: '訊息部分的陣列（文字、Tool 調用、檔案、推理等）。此陣列內項目的結構視 `type` 而定。',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'experimental_attachments',
-    type: 'array (JSON)',
-    description: '可選的附件檔案陣列',
-    constraints: [{ type: 'nullable', value: true }],
-  },
-  {
-    name: 'content',
-    type: 'text',
-    description: '可選的訊息主要文字內容',
-    constraints: [{ type: 'nullable', value: true }],
-  },
-  {
-    name: 'toolInvocations',
-    type: 'array (JSON)',
-    description: '可選的陣列，概述 Tool 調用及結果',
-    constraints: [{ type: 'nullable', value: true }],
-  },
-  {
-    name: 'reasoning',
-    type: 'object (JSON)',
-    description: '關於 assistant 回應背後推理過程的可選資料',
-    constraints: [{ type: 'nullable', value: true }],
-  },
-  {
-    name: 'annotations',
-    type: 'object (JSON)',
-    description: '可選的其他 metadata 或註釋',
-    constraints: [{ type: 'nullable', value: true }],
-  },
-]}
-    />
-  </TabItem>
-
-  <TabItem value="threads" label="Thread">
-    將相關訊息分組並與 resource 關聯。包含對話的 metadata。
-
-    <SchemaTable
-      columns={[
-  {
-    name: 'id',
-    type: 'uuidv4',
-    description: 'thread 的唯一識別碼（格式：`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`）',
-    constraints: [{ type: 'primaryKey' }, { type: 'nullable', value: false }],
-  },
-  {
-    name: 'resourceId',
-    type: 'text',
-    description: '與此 thread 關聯之外部 resource 的主要識別碼。用於分組及擷取相關 thread。',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'title',
-    type: 'text',
-    description: '對話 thread 的標題',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'metadata',
-    type: 'text',
-    description: '以 JSON 字串表示的自訂 thread metadata。範例：',
-    example: {
-      category: 'support',
-      priority: 1,
-    },
-  },
-  {
-    name: 'createdAt',
-    type: 'timestamp',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'updatedAt',
-    type: 'timestamp',
-    description: '用於排列 thread 歷史記錄',
-    constraints: [{ type: 'nullable', value: false }],
-  },
+{
+  name: 'format',
+  type: 'integer',
+  description: 'Message format version (currently 2)',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'parts',
+  type: 'array (JSON)',
+  description:
+    'Array of message parts (text, tool-invocation, file, reasoning, etc.). The structure of items in this array varies by `type`.',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'experimental_attachments',
+  type: 'array (JSON)',
+  description: 'Optional array of file attachments',
+  constraints: [{ type: 'nullable', value: true }],
+},
+{
+  name: 'content',
+  type: 'text',
+  description: 'Optional main text content of the message',
+  constraints: [{ type: 'nullable', value: true }],
+},
+{
+  name: 'toolInvocations',
+  type: 'array (JSON)',
+  description: 'Optional array summarizing tool calls and results',
+  constraints: [{ type: 'nullable', value: true }],
+},
+{
+  name: 'reasoning',
+  type: 'object (JSON)',
+  description: "Optional information about the reasoning process behind the assistant's response",
+  constraints: [{ type: 'nullable', value: true }],
+},
+{
+  name: 'annotations',
+  type: 'object (JSON)',
+  description: 'Optional additional metadata or annotations',
+  constraints: [{ type: 'nullable', value: true }],
+},
 ]}
     />
   </TabItem>
 
-  <TabItem value="resources" label="Resource">
-    儲存 resource 範圍 working memory 的使用者專屬資料。每個 resource 代表一名使用者或一個實體，讓 working memory 可跨該使用者的所有對話 thread 持續保留。
+  <TabItem value="threads" label="Threads">
+    將相關訊息分組在一起並將它們與資源關聯。包含有關對話的元資料。
 
     <SchemaTable
       columns={[
-  {
-    name: 'id',
-    type: 'text',
-    description: 'Resource 識別碼（使用者或實體 ID）：與 thread 及 Agent 調用所用的 resourceId 相同',
-    constraints: [{ type: 'primaryKey' }, { type: 'nullable', value: false }],
+{
+  name: 'id',
+  type: 'text',
+  description: 'Unique identifier for the thread',
+  constraints: [{ type: 'primaryKey' }, { type: 'nullable', value: false }],
+},
+{
+  name: 'resourceId',
+  type: 'text',
+  description:
+    'Primary identifier of the external resource this thread is associated with. Used to group and retrieve related threads.',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'title',
+  type: 'text',
+  description: 'Title of the conversation thread',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'metadata',
+  type: 'jsonb',
+  description: 'Custom thread metadata as JSON. Example:',
+  example: {
+    category: 'support',
+    priority: 1,
   },
-  {
-    name: 'workingMemory',
-    type: 'text',
-    description:
-      '以 Markdown 文字儲存的持久 working memory 資料。包含跨對話 thread 持續保留的使用者個人檔案、偏好及情境資料。',
-    constraints: [{ type: 'nullable', value: true }],
-  },
-  {
-    name: 'metadata',
-    type: 'jsonb',
-    description: 'JSON 格式的其他 resource metadata。範例：',
-    example: {
-      preferences: { language: 'en', timezone: 'UTC' },
-      tags: ['premium', 'beta-user'],
-    },
-    constraints: [{ type: 'nullable', value: true }],
-  },
-  {
-    name: 'createdAt',
-    type: 'timestamp',
-    description: '首次建立 resource 記錄的時間',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'updatedAt',
-    type: 'timestamp',
-    description: '最後更新 working memory 的時間',
-    constraints: [{ type: 'nullable', value: false }],
-  },
+  constraints: [{ type: 'nullable', value: true }],
+},
+{
+  name: 'createdAt',
+  type: 'timestamp',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'updatedAt',
+  type: 'timestamp',
+  description: 'Used for thread ordering history',
+  constraints: [{ type: 'nullable', value: false }],
+},
 ]}
     />
   </TabItem>
 
-  <TabItem value="workflows" label="Workflow">
-    在 Workflow 上調用 `suspend()` 時，其狀態會以下列格式儲存。調用 `resume()` 時，該狀態會重新還原。
+  <TabItem value="resources" label="Resources">
+    儲存資源範圍工作記憶體的使用者特定資料。每個資源代表一個使用者或實體，允許工作記憶在該使用者的所有對話執行緒中持續存在。
 
     <SchemaTable
       columns={[
-  {
-    name: 'workflow_name',
-    type: 'text',
-    description: 'Workflow 名稱',
-    constraints: [{ type: 'nullable', value: false }],
+{
+  name: 'id',
+  type: 'text',
+  description: 'Resource identifier (user or entity ID): same as resourceId used in threads and agent calls',
+  constraints: [{ type: 'primaryKey' }, { type: 'nullable', value: false }],
+},
+{
+  name: 'workingMemory',
+  type: 'text',
+  description:
+    'Persistent working memory data as Markdown text. Contains user profile, preferences, and contextual information that persists across conversation threads.',
+  constraints: [{ type: 'nullable', value: true }],
+},
+{
+  name: 'metadata',
+  type: 'jsonb',
+  description: 'Additional resource metadata as JSON. Example:',
+  example: {
+    preferences: { language: 'en', timezone: 'UTC' },
+    tags: ['premium', 'beta-user'],
   },
-  {
-    name: 'run_id',
-    type: 'uuidv4',
-    description:
-      'Workflow 執行的唯一識別碼。用於在暫停／恢復週期之間追蹤狀態（格式：`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`）',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'snapshot',
-    type: 'text',
-    description: '序列化為 JSON 的 Workflow 狀態。範例：',
-    example: {
-      value: { currentState: 'running' },
-      context: {
-        stepResults: {},
-        attempts: {},
-        triggerData: {},
-      },
-      activePaths: [],
-      runId: '550e8400-e29b-41d4-a716-446655440000',
-      timestamp: 1648176000000,
+  constraints: [{ type: 'nullable', value: true }],
+},
+{
+  name: 'createdAt',
+  type: 'timestamp',
+  description: 'When the resource record was first created',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'updatedAt',
+  type: 'timestamp',
+  description: 'When the working memory was last updated',
+  constraints: [{ type: 'nullable', value: false }],
+},
+]}
+    />
+  </TabItem>
+
+  <TabItem value="workflows" label="Workflows">
+    什麼時候`suspend()` is called on a workflow, its state is saved in the following format. When `resume()` is called, that state is rehydrated.
+
+    <SchemaTable
+      columns={[
+{
+  name: 'workflow_name',
+  type: 'text',
+  description: 'Name of the workflow',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'run_id',
+  type: 'text',
+  description: 'Unique identifier for the workflow execution. Used to track state across suspend/resume cycles',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'snapshot',
+  type: 'jsonb',
+  description: 'Workflow state as JSON. Example:',
+  example: {
+    value: { currentState: 'running' },
+    context: {
+      stepResults: {},
+      attempts: {},
+      triggerData: {},
     },
-    constraints: [{ type: 'nullable', value: false }],
+    activePaths: [],
+    runId: '550e8400-e29b-41d4-a716-446655440000',
+    timestamp: 1648176000000,
   },
-  {
-    name: 'createdAt',
-    type: 'timestamp',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'updatedAt',
-    type: 'timestamp',
-    description: '最後修改時間，用於追蹤 Workflow 執行期間的狀態變更',
-    constraints: [{ type: 'nullable', value: false }],
-  },
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'createdAt',
+  type: 'timestamp',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'updatedAt',
+  type: 'timestamp',
+  description: 'Last modification time, used to track state changes during workflow execution',
+  constraints: [{ type: 'nullable', value: false }],
+},
 ]}
     />
   </TabItem>
 
   <TabItem value="evals" label="Evals">
-    儲存針對 Agent 輸出執行指標後所得的 Evals 結果。
+    儲存針對Agent輸出運行指標的評估結果。
 
     <SchemaTable
       columns={[
-  {
-    name: 'input',
-    type: 'text',
-    description: '提供給 Agent 的輸入',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'output',
-    type: 'text',
-    description: 'Agent 產生的輸出',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'result',
-    type: 'jsonb',
-    description: '包含分數及詳情的 Evals 結果資料。範例：',
-    example: {
-      score: 0.95,
-      details: {
-        reason: 'Response accurately reflects source material',
-        citations: ['page 1', 'page 3'],
-      },
+{
+  name: 'input',
+  type: 'text',
+  description: 'Input provided to the agent',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'output',
+  type: 'text',
+  description: 'Output generated by the agent',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'result',
+  type: 'jsonb',
+  description: 'Eval result data that includes score and details. Example:',
+  example: {
+    score: 0.95,
+    details: {
+      reason: 'Response accurately reflects source material',
+      citations: ['page 1', 'page 3'],
     },
-    constraints: [{ type: 'nullable', value: false }],
   },
-  {
-    name: 'agent_name',
-    type: 'text',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'metric_name',
-    type: 'text',
-    description: '例如 Faithfulness、Hallucination 等。',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'instructions',
-    type: 'text',
-    description: 'Agent 的 system prompt 或指示',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'test_info',
-    type: 'jsonb',
-    description: '其他測試 metadata 及設定',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'global_run_id',
-    type: 'uuidv4',
-    description: '將相關的評估執行分組（例如一次 CI 執行中的所有單元測試）',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'run_id',
-    type: 'uuidv4',
-    description: '受評估執行的唯一識別碼（格式：`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`）',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'created_at',
-    type: 'timestamp',
-    constraints: [{ type: 'nullable', value: false }],
-  },
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'agent_name',
+  type: 'text',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'metric_name',
+  type: 'text',
+  description: 'e.g Faithfulness, Hallucination, etc.',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'instructions',
+  type: 'text',
+  description: 'System prompt or instructions for the agent',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'test_info',
+  type: 'jsonb',
+  description: 'Additional test metadata and configuration',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'global_run_id',
+  type: 'uuidv4',
+  description: 'Groups related evaluation runs (e.g. all unit tests in a CI run)',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'run_id',
+  type: 'uuidv4',
+  description: 'Unique identifier for the run being evaluated (format: `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`)',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'created_at',
+  type: 'timestamp',
+  constraints: [{ type: 'nullable', value: false }],
+},
 ]}
     />
   </TabItem>
 
   <TabItem value="traces" label="Traces">
-    擷取 OpenTelemetry Trace，以供監察及除錯。
+    捕獲 OpenTelemetry 追蹤以進行監視和調試。
 
     <SchemaTable
       columns={[
-  {
-    name: 'id',
-    type: 'text',
-    description: '唯一 Trace 識別碼',
-    constraints: [{ type: 'nullable', value: false }, { type: 'primaryKey' }],
+{
+  name: 'id',
+  type: 'text',
+  description: 'Unique trace identifier',
+  constraints: [{ type: 'nullable', value: false }, { type: 'primaryKey' }],
+},
+{
+  name: 'parentSpanId',
+  type: 'text',
+  description: 'ID of the parent span. Null if span is top level',
+},
+{
+  name: 'name',
+  type: 'text',
+  description: 'Hierarchical operation name (e.g. `workflow.myWorkflow.execute`, `http.request`, `database.query`)',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'traceId',
+  type: 'text',
+  description: 'Root trace identifier that groups related spans',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'scope',
+  type: 'text',
+  description: 'Library/package/service that created the span (e.g. `@mastra/core`, `express`, `pg`)',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'kind',
+  type: 'integer',
+  description:
+    '`INTERNAL` (0, within process), `CLIENT` (1, outgoing calls), `SERVER` (2, incoming calls), `PRODUCER` (3, async job creation), `CONSUMER` (4, async job processing)',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'attributes',
+  type: 'jsonb',
+  description: 'User defined key-value pairs that contain span metadata',
+},
+{
+  name: 'status',
+  type: 'jsonb',
+  description: 'JSON object with `code` (UNSET=0, ERROR=1, OK=2) and optional `message`. Example:',
+  example: {
+    code: 1,
+    message: 'HTTP request failed with status 500',
   },
-  {
-    name: 'parentSpanId',
-    type: 'text',
-    description: '上層 span 的 ID。如果 span 位於最上層，則為 null',
+},
+{
+  name: 'events',
+  type: 'jsonb',
+  description: 'Time-stamped events that occurred during the span',
+},
+{
+  name: 'links',
+  type: 'jsonb',
+  description: 'Links to other related spans',
+},
+{
+  name: 'other',
+  type: 'text',
+  description: 'Additional OpenTelemetry span fields as stringified JSON. Example:',
+  example: {
+    droppedAttributesCount: 2,
+    droppedEventsCount: 1,
+    instrumentationLibrary: '@opentelemetry/instrumentation-http',
   },
-  {
-    name: 'name',
-    type: 'text',
-    description: '階層式操作名稱（例如 `workflow.myWorkflow.execute`、`http.request`、`database.query`）',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'traceId',
-    type: 'text',
-    description: '將相關 span 分組的根 Trace 識別碼',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'scope',
-    type: 'text',
-    description: '建立 span 的程式庫／套件／服務（例如 `@mastra/core`、`express`、`pg`）',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'kind',
-    type: 'integer',
-    description:
-      '`INTERNAL`（0，處理程序內）、`CLIENT`（1，向外調用）、`SERVER`（2，傳入調用）、`PRODUCER`（3，建立非同步工作）、`CONSUMER`（4，處理非同步工作）',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'attributes',
-    type: 'jsonb',
-    description: '包含 span metadata、由使用者定義的鍵值配對',
-  },
-  {
-    name: 'status',
-    type: 'jsonb',
-    description: '包含 `code`（UNSET=0、ERROR=1、OK=2）及可選 `message` 的 JSON 物件。範例：',
-    example: {
-      code: 1,
-      message: 'HTTP request failed with status 500',
-    },
-  },
-  {
-    name: 'events',
-    type: 'jsonb',
-    description: 'span 期間發生並附有時間戳記的事件',
-  },
-  {
-    name: 'links',
-    type: 'jsonb',
-    description: '連至其他相關 span 的連結',
-  },
-  {
-    name: 'other',
-    type: 'text',
-    description: '以 JSON 字串表示的其他 OpenTelemetry span 欄位。範例：',
-    example: {
-      droppedAttributesCount: 2,
-      droppedEventsCount: 1,
-      instrumentationLibrary: '@opentelemetry/instrumentation-http',
-    },
-  },
-  {
-    name: 'startTime',
-    type: 'bigint',
-    description: 'span 開始時距 Unix epoch 的納秒數',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'endTime',
-    type: 'bigint',
-    description: 'span 結束時距 Unix epoch 的納秒數',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'createdAt',
-    type: 'timestamp',
-    constraints: [{ type: 'nullable', value: false }],
-  },
+},
+{
+  name: 'startTime',
+  type: 'bigint',
+  description: 'Nanoseconds since Unix epoch when span started',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'endTime',
+  type: 'bigint',
+  description: 'Nanoseconds since Unix epoch when span ended',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'createdAt',
+  type: 'timestamp',
+  constraints: [{ type: 'nullable', value: false }],
+},
 ]}
     />
   </TabItem>

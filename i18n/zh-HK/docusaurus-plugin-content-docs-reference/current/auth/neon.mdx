@@ -1,0 +1,316 @@
+---
+title: "Reference: MastraAuthNeon and MastraRBACNeon | Auth"
+description: API reference for the MastraAuthNeon authentication provider and MastraRBACNeon role-based access control provider.
+packages:
+  - "@mastra/auth-neon"
+  - "@mastra/core"
+---
+
+import PropertiesTable from "@site/src/components/PropertiesTable"
+
+# `MastraAuthNeon`和`MastraRBACNeon`
+
+[`MastraAuthNeon`](https://github.com/mastra-ai/mastra/tree/main/auth/neon)將 Mastra 身份驗證連接到[Neon Auth](https://neon.com/docs/guides/neon-auth)。它使用 Neon Auth 的 JWKS 端點驗證作為不記名令牌發送的 Neon Auth JWT，並透過其會話 API 驗證 Neon Auth 會話 cookie。該提供者還支援電子郵件和密碼登入、註冊和會話管理。
+
+`MastraRBACNeon`將 Neon Auth 組織角色對應到 Mastra 權限。當您的應用程式使用 Neon Auth 組織成員資格進行基於角色的存取控制時，請單獨註冊。
+
+：：：筆記
+
+RBAC 在生產中需要 Mastra Enterprise Edition (EE) 授權。它在開發過程中無需許可證即可運行。看[what requires an EE license](/docs/license#what-requires-an-ee-license). [Contact sales](https://mastra.ai/contact) for more information.
+
+:::
+
+## 用法 {/* #usage */}
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core/mastra'
+import { MastraAuthNeon, MastraRBACNeon } from '@mastra/auth-neon'
+
+const auth = new MastraAuthNeon()
+
+const rbac = new MastraRBACNeon({
+  roleMapping: {
+    admin: ['*'],
+    member: ['agents:read', 'workflows:read'],
+    _default: [],
+  },
+})
+
+export const mastra = new Mastra({
+  server: {
+    auth,
+    rbac,
+  },
+})
+```
+
+放`NEON_AUTH_BASE_URL` to the Neon Auth URL shown in the Neon Console, for example `https://ep-example-123456.neonauth.us-east-2.aws.neon.tech/neondb/auth`. You can also pass `baseUrl` directly to both constructors.
+
+參觀[Neon integration guide](/integrations/auth/neon) for setup steps.
+
+## `MastraAuthNeon` {/* #mastraauthneon */}
+
+### 建構函數參數 {/* #constructor-parameters */}
+
+這`MastraAuthNeon` constructor accepts an optional `MastraAuthNeonOptions` object.
+
+<PropertiesTable
+  content={[
+{
+  name: 'baseUrl?',
+  type: 'string',
+  description:
+    'Neon Auth URL, including the database path (for example /neondb/auth). Falls back to the NEON_AUTH_BASE_URL environment variable. Trailing slashes are removed. The JWT issuer and audience must equal the origin of this URL.',
+},
+{
+  name: 'jwksUrl?',
+  type: 'string',
+  description:
+    'JWKS endpoint used to verify bearer tokens. Falls back to NEON_AUTH_JWKS_URL, then <baseUrl>/.well-known/jwks.json.',
+},
+{
+  name: 'sessionCookieName?',
+  type: 'string',
+  description: 'Name of the Neon Auth session cookie. Defaults to __Secure-neon-auth.session_token.',
+},
+{
+  name: 'signUpEnabled?',
+  type: 'boolean',
+  description:
+    'Whether credentials-based sign-up is enabled. When false, signUp() throws and no Neon Auth account is created. Defaults to true.',
+},
+{
+  name: 'name?',
+  type: 'string',
+  description: 'Provider name. Defaults to neon.',
+},
+{
+  name: 'authorizeUser?',
+  type: 'AuthorizeUserFn<NeonAuthUser>',
+  description: 'Custom authorization function called after authentication.',
+},
+{
+  name: 'mapUserToResourceId?',
+  type: '(user: NeonAuthUser) => string | undefined | null',
+  description: 'Maps an authenticated user to a Mastra memory resource ID.',
+},
+{
+  name: 'protected?',
+  type: "MastraAuthConfig['protected']",
+  description: 'Routes that require authentication.',
+},
+{
+  name: 'public?',
+  type: "MastraAuthConfig['public']",
+  description: 'Routes that do not require authentication.',
+},
+]}
+/>
+
+### 環境變數 {/* #environment-variables */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'NEON_AUTH_BASE_URL',
+  type: 'string',
+  description: 'Default Neon Auth service URL when baseUrl is not passed to the constructor.',
+},
+{
+  name: 'NEON_AUTH_JWKS_URL',
+  type: 'string',
+  description: 'Default JWKS endpoint when jwksUrl is not passed to the constructor.',
+},
+]}
+/>
+
+### 認證方式 {/* #authentication-methods */}
+
+#### `authenticateToken()` {/* #authenticatetoken */}
+
+```typescript
+await auth.authenticateToken(token, request)
+```
+
+根據配置的 JWKS 端點驗證 JWT 形狀的令牌，檢查其簽名、頒發者、受眾和過期時間。否則，透過會話 API 驗證請求中的 Neon Auth 會話 cookie。如果 JWT 驗證失敗，會話 cookie 仍會被接受，因此過期的持有者令牌不會登出也發送 cookie 的用戶端。當請求沒有會話 cookie 時，非 JWT 令牌將被視為會話 cookie 值。返回已驗證的`NeonAuthUser`, or `null` when validation fails.
+
+`NeonAuthUser`包含頂層`id`, `email`, and `name`, the Neon Auth `user` object, and either the `session` (cookie authentication) or the verified `jwt` claims (bearer authentication).
+
+#### `authorizeUser()` {/* #authorizeuser */}
+
+```typescript
+await auth.authorizeUser(user, request)
+```
+
+如果提供了自訂授權功能，則執行已設定的自訂授權功能。否則，它需要 Neon Auth 用戶 ID 並拒絕過期的 JWT 有效負載。
+
+### 憑證方法 {/* #credentials-methods */}
+
+#### `signIn()` {/* #signin */}
+
+```typescript
+const result = await auth.signIn(email, password, request)
+```
+
+透過 Neon Auth 對電子郵件和密碼憑證進行身份驗證。返回經過身份驗證的用戶，Neon Auth JWT 作為`token`, and the Neon Auth session cookies. Neon Auth must trust the origin of the incoming request.
+
+#### `signUp()` {/* #signup */}
+
+```typescript
+const result = await auth.signUp(email, password, name, request)
+```
+
+使用電子郵件和密碼憑證建立 Neon Auth 帳戶。`name` is optional. When omitted, the provider derives a display name from the email address. Returns the same result as `signIn()`.
+
+#### `isSignUpEnabled()` {/* #issignupenabled */}
+
+```typescript
+const enabled = auth.isSignUpEnabled()
+```
+
+返回配置的`signUpEnabled` value.
+
+### 會話方法 {/* #session-methods */}
+
+#### `createSession()` {/* #createsession */}
+
+```typescript
+const session = await auth.createSession(userId, metadata)
+```
+
+使用產生的 ID 和 7 天有效期限來建立規範化的 Mastra 會話，而無需建立遠端 Neon Auth 會話。
+
+#### `validateSession()` {/* #validatesession */}
+
+```typescript
+const session = await auth.validateSession(sessionId)
+```
+
+驗證 Neon Auth 會話令牌並傳回規範化的 Mastra 會話，或者`null` when the session is invalid.
+
+#### `refreshSession()` {/* #refreshsession */}
+
+```typescript
+const session = await auth.refreshSession(sessionId)
+```
+
+透過 Neon Auth 驗證會話。當達到其配置的更新間隔時，Neon Auth 會自動刷新會話。
+
+#### `destroySession()` {/* #destroysession */}
+
+```typescript
+const sessionId = auth.getSessionIdFromRequest(request)
+if (sessionId) await auth.destroySession(sessionId)
+```
+
+傳遞簽署的會話 cookie 值`getSessionIdFromRequest()`, not the `id` returned by `validateSession()`. `destroySession()` attempts to revoke that session through the Neon Auth sign-out endpoint. A network error or non-2xx response can leave the session active, and the method doesn't throw for these failures. When Mastra sends the header from `getClearSessionHeaders()`, it clears the matching cookie on the Mastra host, not a cookie on a separate Neon Auth host. A separate Neon Auth session can remain active after Studio sign-out.
+
+撤銷會話不會使已頒發的 JWT 失效。透過 JWT 驗證的承載令牌仍然可以進行身份驗證，因為驗證不會檢查 Neon Auth 會話。 JWT 驗證不需要過期聲明，因此沒有過期聲明的令牌在註銷後仍然可以使用。
+
+## `MastraRBACNeon` {/* #mastrarbacneon */}
+
+### 建構函數參數 {/* #constructor-parameters-1 */}
+
+這`MastraRBACNeon` constructor accepts a `MastraRBACNeonOptions` object.
+
+<PropertiesTable
+  content={[
+{
+  name: 'roleMapping',
+  type: 'RoleMapping',
+  description:
+    'Maps Neon Auth role names to Mastra permission patterns. Use _default to define permissions for unmapped roles.',
+  isOptional: false,
+},
+{
+  name: 'baseUrl?',
+  type: 'string',
+  description:
+    'Neon Auth URL. Falls back to the NEON_AUTH_BASE_URL environment variable. Trailing slashes are removed.',
+},
+{
+  name: 'organizationId?',
+  type: 'string',
+  description: 'Organization whose membership role is used. Defaults to the active organization of the session.',
+},
+{
+  name: 'getUserRoles?',
+  type: '(user: NeonAuthUser) => Promise<string[]> | string[]',
+  description:
+    'Custom function that returns role names for a user. Use it to assign roles to bearer JWT requests, which carry no organization roles.',
+},
+{
+  name: 'cache?',
+  type: '{ ttlMs?: number; maxSize?: number }',
+  description: 'Role lookup cache configuration. The defaults are 60,000 ms and 1,000 entries.',
+},
+]}
+/>
+
+### 方法 {/* #methods */}
+
+#### `getRoles()` {/* #getroles */}
+
+```typescript
+const roles = await rbac.getRoles(user)
+```
+
+從配置中返回角色`getUserRoles` function when provided. Otherwise, when `organizationId` is set or the session has an active organization, returns the user's role in that organization, read from Neon Auth with the user's session cookie. Non-members get no roles. Without an organization, returns the user's Neon Auth role, such as `user` or `admin`.
+
+承載 JWT 請求沒有會話，因此它們沒有角色，除非`getUserRoles` is provided. The JWT `role` claim (`authenticated`) is never used as a Mastra role.
+
+#### `hasRole()` {/* #hasrole */}
+
+```typescript
+const allowed = await rbac.hasRole(user, 'admin')
+```
+
+檢查使用者是否具有請求的角色。
+
+#### `getPermissions()` {/* #getpermissions */}
+
+```typescript
+const permissions = await rbac.getPermissions(user)
+```
+
+透過以下方式解析使用者的角色`roleMapping` and returns Mastra permission patterns.
+
+#### `hasPermission()` {/* #haspermission */}
+
+```typescript
+const allowed = await rbac.hasPermission(user, 'agents:read')
+```
+
+檢查解析的權限是否允許請求的權限。
+
+#### `hasAllPermissions()`和`hasAnyPermission()` {/* #hasallpermissions-and-hasanypermission */}
+
+```typescript
+const canReadAndRun = await rbac.hasAllPermissions(user, ['agents:read', 'agents:execute'])
+const canReadAnything = await rbac.hasAnyPermission(user, ['agents:read', 'workflows:read'])
+```
+
+檢查使用者是否擁有所要求的全部或至少一項權限。
+
+#### `getAvailableRoles()` {/* #getavailableroles */}
+
+```typescript
+const roles = await rbac.getAvailableRoles()
+```
+
+傳回配置的角色名稱，除了`_default`.
+
+#### `getRolePermissions()` {/* #getrolepermissions */}
+
+```typescript
+const permissions = await rbac.getRolePermissions('member')
+```
+
+解析為角色配置的權限模式。
+
+## 有關的 {/* #related */}
+
+* [身份驗證概述](/docs/auth/overview)
+* [自訂身份驗證提供者](/docs/auth/custom-auth-provider)
+* [基於角色的存取控制](/reference/auth/fga)
+* [原始碼](https://github.com/mastra-ai/mastra/tree/main/auth/neon)

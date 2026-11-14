@@ -1,0 +1,196 @@
+---
+title: Chunking and embedding documents | RAG
+description: "Chunk documents with MDocument, generate embeddings through the AI SDK, and prepare text and metadata for vector storage and RAG retrieval."
+packages:
+  - "@mastra/core"
+  - "@mastra/pg"
+  - "@mastra/rag"
+---
+
+# 分塊和嵌入文檔
+
+在處理之前，從您的內容建立一個 MDocument 實例。您可以從不同的格式初始化它：
+
+```ts
+import { MDocument } from '@mastra/rag'
+
+const doc = MDocument.fromText('Your plain text content...')
+const docFromHTML = MDocument.fromHTML('<html>Your HTML content...</html>')
+const docFromMarkdown = MDocument.fromMarkdown('# Your Markdown content...')
+const docFromJSON = MDocument.fromJSON(`{ "key": "value" }`)
+```
+
+## 文件處理 {/* #document-processing */}
+
+使用`chunk` to split documents into manageable pieces. Mastra supports multiple chunking strategies optimized for different document types:
+
+* `recursive`：根據內容結構智能拆分
+* `character`：簡單的基於字元的分割
+* `token`：令牌感知分裂
+* `markdown`: Markdown 感知分割
+* `semantic-markdown`：基於相關標頭族的 Markdown 拆分
+* `html`: HTML 結構感知分割
+* `json`：JSON 結構感知拆分
+* `latex`：LaTeX 結構感知分割
+* `sentence`：句子感知分割
+
+:::注意
+每個策略接受針對其分塊方法最佳化的不同參數。
+:::
+
+這是如何使用的範例`recursive` strategy:
+
+```ts
+const chunks = await doc.chunk({
+  strategy: 'recursive',
+  maxSize: 512,
+  overlap: 50,
+  separators: ['\n'],
+  extract: {
+    title: true, // Optionally extract a title for each chunk
+  },
+})
+```
+
+對於保留句子結構很重要的文本，以下是如何使用`sentence` strategy:
+
+```ts
+const chunks = await doc.chunk({
+  strategy: 'sentence',
+  maxSize: 450,
+  minSize: 50,
+  overlap: 0,
+  sentenceEnders: ['.'],
+})
+```
+
+對於 Markdown 文檔，保留各部分之間的語義關係很重要，以下是如何使用`semantic-markdown` strategy:
+
+```ts
+const chunks = await doc.chunk({
+  strategy: 'semantic-markdown',
+  joinThreshold: 500,
+  modelName: '__AI_SDK_OPENAI_MODEL_BASE__',
+})
+```
+
+:::注意
+元資料提取可能會使用 LLM 呼叫，因此請確保設定您的 API 金鑰。
+:::
+
+我們更深入研究分塊策略[`chunk()` reference documentation](/reference/rag/chunk).
+
+## 嵌入生成 {/* #embedding-generation */}
+
+使用您首選的Provider將區塊轉換為嵌入。 Mastra 支援透過模型路由器嵌入模型。
+
+### 使用模型路由器 {/* #using-the-model-router */}
+
+最簡單的方法是使用 Mastra 的模型路由器`provider/model` strings:
+
+```ts
+import { ModelRouterEmbeddingModel } from '@mastra/core/llm'
+import { embedMany } from 'ai'
+
+const { embeddings } = await embedMany({
+  model: new ModelRouterEmbeddingModel('__GATEWAY_OPENAI_EMBEDDING_MODEL__'),
+  values: chunks.map(chunk => chunk.text),
+})
+```
+
+Mastra 支援 OpenAI 和 Google 嵌入模型。有关支持的嵌入模型的完整列表，请参阅[embeddings reference](/reference/rag/embeddings).
+
+模型路由器自動處理來自環境變數的 API 金鑰偵測。
+
+嵌入函數傳迴向量，即表示文字語意的數字數組，準備在向量資料庫中進行相似性搜尋。
+
+### 配置嵌入尺寸 {/* #configuring-embedding-dimensions */}
+
+嵌入模型通常會輸出具有固定維度的向量（例如，OpenAI 的維數為 1536）`__AI_SDK_OPENAI_EMBEDDING_MODEL__`).
+Some models support reducing this dimensionality, which can help:
+
+* 減少向量資料庫的儲存要求
+* 減少相似性搜尋的計算成本
+
+以下是一些支援的型號：
+
+OpenAI（文本嵌入 3 模型）：
+
+```ts
+import { ModelRouterEmbeddingModel } from '@mastra/core/llm'
+
+const { embeddings } = await embedMany({
+  model: new ModelRouterEmbeddingModel('__GATEWAY_OPENAI_EMBEDDING_MODEL__'),
+  options: {
+    dimensions: 256, // Only supported in text-embedding-3 and later
+  },
+  values: chunks.map(chunk => chunk.text),
+})
+```
+
+Google（gemini-embedding-001）：
+
+```ts
+const { embeddings } = await embedMany({
+  model: google('gemini-embedding-001', {
+    outputDimensionality: 256, // Truncates excessive values from the end
+  }),
+  values: chunks.map(chunk => chunk.text),
+})
+```
+
+:::重要\[向量資料庫相容性]
+儲存嵌入時，配置向量資料庫索引以匹配嵌入模型的輸出大小，以避免尺寸不匹配導致錯誤或資料損壞。
+:::
+
+## 範例：完整管道 {/* #example-complete-pipeline */}
+
+以下是一個展示文件處理、嵌入生成和向量儲存的範例：
+
+```ts
+import { ModelRouterEmbeddingModel } from '@mastra/core/llm'
+import { PgVector } from '@mastra/pg'
+import { MDocument } from '@mastra/rag'
+import { embedMany } from 'ai'
+
+const doc = MDocument.fromText(`
+  Climate change poses significant challenges to global agriculture.
+  Rising temperatures and changing precipitation patterns affect crop yields.
+`)
+
+const chunks = await doc.chunk({
+  strategy: 'recursive',
+  maxSize: 256,
+  overlap: 50,
+})
+
+const { embeddings } = await embedMany({
+  model: new ModelRouterEmbeddingModel('__GATEWAY_OPENAI_EMBEDDING_MODEL__'),
+  values: chunks.map(chunk => chunk.text),
+})
+
+const vectorStore = new PgVector({
+  id: 'pg-vector',
+  connectionString: process.env.POSTGRES_CONNECTION_STRING,
+})
+
+await vectorStore.createIndex({
+  indexName: 'embeddings',
+  dimension: 1536,
+})
+
+await vectorStore.upsert({
+  indexName: 'embeddings',
+  vectors: embeddings,
+})
+```
+
+有關不同分塊策略和嵌入配置的更多範例，請參閱：
+
+* [塊參考](/reference/rag/chunk)
+* [嵌入參考](/reference/rag/embeddings)
+
+有關向量資料庫和嵌入的更多詳細信息，請參閱：
+
+* [向量資料庫](./vector-databases)
+* [嵌入 API 參考](/reference/rag/embeddings)

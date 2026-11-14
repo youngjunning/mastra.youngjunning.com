@@ -1,0 +1,308 @@
+---
+title: "Reference: FactorySandbox | Workspace"
+description: "The host contract Mastra Factory uses to construct a session sandbox, build its repository template, validate environment settings and run template builds."
+packages:
+  - "@mastra/core"
+  - "@mastra/factory"
+---
+
+# 工厂沙盒
+
+一个`FactorySandbox`是主机提供的唯一对象`MastraFactory`描述会话运行的位置。它拥有会话Sandbox构造函数、为会话构建的存储库模板、用户可以针对每个项目调整的设置架构，以及提前构建该模板的可选能力。
+
+工厂存储每个项目的设置并将它们传递给`create` on every session boot. A setting the project leaves unset falls back to the provider's default. `factory.sandboxDescription` reports the provider, the settings schema as JSON Schema and the available capabilities. Everything provider-specific stays inside the object: Factory only calls the contract and reads `provider`用于显示。
+
+## 用法 {/* #usage */}
+
+传递提供者类之一的实例作为`sandbox` option:
+
+```typescript title="src/mastra/index.ts"
+import { MastraFactory } from '@mastra/factory'
+import { PlatformFactorySandbox } from '@mastra/platform-workspace'
+
+export const factory = new MastraFactory({
+  sandbox: new PlatformFactorySandbox({
+    // Provider defaults for an environment that sets nothing.
+    defaults: { cpuCount: 4, memoryMb: 8192 },
+  }),
+})
+```
+
+## 提供者类别 {/* #provider-classes */}
+
+|班级 |套餐 |设置 |构建|
+| - | - | - | - |
+|`PlatformFactorySandbox` | `@mastra/platform-workspace` | `cpuCount`, `memoryMb`, `idleTimeoutMinutes`, `publicPorts` | `start`, `get` |
+| `E2BFactorySandbox` | `@mastra/e2b` | `cpuCount`, `memoryMb`, `idleTimeoutMinutes` | `start`, `get`, `list` |
+| `DockerFactorySandbox` | `@mastra/docker` | `baseImage`, `owner` | `start`, `get` |
+| `LocalFactorySandbox` | `@mastra/factory`|无 |没有 |
+
+每个提供程序类都采用与其Sandbox类相同的运行时选项（减去`id`, `sandboxId` and `template`, which the class fills in per session), plus `template` options for the repository template and `defaults` for settings the environment leaves unset.
+
+```typescript
+import { PlatformFactorySandbox } from '@mastra/platform-workspace'
+import { E2BFactorySandbox } from '@mastra/e2b'
+import { DockerFactorySandbox } from '@mastra/docker'
+import { LocalFactorySandbox } from '@mastra/factory'
+
+new PlatformFactorySandbox() // reads MASTRA_PLATFORM_ACCESS_TOKEN and MASTRA_ENVIRONMENT_ID
+new E2BFactorySandbox() // reads E2B_API_KEY
+new DockerFactorySandbox({ defaults: { baseImage: 'node:22-slim' } })
+new LocalFactorySandbox() // reads MASTRACODE_LOCAL_SANDBOX_ROOT, defaults to ~/.mastracode/web/sandboxes
+```
+
+`LocalFactorySandbox`在主机上运行每个会话`join(root, sessionId)`. Without `env`, commands only see an allow-list of host variables that git and TLS need, such as `HOME`, `USER`, `SHELL` and `SSL_CERT_FILE`, plus `PATH`. App secrets stay out of commands that run in repository checkouts.
+
+### 范围 env 到一个工厂 {/* #scope-env-to-one-factory */}
+
+每个Provider的`env` option takes a record or a function of the session's `FactorySandboxContext`. Use the function form when one deployment hosts several factories and a credential belongs to only one of them:
+
+```typescript
+new PlatformFactorySandbox({
+  env: ctx => (ctx.factoryId === PLATFORM_FACTORY_ID ? { PLATFORM_TOKEN } : {}),
+})
+```
+
+比较`factoryId`, not `factoryName`: names can be edited and aren't unique.
+
+平台和 Docker 适用`env` only when they provision a sandbox. A sandbox that resumes keeps the environment it started with. If you remove a credential from some factories, recreate their running sandboxes so the credential doesn't stay in them.
+
+## 默认Sandbox {/* #default-sandbox */}
+
+当您省略`sandbox` option and Platform credentials (`MASTRA_PLATFORM_ACCESS_TOKEN` or `MASTRA_PLATFORM_SECRET_KEY`) are set, `MastraFactory` installs a sandbox itself:
+
+* 在下面`mastra dev` or with `NODE_ENV=development`, it installs `LocalFactorySandbox`, so development doesn't start remote machines.
+* 在内置部署中，它安装`PlatformFactorySandbox`. This needs `MASTRA_PROJECT_ID` and `MASTRA_ENVIRONMENT_ID`. If either is missing, Factory logs a warning and turns off repository sandboxes.
+
+明确的`sandbox` option always takes precedence. Without Platform credentials and without a `sandbox` option, repository sandboxes are off.
+
+对于未设置的设置，Provider应用其自己的默认值：平台和 E2B 上 2 个 CPU、1024 MB 和 5 分钟空闲超时，可通过`defaults`. On Platform, top-level `idleTimeoutMinutes` and `publicPorts` options also apply when `defaults` doesn't set them. `publicPorts` is off by default: when on, anyone with a port's URL can open it without signing in. It applies to sandboxes created after it changes. The schema's `default` values show the effective defaults.
+
+平台通过启动构建的构建器轮询构建。主机重新启动后，早期版本显示为`unknown`.
+
+保持架构更改可附加：添加字段，并在重命名一个版本时读取版本的两个名称。存储的文档比写入它的模式寿命更长，因此当前模式不再声明的键可以出现在其中，例如在主机切换提供程序之后。当此类密钥导致更新验证失败时，Factory 会丢弃未声明的密钥并在拒绝更新之前重试。更新本身设置的密钥永远不会被删除。
+
+### 回调形式 {/* #callback-form */}
+
+裸回调`sandbox: ctx => new E2BSandbox({ id: ctx.sessionId })` is also supported. Factory wraps it as a `provider: 'custom'` sandbox. Everything about the sandbox stays inside the callback, and the environment exposes nothing to tune.
+
+## 班级 {/* #class */}
+
+```typescript
+abstract class FactorySandbox<TSettings extends Record<string, unknown> = Record<string, unknown>> {
+  readonly provider: string
+  readonly settings: PublicSchema<TSettings>
+  create(ctx: FactorySandboxContext, settings: TSettings): MastraSandbox
+  template?(ctx: FactorySandboxContext, settings: TSettings): unknown
+  builds?: FactorySandboxBuilds<TSettings>
+}
+```
+
+<PropertiesTable
+  content={[
+{
+  name: 'provider',
+  type: 'string',
+  description: 'Short identifier shown to users, such as "platform", "e2b", "docker", "local" or "custom".',
+},
+{
+  name: 'settings',
+  type: 'PublicSchema<TSettings>',
+  description:
+    'Schema of the settings a user can tune per project: a Zod schema, a JSON Schema or a Standard Schema that can emit JSON Schema. `factory.sandboxDescription` reports the input side as JSON Schema. Author an object of primitive fields; nested objects are not rendered. Defaults to no settings.',
+},
+{
+  name: 'create',
+  type: '(ctx, settings) => MastraSandbox',
+  description:
+    'Constructs the sandbox for one session. Synchronous and side-effect free: the VM is provisioned on start(), not here. Factory passes the stored project settings.',
+},
+{
+  name: 'template',
+  type: '(ctx, settings) => unknown',
+  description:
+    'Builds the repository template the session sandbox boots from. Returns undefined for a session with no repository.',
+  isOptional: true,
+},
+{
+  name: 'builds',
+  type: 'FactorySandboxBuilds<TSettings>',
+  description:
+    'Builds the template ahead of a session. Its presence is the capability: `start(ctx, settings)` begins or finds a build, `get(ctx, settings, buildId)` reads its status and logs, and the optional `list(ctx, settings)` returns the history. Platform and Docker implement `start` and `get`; E2B also implements `list`.',
+  isOptional: true,
+},
+]}
+/>
+
+要编写您自己的提供程序，请扩展`FactorySandbox` from `@mastra/core/workspace`. Factory recognizes subclasses by a brand the base class sets, so a plain object with the same shape isn't accepted.
+
+```typescript
+import { FactorySandbox } from '@mastra/core/workspace'
+import type { FactorySandboxContext } from '@mastra/core/workspace'
+import type { PublicSchema } from '@mastra/core/schema'
+
+interface Settings {
+  region?: 'us' | 'eu'
+}
+
+class MyFactorySandbox extends FactorySandbox<Settings> {
+  readonly provider = 'my-cloud'
+  readonly settings: PublicSchema<Settings> = {
+    type: 'object',
+    properties: { region: { type: 'string', enum: ['us', 'eu'], default: 'us' } },
+    additionalProperties: false,
+  }
+
+  create(ctx: FactorySandboxContext, settings: Settings) {
+    return new MyCloudSandbox({
+      id: ctx.sessionId,
+      sandboxId: ctx.sandboxId,
+      template: this.template(ctx, settings),
+      workingDirectory: ctx.workingDirectory,
+      region: settings.region ?? 'us',
+    })
+  }
+
+  // Optional: the sandbox template image Factory can build ahead of time
+  template(ctx: FactorySandboxContext, settings: Settings) {
+    return myCloudTemplate(ctx, settings)
+  }
+
+  // Optional: build that template ahead of time and report on it
+  readonly builds = {
+    start: async (ctx: FactorySandboxContext, settings: Settings) =>
+      myCloud.startBuild(this.template(ctx, settings)),
+    get: async (ctx: FactorySandboxContext, settings: Settings, buildId: string) =>
+      myCloud.buildStatus(buildId),
+    list: async (ctx: FactorySandboxContext, settings: Settings) =>
+      myCloud.builds(this.template(ctx, settings).name),
+  }
+}
+```
+
+当用户重新创建卡住会话的Sandbox时，Factory 可能会调用`create` with only `sessionId` and the persisted `sandboxId` (no repository access, empty settings) and then call the returned sandbox's `destroy()` without starting it. This happens when the server restarted or the session was opened on another replica. For recreate to work, `destroy()` must find and remove the session's VM from `sandboxId` or the session id alone. Factory doesn't offer recreate for `LocalFactorySandbox`, because its `destroy()` keeps the session directory.
+
+## 工厂Sandbox上下文 {/* #factorysandboxcontext */}
+
+Factory 了解有关会话的所有信息，传递给`create`, `template` and the build methods.
+
+<PropertiesTable
+  content={[
+{ name: 'sessionId', type: 'string', description: 'Stable session id and the sandbox identity.' },
+{
+  name: 'sandboxId',
+  type: 'string',
+  description:
+    'The provider sandbox id persisted from a prior start. Forward it so resume reattaches the original VM.',
+  isOptional: true,
+},
+{
+  name: 'factoryId',
+  type: 'string',
+  description: 'Id of the factory the session belongs to. Absent for sessions created before factories.',
+  isOptional: true,
+},
+{
+  name: 'factoryName',
+  type: 'string',
+  description:
+    'Display name of the factory, for logs and readable config. Names can be edited and two factories can share one, so scope secrets by factoryId.',
+  isOptional: true,
+},
+{ name: 'repoFullName', type: 'string', description: 'owner/name of the session repository.', isOptional: true },
+{
+  name: 'setupCommand',
+  type: 'string',
+  description: 'The repository setup command, part of the template identity.',
+  isOptional: true,
+},
+{
+  name: 'getRepositoryAccess',
+  type: '(() => Promise<FactoryRepositoryAccess>) | undefined',
+  description:
+    'Resolves the clone URL and a short-lived credential for the session repository. Undefined when the session has no repository.',
+},
+{
+  name: 'repos',
+  type: 'Array<{ getRepositoryAccess, setupCommand? }>',
+  description:
+    'Every repository of the session environment in position order, each with its own access resolver and setup command. Set instead of getRepositoryAccess when the environment has repositories.',
+  isOptional: true,
+},
+{
+  name: 'workspaceSetupCommand',
+  type: 'string | string[]',
+  description: 'Command run once at the workspace root after every repository is set up. Only with repos.',
+  isOptional: true,
+},
+{
+  name: 'continueOnSetupFailure',
+  type: 'boolean',
+  description: 'Record a failing repository setup and continue the build instead of failing it. Only with repos.',
+  isOptional: true,
+},
+{
+  name: 'workingDirectory',
+  type: 'string',
+  description: 'Absolute workspace root the repositories check out under. The provider default when absent.',
+  isOptional: true,
+},
+{
+  name: 'resolveHead',
+  type: '(cloneUrl, token?) => Promise<string | undefined>',
+  description:
+    'Resolves the commit a repository template pins, given its clone URL and the credential minted for it. When absent, the provider resolves the default branch head itself.',
+  isOptional: true,
+},
+{
+  name: 'buildEnv',
+  type: 'Record<string, string>',
+  description:
+    "Environment for template builds and setup steps only, never for runtime commands. Keep it out of the template identity and the image. A provider whose builder can't do that may ignore it. If you spread the context into a repository template, take this field out of the spread so it doesn't reach the template's own `buildEnv`. Factory sets it from the factory's Build variables.",
+  isOptional: true,
+},
+{
+  name: 'buildEnvRevision',
+  type: 'string',
+  description:
+    'Opaque id that changes whenever buildEnv changes. Include it in the template identity so an edit rebuilds the template. It is a random id, never derived from the values.',
+  isOptional: true,
+},
+]}
+/>
+
+## 构建状态 {/* #build-status */}
+
+`FactorySandboxBuild.status`是其中之一`pending`, `building`, `ready`, `failed` or `unknown`. `unknown` means the provider can't read the status of a build it didn't start in this process.
+
+## 环境搭建 {/* #environment-builds */}
+
+当Sandbox声明时`builds`, factory builds the environment template ahead of sessions and registers a `factory-environment-build` workflow through `prepare()`. A build runs:
+
+* 在`POST /web/factory/projects/:id/environment/build` (the Environment page's Build now, or `mastra api factory project environment build <project-id>`)
+* 按照保留在核心中的 cron 计划`Schedules`, enabled through `PATCH { buildTriggers: { schedule: { enabled: true, cron, timezone } } }`; needs a storage adapter with the schedules domain, otherwise the route reports `scheduleAvailable: false`
+* 推送到链接存储库的默认分支后`buildTriggers.push.enabled` is set, at most once per `debounceMinutes`
+* 保存对模板输入的更改后，一旦项目有了模板；构建运行时保存的更改会在构建结束时构建
+
+保持每个模板输入不变的保存不会启动构建。当最后一个构建准备好、没有存储库头移动并且没有模板输入更改（设置、存储库及其顺序、设置命令、工作目录或工厂的构建变量）时，计划构建和推送构建会跳过。工厂仅存储最后的构建 ID 和活动模板。状态和历史记录来自Provider`GET …/environment/builds/:buildId` and `GET …/environment/builds` (404 `no_history` when the provider keeps none).
+
+当构建开始从未被记录并且提供者无法列出其构建时，Factory 无法判断该构建是否仍在运行。触发器有原因地跳过`unresolved` for 30 minutes after the start's lease lapsed, then Factory treats the start as failed and the next trigger builds.
+
+## 环境变量 {/* #environment-variables */}
+
+工厂成员为工厂的每个Sandbox添加环境变量**Settings › Manage Factory › Environment variables**. Each variable applies to one of:
+
+* **运行时**：每个会话Sandbox中的每个命令。添加、编辑或删除命令将对正在运行的Sandbox中的下一个命令生效，无需重新启动。当工厂的`pubsub` delivers it, or within a second when no cross-process `pubsub` is configured. A process that's already running keeps the environment it started with.
+* **建造**：模板构建和设置命令 Factory 自行运行，而不是运行时命令。工厂将它们传递给提供者作为`buildEnv` and `buildEnvRevision`. An edit rebuilds the template on the next build. A running sandbox doesn't rerun setup. New sandboxes start from the rebuilt template, which holds whatever setup produced with the new values, while their own commands never see the values. On Docker, template builds don't receive Build variables yet and an edit doesn't rebuild the image, so only a setup that Factory runs itself sees them.
+* **两个都**：运行时和构建。
+
+与提供者的键同名的运行时变量`env` option replaces it, and deleting the variable restores the host value. Names that Factory sets itself, such as `GH_TOKEN`, are reserved.
+
+值使用工厂的凭证加密密钥进行静态加密，并且无法通过 API 或 UI 读回。Sandbox中运行的任何程序都可以读取它们。当登录且未配置加密密钥时，Factory 拒绝保存变量，设置页面会解释原因。路线是`GET /web/factory/projects/:id/sandbox-envs` and `PUT`, `PATCH` and `DELETE /web/factory/projects/:id/sandbox-envs/:name`.
+
+## 有关的 {/* #related */}
+
+* [平台Sandbox](/reference/workspace/platform-sandbox)
+* [本地沙盒](/reference/workspace/local-sandbox)
+* [E2B沙盒集成](/integrations/sandboxes/e2b)
+* [Docker Sandbox集成](/integrations/sandboxes/docker)

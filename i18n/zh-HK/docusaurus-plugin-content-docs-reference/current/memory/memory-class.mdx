@@ -1,16 +1,16 @@
 ---
-title: "參考：Memory class | Memory"
-description: "Mastra 中 `Memory` class 的文件。此 class 提供可靠的系統，用於管理對話記錄及以 thread 為基礎的訊息儲存。"
+title: 'Reference: Memory class | Memory'
+description: 'The Memory class provides a reliable system for managing conversation history and thread-based message storage in Mastra.'
 packages:
-  - "@mastra/core"
-  - "@mastra/libsql"
-  - "@mastra/memory"
-  - "@mastra/pg"
+  - '@mastra/core'
+  - '@mastra/libsql'
+  - '@mastra/memory'
+  - '@mastra/pg'
 ---
 
-# Memory class
+# 記憶體等級
 
-`Memory` class 在 Mastra 中提供可靠的系統，用於管理對話記錄及以 thread 為基礎的訊息儲存。它支援永久儲存對話、語意搜尋功能及高效擷取訊息。你必須設定 storage provider 來儲存對話記錄；如啟用 semantic recall，亦需提供 vector store 及 embedder。
+這`Memory`類別提供了一個可靠的系統，用於管理 Mastra 中的對話歷史記錄和基於線程的訊息儲存。它支援對話的持久性儲存、語義搜尋功能和高效的訊息檢索。您必須為對話歷史記錄配置一個存儲提供程序，如果啟用語義召回，您還需要提供一個向量存儲，以及一個嵌入器（除非該向量存儲本身嵌入文字）。
 
 ## 使用範例 {/* #usage-example */}
 
@@ -33,112 +33,253 @@ export const agent = new Agent({
 })
 ```
 
-:::note
+：：：筆記
 
-要在 Agent 上啟用 `workingMemory`，你需要在主要 Mastra instance 上設定 storage provider。詳情請參閱 [Mastra class](../core/mastra-class)。
+啟用`workingMemory` on an agent, you’ll need a storage provider configured on your main Mastra instance. See [Mastra class](../core/mastra-class) for more information.
 
 :::
 
-## Constructor 參數 {/* #constructor-parameters */}
+## 建構函數參數 {/* #constructor-parameters */}
 
 <PropertiesTable
   content={[
-  {
-    name: 'storage',
-    type: 'MastraCompositeStore',
-    description:
-      '用於永久保存 memory 資料的 storage implementation。如未提供，預設為 `new DefaultStorage({ config: { url: "file:memory.db" } })`。',
-    isOptional: true,
-  },
-  {
-    name: 'vector',
-    type: 'MastraVector | false',
-    description: '提供語意搜尋功能的 vector store。設為 `false` 可停用向量操作。',
-    isOptional: true,
-  },
-  {
-    name: 'embedder',
-    type: 'EmbeddingModel<string> | EmbeddingModelV2<string>',
-    description: '用於 vector embedding 的 embedder instance。啟用 semantic recall 時必須提供。',
-    isOptional: true,
-  },
-  {
-    name: 'options',
-    type: 'MemoryConfig',
-    description: 'Memory 設定選項。',
-    isOptional: true,
-    properties: [
+{
+  name: 'storage',
+  type: 'MastraCompositeStore',
+  description:
+    'Storage implementation for persisting memory data. Optional: when omitted, an agent uses the storage of the Mastra instance it belongs to. If neither is configured, accessing `memory.storage` throws `Memory requires a storage provider to function`.',
+  isOptional: true,
+},
+{
+  name: 'vector',
+  type: 'MastraVector | false',
+  description: 'Vector store for semantic search capabilities. Set to `false` to disable vector operations.',
+  isOptional: true,
+},
+{
+  name: 'embedder',
+  type: 'string | EmbeddingModel<string> | EmbeddingModelV2<string>',
+  description:
+    'Embedder for vector embeddings, as a model-router ID string (for example `"openai/text-embedding-3-small"`), an `EmbeddingModel`, or an `EmbeddingModelV2`. Required when semantic recall is enabled and the vector store doesn\'t generate embeddings itself (`vector.isSelfEmbedding` is false).',
+  isOptional: true,
+},
+{
+  name: 'embeddingDimension',
+  type: 'number',
+  description:
+    'Output dimension of the embedder, as a positive integer. When set, Memory uses it to name the semantic recall index instead of embedding a probe string on first use. It must match the vectors the embedder returns: a mismatch throws a `MASTRA_MEMORY_EMBEDDING_DIMENSION_MISMATCH` error before any index is created. See [Setting the embedding dimension](/docs/memory/semantic-recall#setting-the-embedding-dimension).',
+  isOptional: true,
+},
+{
+  name: 'options',
+  type: 'MemoryConfig',
+  description: 'Memory configuration options.',
+  isOptional: true,
+  properties: [
+    {
+      parameters: [
+        {
+          name: 'lastMessages',
+          type: 'number | false',
+          description:
+            'Number of most recent messages to include in context. Set to `false` to disable the message history feature entirely (messages are not loaded into context or saved). Use `Number.MAX_SAFE_INTEGER` to retrieve all messages with no limit. To load messages without saving new ones, use the `readOnly` option. The window slides forward on every request, so once a thread exceeds the limit, each turn invalidates the provider prompt cache. For long-running conversations, use [Observational Memory](/docs/memory/observational-memory) instead.',
+          isOptional: true,
+          defaultValue: '10',
+        },
+        {
+          name: 'messageHistory',
+          type: '{ maxTokens: number; atMaxRemoveTokens?: number }',
+          description:
+            'Token budget for the complete prompt, including remembered history, system instructions, context, and the current turn. When the prompt exceeds `maxTokens`, the oldest remembered messages are dropped until the prompt is at most `maxTokens - atMaxRemoveTokens` (defaults to 25% of `maxTokens`). Protected content is never removed. Linked tool calls and results are removed together. During agent runs, trimmed history is excluded from later turns via a persisted per-thread boundary, but the messages themselves stay in storage. When set without an explicit `lastMessages`, the default 10-message cap is not applied. Set `maxTokens` to `0` to disable message history. Prefer this over `lastMessages`, since message count is a poor proxy for context size.',
+          isOptional: true,
+        },
+        {
+          name: 'readOnly',
+          type: 'boolean',
+          description:
+            'When true, prevents memory from saving new messages and provides working memory as read-only context (without the updateWorkingMemory tool). Useful for read-only operations like previews, internal routing agents, or sub agents that should reference but not modify memory.',
+          isOptional: true,
+          defaultValue: 'false',
+        },
+        {
+          name: 'retainFullInput',
+          type: 'boolean',
+          description:
+            "When true, the request input is processed exactly as supplied instead of being filtered against stored history. Use this when you assemble the input yourself and need the message sequence preserved. Stored history is still loaded underneath, and every input message that isn't already stored is saved to the thread, including few-shot examples. Can be set per call on `memory.options` or agent-wide in the memory constructor options.",
+          isOptional: true,
+          defaultValue: 'false',
+        },
+        {
+          name: 'semanticRecall',
+          type: "boolean | { topK: number; messageRange: number | { before: number; after: number }; scope?: 'thread' | 'resource'; maxChunkChars?: number }",
+          description:
+            'Enable semantic search in message history. Can be a boolean or an object with configuration options. When enabled, requires a vector store, and an embedder unless the vector store embeds text itself (`isSelfEmbedding`). Default topK is 4, default messageRange is {before: 1, after: 1}. `maxChunkChars` caps the characters of message text per embedded chunk; see [Long messages](/docs/memory/semantic-recall#long-messages).',
+          isOptional: true,
+          defaultValue: 'false',
+        },
+        {
+          name: 'workingMemory',
+          type: 'WorkingMemory',
+          description:
+            "Configuration for working memory feature. Can be `{ enabled: boolean; template?: string; schema?: ZodObject<any> | JSONSchema7; scope?: 'thread' | 'resource' }` or `{ enabled: boolean }` to disable.",
+          isOptional: true,
+          defaultValue:
+            "{ enabled: false, template: '# User Information\\n- **First Name**:\\n- **Last Name**:\\n...' }",
+        },
+        {
+          name: 'observationalMemory',
+          type: 'boolean | ObservationalMemoryOptions',
+          description:
+            'Enable Observational Memory for long-context agentic memory. Set to `true` for defaults, or pass a config object to customize token budgets, models, and scope. See [Observational Memory reference](/reference/memory/observational-memory) for configuration details.',
+          isOptional: true,
+          defaultValue: 'false',
+        },
+        {
+          name: 'generateTitle',
+          type: 'boolean | { model?: DynamicArgument<MastraModelConfig>; instructions?: DynamicArgument<string>; minMessages?: number; emitEvent?: boolean }',
+          description:
+            "Controls automatic thread title generation from the conversation transcript. Accepts a boolean or an object with a custom model (any `MastraModelConfig`: a model instance, a `\"provider/model\"` ID, or an OpenAI-compatible config; defaults to the agent's own model), custom instructions, a minimum message count, and `emitEvent`. With `emitEvent: true` the run's stream waits for the title and emits it as a transient `data-thread-title` chunk before `finish` (durable and evented agents persist the title but don't emit the chunk yet).",
+          isOptional: true,
+          defaultValue: 'false',
+        },
+      ],
+    },
+  ],
+},
+]}
+/>
+
+## 退貨 {/* #returns */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'memory',
+  type: 'Memory',
+  description: 'A new Memory instance with the specified configuration.',
+},
+]}
+/>
+
+## `saveMessages()` {/* #savemessages */}
+
+`agent.generate()`和`agent.stream()` persist messages for you. Call `memory.saveMessages()` when you need to write messages yourself, for example to seed a thread, to import a transcript, or to store messages that originated outside Mastra. Each message needs a `threadId` and a `resourceId`, so create the thread with [`createThread()`](/reference/memory/createThread)在保存之前。
+
+```typescript
+await memory.saveMessages({
+  messages: [
+    {
+      id: 'msg-1',
+      threadId: 'thread-123',
+      resourceId: 'user-456',
+      role: 'user',
+      createdAt: new Date(),
+      content: {
+        format: 2,
+        parts: [{ type: 'text', text: 'Where is my order?' }],
+      },
+    },
+  ],
+})
+```
+
+### 參數 {/* #parameters */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'messages',
+  type: 'MastraDBMessage[]',
+  description: 'The messages to save. Every message must include a `threadId` and a `resourceId`.',
+},
+{
+  name: 'memoryConfig',
+  type: 'MemoryConfig',
+  description: 'Per-call memory options. Merged over the options passed to the constructor.',
+  isOptional: true,
+},
+{
+  name: 'observabilityContext',
+  type: 'Partial<ObservabilityContext>',
+  description: 'Tracing context attached to the save operation.',
+  isOptional: true,
+},
+]}
+/>
+
+退貨`Promise<{ messages: MastraDBMessage[]; usage?: { tokens: number } }>`. `usage` is present when the embedder reports token usage while indexing messages for semantic recall.
+
+### `MastraDBMessage` {/* #mastradbmessage */}
+
+儲存使用單一訊息形狀，`MastraDBMessage`. The methods that hand messages back or take them in use this shape, including `saveMessages()` and [`recall()`](/reference/memory/recall).
+
+<PropertiesTable
+  content={[
+{
+  name: 'id',
+  type: 'string',
+  description: 'Message identifier.',
+},
+{
+  name: 'role',
+  type: "'user' | 'assistant' | 'system' | 'signal'",
+  description: 'Who produced the message. System messages and transient signals are not persisted.',
+},
+{
+  name: 'threadId',
+  type: 'string',
+  description: 'Thread the message belongs to. Required when saving.',
+  isOptional: true,
+},
+{
+  name: 'resourceId',
+  type: 'string',
+  description: 'Resource (usually a user or tenant) the message belongs to. Required when saving.',
+  isOptional: true,
+},
+{
+  name: 'createdAt',
+  type: 'Date',
+  description: 'Message timestamp.',
+},
+{
+  name: 'content',
+  type: 'MastraMessageContentV2',
+  description: 'The message body. Its `parts` array holds the text, reasoning, tool calls, and attachments.',
+},
+]}
+/>
+
+`content.parts`是Agent實際讀取的部分。`content.format` is always `2` for stored messages, and `content.metadata` carries arbitrary custom data. `content.toolInvocations`, `content.reasoning`, and `content.experimental_attachments` are flat mirrors kept for AI SDK v4 compatibility; write to `parts` instead.
+
+```typescript
+const assistantMessage = {
+  id: 'msg-2',
+  threadId: 'thread-123',
+  resourceId: 'user-456',
+  role: 'assistant',
+  createdAt: new Date(),
+  content: {
+    format: 2,
+    parts: [
+      { type: 'text', text: 'It ships tomorrow.' },
       {
-        parameters: [
-          {
-            name: 'lastMessages',
-            type: 'number | false',
-            description:
-              '要加入上下文的最新訊息數目。設為 `false` 可完全停用訊息記錄功能（訊息不會載入上下文，亦不會儲存）。使用 `Number.MAX_SAFE_INTEGER` 可擷取所有訊息而不設上限。要載入訊息但不儲存新訊息，請使用 `readOnly` 選項。',
-            isOptional: true,
-            defaultValue: '10',
-          },
-          {
-            name: 'readOnly',
-            type: 'boolean',
-            description:
-              '設為 true 時，Memory 不會儲存新訊息，並會將 working memory 作為唯讀上下文提供（不包含 updateWorkingMemory tool）。適用於預覽、內部 routing Agent，或只應參考而不應修改 memory 的 sub-agent 等唯讀操作。',
-            isOptional: true,
-            defaultValue: 'false',
-          },
-          {
-            name: 'semanticRecall',
-            type: "boolean | { topK: number; messageRange: number | { before: number; after: number }; scope?: 'thread' | 'resource' }",
-            description:
-              '在訊息記錄中啟用語意搜尋。可以是布林值，亦可以是包含設定選項的物件。啟用後，必須同時設定 vector store 及 embedder。topK 預設為 4，messageRange 預設為 {before: 1, after: 1}。',
-            isOptional: true,
-            defaultValue: 'false',
-          },
-          {
-            name: 'workingMemory',
-            type: 'WorkingMemory',
-            description:
-              "working memory 功能的設定。可以是 `{ enabled: boolean; template?: string; schema?: ZodObject<any> | JSONSchema7; scope?: 'thread' | 'resource' }`，或以 `{ enabled: boolean }` 停用。",
-            isOptional: true,
-            defaultValue:
-              "{ enabled: false, template: '# User Information\\n- **First Name**:\\n- **Last Name**:\\n...' }",
-          },
-          {
-            name: 'observationalMemory',
-            type: 'boolean | ObservationalMemoryOptions',
-            description:
-              '為長上下文 agentic memory 啟用 Observational Memory。設為 `true` 可使用預設值，亦可傳入設定物件來自訂 token budget、model 及 scope。設定詳情請參閱 [Observational Memory 參考](/reference/memory/observational-memory)。',
-            isOptional: true,
-            defaultValue: 'false',
-          },
-          {
-            name: 'generateTitle',
-            type: 'boolean | { model: DynamicArgument<MastraLanguageModel>; instructions?: DynamicArgument<string> }',
-            description:
-              '控制是否根據對話記錄自動產生 thread 標題。可以是布林值，亦可以是包含自訂 model 及指示的物件。',
-            isOptional: true,
-            defaultValue: 'false',
-          },
-        ],
+        type: 'tool-invocation',
+        toolInvocation: {
+          state: 'result',
+          toolCallId: 'call-1',
+          toolName: 'lookupOrder',
+          args: { orderId: 'A-1' },
+          result: { eta: '2026-10-30' },
+        },
       },
     ],
+    metadata: { source: 'import' },
   },
-]}
-/>
+}
+```
 
-## 傳回值 {/* #returns */}
-
-<PropertiesTable
-  content={[
-  {
-    name: 'memory',
-    type: 'Memory',
-    description: '採用指定設定的新 Memory instance。',
-  },
-]}
-/>
-
-## 進階使用範例 {/* #extended-usage-example */}
+## 擴充使用範例 {/* #extended-usage-example */}
 
 ```typescript title="src/mastra/agents/test-agent.ts"
 import { Memory } from '@mastra/memory'
@@ -174,20 +315,20 @@ export const agent = new Agent({
 })
 ```
 
-## PostgreSQL 及索引設定 {/* #postgresql-with-index-configuration */}
+## 帶有索引配置的 PostgreSQL {/* #postgresql-with-index-configuration */}
 
 ```typescript title="src/mastra/agents/pg-agent.ts"
 import { Memory } from '@mastra/memory'
 import { Agent } from '@mastra/core/agent'
 import { ModelRouterEmbeddingModel } from '@mastra/core/llm'
-import { PgStore, PgVector } from '@mastra/pg'
+import { PostgresStore, PgVector } from '@mastra/pg'
 
 export const agent = new Agent({
   name: 'pg-agent',
   instructions: 'You are an agent with optimized PostgreSQL memory.',
   model: '__GATEWAY_OPENAI_MODEL__',
   memory: new Memory({
-    storage: new PgStore({
+    storage: new PostgresStore({
       id: 'pg-agent-storage',
       connectionString: process.env.DATABASE_URL,
     }),
@@ -205,8 +346,10 @@ export const agent = new Agent({
         indexConfig: {
           type: 'hnsw', // Use HNSW for better performance
           metric: 'dotproduct', // Optimal for OpenAI embeddings
-          m: 16, // Number of bi-directional links
-          efConstruction: 64, // Construction-time candidate list size
+          hnsw: {
+            m: 16, // Number of bi-directional links
+            efConstruction: 64, // Construction-time candidate list size
+          },
         },
       },
       workingMemory: {
@@ -217,17 +360,19 @@ export const agent = new Agent({
 })
 ```
 
-### 相關內容 {/* #related */}
+### 有關的 {/* #related */}
 
-- [Memory 入門](/docs/memory/overview)
-- [Semantic Recall](/docs/memory/semantic-recall)
-- [Working Memory](/docs/memory/working-memory)
-- [Observational Memory](/docs/memory/observational-memory)
-- [Memory Processor](/docs/memory/memory-processors)
-- [createThread](/reference/memory/createThread)
-- [recall](/reference/memory/recall)
-- [getThreadById](/reference/memory/getThreadById)
-- [listThreads](/reference/memory/listThreads)
-- [deleteMessages](/reference/memory/deleteMessages)
-- [cloneThread](/reference/memory/cloneThread)
-- [Clone utility method](/reference/memory/clone-utilities)
+* [記憶體入門](/docs/memory/overview)
+* [語意回憶](/docs/memory/semantic-recall)
+* [工作記憶](/docs/memory/working-memory)
+* [觀察記憶](/docs/memory/observational-memory)
+* [記憶體處理器](/docs/memory/memory-processors)
+* [創建線程](/reference/memory/createThread)
+* [記起](/reference/memory/recall)
+* [取得線程ID](/reference/memory/getThreadById)
+* [列出線程](/reference/memory/listThreads)
+* [刪除訊息](/reference/memory/deleteMessages)
+* [克隆執行緒](/reference/memory/cloneThread)
+* [複製線程](/reference/memory/copyThread)
+* [定居](/reference/memory/settled)
+* [克隆實用方法](/reference/memory/clone-utilities)

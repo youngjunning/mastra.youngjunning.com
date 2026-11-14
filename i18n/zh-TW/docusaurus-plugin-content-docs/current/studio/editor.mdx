@@ -1,0 +1,379 @@
+---
+title: 'Editor'
+description: 'Use Mastra Studio Editor so collaborators can change agent instructions and tools without modifying source code, from draft testing through publication.'
+packages:
+  - '@mastra/core'
+  - '@mastra/editor'
+  - '@mastra/client-js'
+  - '@mastra/libsql'
+---
+
+# 編輯
+
+編輯器的工作方式類似於 Mastra Agent的 CMS。協作者可以在 Studio 中更改Agent程式的指令和Tool，而無需存取程式碼庫或編寫程式碼。他們可以在實施更改之前對其進行測試。
+
+預設情況下，TypeScript 定義協作者可以覆蓋的起始值。當您將欄位交給編輯器時，Studio 會擁有該欄位：在 Studio 中定義它並從Agent程式配置中忽略它。
+
+一個[deployed Studio](/docs/studio/deployment) makes Editor available to collaborators outside local development.
+
+:::提示\[📹觀看]
+
+觀看[Mastra Editor workshop](https://www.youtube.com/watch?v=XTjuRoI7t_k\&pp=ygUWbWFzdHJhIGVkaXRvciB3b3Jrc2hvcA%3D%3D) for a guided walkthrough.
+
+:::
+
+## 何時使用編輯器 {/* #when-to-use-editor */}
+
+當在程式碼中定義Agent程式但負責其行為的人員不應編輯程式碼庫時，請使用編輯器。當說明或Tool經常變更並且需要在到達使用者之前進行測試時，它就很有效。如果開發人員擁有應用程式的每個變更和發布Agent配置，請保留[agent configuration in code](/docs/agents/overview) instead.
+
+使用[Agent Builder](https://agent-builder.mastra.ai) instead when collaborators need to create and manage fully stored agents in a browser rather than start from agents defined in code.
+
+## 快速入門 {/* #quickstart */}
+
+安裝`@mastra/editor`. This quickstart uses LibSQL to store Editor changes:
+
+```bash npm2yarn
+npm install @mastra/editor @mastra/libsql
+```
+
+添加`MastraEditor` and storage to the `Mastra` instance. Existing storage can be reused instead of adding the LibSQL store shown here.
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { MastraEditor } from '@mastra/editor'
+import { LibSQLStore } from '@mastra/libsql'
+
+export const mastra = new Mastra({
+  agents: {/* existing agents */},
+  storage: new LibSQLStore({
+    id: 'mastra-storage',
+    url: 'file:./mastra.db',
+  }),
+  editor: new MastraEditor(),
+})
+```
+
+## 在 Studio 中使用編輯器 {/* #use-editor-in-studio */}
+
+在[Studio](/docs/studio/overview), open **Agents**, select an agent, then select **Editor**. Collaborators can update the agent's instructions and tools based on its Editor permissions.
+
+透過資料庫存儲，將變更儲存為草稿以進行測試，而不會影響即時Agent。當草稿可供使用時發布草稿。
+
+## 指示 {/* #instructions */}
+
+這**Instructions** section reflects the agent's instructions. When instructions stay in code (the default), it starts from that prompt and collaborators can override it or add instruction blocks. When `editor.instructions` is `true`, Studio owns the prompt: omit `instructions` from code and publish a version in Studio before the agent runs.
+
+指令塊可以包括來自目前請求的值。例如，<code>{'{{userName}}'}</code> inserts a name supplied through [request context](/docs/server/request-context). A [display condition](/reference/editor/prompt-blocks#display-conditions) can show a block only for a customer, role, or feature flag.
+
+### 提示區塊 {/* #prompt-blocks */}
+
+提示區塊是一段已儲存的指令文本，可供多個Agent程式使用。創建並發布一個**Prompts**. Then open an agent's **Instructions** section and select **Add block**.
+
+例如，支援、退貨和訂單狀態Agent可能都需要相同的退款政策。將策略儲存為提示區塊並將其新增至每個Agent程式。當策略發生變化時，更新並發布一次區塊，而不是編輯三個Agent程式。
+
+當提示區塊發生變更時，引用其已發佈版本的每個Agent程式都會收到更新。草稿更改僅在預覽時使用，因此在發布區塊之前它們不會影響即時Agent。
+
+請參閱[prompt blocks reference](/reference/editor/prompt-blocks) for template syntax, conditions, versions, and APIs.
+
+## Tool {/* #tools */}
+
+Tool让Agent可以采取行动。協作者可以從編輯器可用的Tool中進行選擇，但他們無法在 Studio 中實作新Tool。Tool的可用方式取决于其来源：
+
+* **專案Tool**
+* **整合Tool**在開發人員註冊 Composio 或 Arcade 等提供程序後即可使用。然後，協作者可以瀏覽Provider的目錄並新增Tool，而無需先在程式碼中新增每個Tool。
+* **MCPTool**配置 MCP 用戶端後可用。具有存取權限的協作者可以在 Studio 中建立用戶端，然後從其伺服器公開的Tool中進行選擇。
+
+在Agent處**Tools** section, collaborators can add the tools it needs or rewrite a tool's description for that agent. A more specific description helps the agent understand when to use the tool without changing the tool itself.
+
+### 專案Tool {/* #project-tools */}
+
+開發者可以在上面註冊一個專案Tool`Mastra` instance to make it available in Editor:
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { MastraEditor } from '@mastra/editor'
+import { searchOrders } from './tools/search-orders'
+
+export const mastra = new Mastra({
+  tools: {
+    searchOrders,
+  },
+  agents: {/* agents */},
+  editor: new MastraEditor(),
+})
+```
+
+Studio Tool选择器列出了该Tool。當Agent允許Tool編輯時，協作者可以將其新增至Agent程式。當Tool成員身分保留在程式碼中時，Agent程式的編輯器檢視也會列出程式碼中附加的Tool。
+
+### 作曲 {/* #composio */}
+
+[作曲](https://composio.dev)為 GitHub、Slack 和 Gmail 等服務提供Tool。使用 Composio API 金鑰註冊提供程序，使其Tool目錄在編輯器中可用：
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { MastraEditor } from '@mastra/editor'
+import { ComposioToolProvider } from '@mastra/editor/composio'
+
+export const mastra = new Mastra({
+  agents: {/* agents */},
+  editor: new MastraEditor({
+    toolProviders: {
+      composio: new ComposioToolProvider({
+        apiKey: process.env.COMPOSIO_API_KEY!,
+      }),
+    },
+  }),
+})
+```
+
+Composio Tool ID 看起來像`GITHUB_CREATE_ISSUE`. By default, a selected tool uses the connection associated with the agent's author. See [connection scope](https://agent-builder.mastra.ai/tool-providers#connection-scope) to use each caller's connection instead.
+
+### 拱廊 {/* #arcade */}
+
+[拱廊](https://arcade.dev)提供了另一個具有內建身份驗證的Tool目錄。使用 Arcade API 金鑰註冊它：
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { MastraEditor } from '@mastra/editor'
+import { ArcadeToolProvider } from '@mastra/editor/arcade'
+
+export const mastra = new Mastra({
+  agents: {/* agents */},
+  editor: new MastraEditor({
+    toolProviders: {
+      arcade: new ArcadeToolProvider({
+        apiKey: process.env.ARCADE_API_KEY!,
+      }),
+    },
+  }),
+})
+```
+
+街機Tool ID 使用`Toolkit.ToolName` format, such as `Github.GetRepository`.
+
+### MCP 客戶 {/* #mcp-clients */}
+
+協作者還可以在 Studio 中建立可重複使用的 MCP 用戶端，並將其Tool新增至Agent程式。儲存的客戶端可以啟動本機`stdio` server or connect to a remote HTTP server. Tool filters let each agent use only the tools it needs from that server.
+
+請參閱[Editor tools reference](/reference/editor/tools) for MCP configuration, conditions, filtering, and resolution order. See [`ToolProvider`](/reference/editor/tool-provider) for provider options.
+
+## 確定協作者可以編輯的內容 {/* #decide-what-collaborators-can-edit */}
+
+這`editor` field decides which fields Studio owns. When omitted, collaborators can change an agent's instructions and manage its tools, including their descriptions, starting from the values in code. The agent's `id`, `name`, and model configuration come from code unless you explicitly enable model editing.
+
+```typescript title="src/mastra/agents/support-agent.ts"
+import { Agent } from '@mastra/core/agent'
+import { searchOrders } from './tools/search-orders'
+
+export const supportAgent = new Agent({
+  id: 'support-agent',
+  name: 'Support agent',
+  instructions: 'Help customers with Acme products.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  tools: { searchOrders },
+})
+```
+
+設定一個字段為`true` to hand it to Studio exclusively. Studio then owns the field, so omit it from code: TypeScript rejects `instructions` when `editor.instructions` is `true`, and rejects `tools` when `editor.tools` is `true`. An agent whose instructions are owned by Studio fails closed until a version containing instructions is published.
+
+```typescript title="src/mastra/agents/support-agent.ts"
+import { Agent } from '@mastra/core/agent'
+import { searchOrders } from './tools/search-orders'
+
+export const supportAgent = new Agent({
+  id: 'support-agent',
+  name: 'Support agent',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  tools: { searchOrders },
+  editor: {
+    instructions: true,
+    tools: {
+      description: true,
+    },
+  },
+})
+```
+
+在這裡，工作室擁有指令，而Tool成員資格保留在程式碼中：協作者只能改進描述`searchOrders`.
+
+| `editor` value | What collaborators can change | What code must provide |
+| - | - | - |
+| Omitted | Instructions, tools, and tool descriptions | `instructions`; tools are optional |
+| `false` | Nothing | `instructions` |
+| `{ instructions: true }` | Instructions | No `instructions`; tools are optional |
+| `{ tools: true }` | Tools and tool descriptions | `instructions`; no `tools` |
+| `{ tools: { description: true } }` | Descriptions of tools already added in code | `instructions`; the tools to describe |
+| `{ model: true }` | A static model fallback list | A static fallback array with immutable entry IDs |
+
+若要在 Studio 中編輯模型，請設定`editor: { model: true }` and define `model` as a static array in code. Give every entry a stable `id` so Editor can match saved values to the corresponding code-defined model settings. Studio can reorder entries, change their provider and model, and enable or disable them.
+
+函數值模型配置仍然由程式碼擁有，並且無法在 Studio 中進行編輯。看[editor overrides](/reference/agents/agent#editor-overrides) for the complete configuration.
+
+## 選擇更改的儲存位置 {/* #choose-where-changes-are-stored */}
+
+編輯器可以將變更儲存在配置的資料庫中或作為儲存庫中的檔案。
+
+### 資料庫儲存 {/* #database-storage */}
+
+資料庫選項是預設的。編輯器使用配置的存儲`Mastra` instance, so the application and Editor can share the same backend.
+
+若要為編輯器資料使用單獨的後端，請設定`editor` option on [`MastraCompositeStore`](/reference/storage/composite#options). Storage domains without an explicit route continue to use its `default` store.
+
+以下範例將應用程式和編輯器資料保存在單獨的 LibSQL 檔案中：
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { MastraCompositeStore } from '@mastra/core/storage'
+import { MastraEditor } from '@mastra/editor'
+import { LibSQLStore } from '@mastra/libsql'
+
+export const mastra = new Mastra({
+  agents: {/* existing agents */},
+  storage: new MastraCompositeStore({
+    id: 'mastra-storage',
+    default: new LibSQLStore({
+      id: 'app-storage',
+      url: 'file:./mastra.db',
+    }),
+    editor: new LibSQLStore({
+      id: 'editor-storage',
+      url: 'file:./editor.db',
+    }),
+  }),
+  editor: new MastraEditor(),
+})
+```
+
+### 儲存庫文件 {/* #repository-files */}
+
+使用程式碼來源將覆蓋與應用程式程式碼一起保留。開發人員可以查看拉取請求中的檔案並將其與應用程式一起部署：
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { MastraEditor } from '@mastra/editor'
+
+export const mastra = new Mastra({
+  agents: {/* existing agents */},
+  editor: new MastraEditor({
+    source: 'code',
+    codePath: './mastra/editor',
+  }),
+})
+```
+
+`support-agent` gets this file:
+
+```text
+mastra/editor/agents/support-agent.json
+```
+
+该文件仅包含编辑器管理的部分。例如：
+
+```json title="mastra/editor/agents/support-agent.json"
+{
+  "instructions": "Help customers with Acme products and answer in their language.",
+  "tools": {
+    "searchOrders": {
+      "description": "Look up an order by its number"
+    }
+  }
+}
+```
+
+Agent程式的模型、名稱和其他程式碼擁有的欄位保留在其 TypeScript 檔案中。 Mastra 讀取 JSON 並在Agent程式執行時套用這些值。
+
+當協作者在 Studio 中儲存時，他們可以將檔案寫入本機檔案系統或下載。透過原始碼管理集成，Studio 可以開啟拉取請求。然後 Git 提供評論和版本歷史記錄。
+
+看[`MastraEditor`](/reference/editor/mastra-editor#source) for file locations and source options.
+
+## 版本控制 {/* #versioning */}
+
+資料庫支援的Agent程式和提示區塊使用草稿版本和已發布版本。儲存會建立草稿，而即時Agent程式會繼續使用已發佈的版本。發布使草稿生效。恢復舊版本會建立一個草稿，協作者可以在發布之前進行測試。
+
+程式碼支援的Agent程式會覆寫使用 JSON 檔案和 Git 歷史記錄。
+
+### 選擇版本 {/* #select-a-version */}
+
+應用程式可以透過傳遞狀態（`published` or `draft`) or an exact version ID:
+
+```typescript title="Version selection"
+const publishedAgent = await mastra.getAgentById('support-agent', {
+  status: 'published',
+})
+
+const draftAgent = await mastra.getAgentById('support-agent', {
+  status: 'draft',
+})
+
+const versionedAgent = await mastra.getAgentById('support-agent', {
+  versionId: 'abc-123',
+})
+```
+
+版本選擇支援：
+
+* 在 A/B 測試中比較兩個版本。
+* 在向所有人發布之前，先將草稿分發給一個小組。
+* 保持發布版本的生產，同時使用最新的草稿。
+* 將客戶固定到特定版本。
+
+當主管呼叫子Agent時，相同的版本控制也會起作用。開發人員可以測試草案子Agent，而無需更改系統的其餘部分。
+
+請參閱[Editor versioning reference](/reference/editor/versioning) for version selection, sub-agent behavior, REST endpoints, and SDK methods.
+
+## 能見度 {/* #visibility */}
+
+和[`server.auth`](/docs/auth/overview) configured, every stored agent has an owner and a `visibility`. An agent created in Studio, through `POST /api/stored/agents`, or with the [built-in MCP server](/docs/server/mcp) is owned by the user who created it and is `private` unless they set `visibility: 'public'`. The owner is the caller's resource ID from `mapUserToResourceId`, or the user's `id` without it. Without `server.auth`, or when the caller has neither, stored agents have no owner, are `public`, and every caller can use them.
+
+|誰 |可以查看並致電私人Agent |可以編輯或刪除|
+| - | - | - |
+|業主|是的 |是的 |
+|用戶具有`*`, `stored-agents:*`, or `stored-agents:admin` | Yes | Yes |
+| Users granted that agent by id, for example `stored-agents:read:support-agent` or `stored-agents:edit:support-agent` | Yes, with a `read` grant. An `execute` grant only lets them call it | Yes, with an `edit` or `delete` grant |
+| Everyone else | No | No |
+
+此表僅涵蓋所有權。每個路由還是會檢查自己的權限，例如`stored-agents:write` to edit or `agents:execute` to call, so an admin or id grant works only alongside the route permission. A grant by id only works when the agent is requested by its id. The agent still doesn't appear in their `GET /api/agents` or `GET /api/stored/agents` list.
+
+一個`public` agent can be seen and called by every user, but only the users in the table can edit or delete it. Agents saved before they had an owner stay visible to everyone, and any user with the route permission can edit or delete them. Code-defined agents aren't affected, including ones with Editor overrides.
+
+這些規則適用於每個查找Agent的路由，而不僅僅是`/api/stored/agents`. To another user, a private agent behaves like an agent that doesn't exist: `GET /api/agents` leaves it out, the agent, version, workspace, and schedule routes for it answer `404`, and the memory routes answer as they would for a missing agent. Changing its model at runtime with `POST /api/agents/:agentId/model` needs edit access. `POST /api/agents/:agentId/clone` makes the caller the owner of a private clone and ignores an `authorId` in the body.
+
+## 程式化訪問 {/* #programmatic-access */}
+
+Studio 中提供的所有內容也可以透過程式設計方式取得[`mastra.getEditor()`](/reference/core/getEditor), the REST API, or the Client SDK. Use it to script bulk updates or seed stored configurations from code. It can also power automation that tunes agents based on [evaluation results](/docs/evals/experiments).
+
+稱呼`mastra.getEditor()` when application code has access to the Mastra instance:
+
+```typescript title="src/scripts/update-agent.ts"
+import { mastra } from '../mastra'
+
+const editor = mastra.getEditor()!
+
+await editor.agent.update({
+  id: 'support-agent',
+  instructions: 'Help customers with Acme products. Reply in their language.',
+})
+```
+
+直接的`editor.agent.update()` method saves the changed snapshot fields as a new version, but that version starts as an inactive draft. The method only changes record fields such as `status` or `activeVersionId` when you pass them. The published agent keeps serving its previous version until you publish. To publish, fetch the draft's version ID (for example with `listVersions()` from the Client SDK) and assign it explicitly:
+
+```typescript title="src/scripts/publish-agent.ts"
+await editor.agent.update({
+  id: 'support-agent',
+  status: 'published',
+  activeVersionId: versionId,
+})
+```
+
+儲存Agent程式 REST API 遵循相同的規則。`PATCH /api/stored/agents/support-agent` creates an inactive draft unless you set `autoPublish: true`, and `POST /api/stored/agents/support-agent/versions/:versionId/activate` publishes an existing version.
+
+預設伺服器前綴是`/api`. Developers can set a custom prefix in the server configuration.
+
+請參閱[Editor versioning reference](/reference/editor/versioning) for the draft, publish, and restore lifecycle, and the [`MastraEditor` namespaces](/reference/editor/mastra-editor#namespaces) and [Client SDK agents API](/reference/client-js/agents#stored-agents) for available operations.
+
+## 後續步驟 {/* #next-steps */}
+
+* [MastraEditor 參考](/reference/editor/mastra-editor)
+* [提示區塊參考](/reference/editor/prompt-blocks)
+* [編輯器Tool參考](/reference/editor/tools)
+* [編輯器版本控制參考](/reference/editor/versioning)

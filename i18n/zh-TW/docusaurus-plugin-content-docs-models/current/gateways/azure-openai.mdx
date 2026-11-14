@@ -1,247 +1,306 @@
 ---
 title: "Azure OpenAI | Gateways | Mastra"
-description: "使用 Azure OpenAI Service 與自訂模型部署。"
+description: "Use Azure OpenAI Service with custom model deployments."
 ---
 
 {/* This file is MANUALLY MAINTAINED - DO NOT AUTO-GENERATE */}
 
 {/* Azure uses deployment-based routing which differs from standard providers */}
 
-# <img src="https://models.dev/logos/azure.svg" alt="Azure OpenAI 標誌" className="inline w-8 h-8 mr-2 align-middle dark:invert dark:brightness-0 dark:contrast-200" />Azure OpenAI
+# <img src="https://models.dev/logos/azure.svg" alt="Azure OpenAI logo" className="inline w-8 h-8 mr-2 align-middle dark:invert dark:brightness-0 dark:contrast-200" />Azure 開放人工智慧
 
-Azure OpenAI 透過專用部署提供企業級的 OpenAI 模型存取，並具備安全性、合規性與 SLA 保證。
+Azure OpenAI 透過具有安全性、合規性和 SLA 保證的專用部署提供對 OpenAI 模型的企業級存取。
 
-不同於模型名稱固定的其他 Provider，Azure 使用由你在 Azure Portal 中設定的**部署名稱**。
+與其他具有固定模型名稱的Provider不同，Azure 使用**deployment names** that you configure in the Azure Portal.
 
-## 使用方式 {/* #usage */}
+## 用法 {/* #usage */}
+
+預設情況下，未註冊 Azure OpenAI 網關。在您的 Mastra 實例上註冊它，並註冊在同一實例上使用它的Agent程式。否則`azure-openai/...` model IDs fail with `Could not find config for provider azure-openai`.
+
+在Agent程式的模型 ID 中引用您的 Azure 部署名稱：
+
+```typescript title="src/mastra/agents/my-agent.ts"
+import { Agent } from "@mastra/core/agent";
+
+export const myAgent = new Agent({
+  id: "my-agent",
+  name: "My Agent",
+  instructions: "You are a helpful assistant",
+  model: "azure-openai/my-gpt-5-4-deployment", // Use your Azure deployment name (autocompleted in dev mode)
+});
+```
+
+註冊網關和Agent：
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from "@mastra/core";
+import { AzureOpenAIGateway } from "@mastra/core/llm";
+import { myAgent } from "./agents/my-agent";
+
+export const mastra = new Mastra({
+  gateways: {
+    "azure-openai": new AzureOpenAIGateway({
+      resourceName: "my-openai-resource",
+      apiKey: process.env.AZURE_API_KEY!,
+      deployments: ["my-gpt-5-4-deployment"],
+    }),
+  },
+  agents: { myAgent },
+});
+```
+
+從 Mastra 實例取得Agent並呼叫它：
 
 ```typescript
-import { Agent } from '@mastra/core/agent'
-
-const agent = new Agent({
-  id: 'my-agent',
-  name: 'My Agent',
-  instructions: 'You are a helpful assistant',
-  model: 'azure-openai/my-gpt-5-4-deployment', // Use your Azure deployment name (autocompleted in dev mode)
-})
+const agent = mastra.getAgent("myAgent");
 
 // Generate a response
-const response = await agent.generate('Hello!')
+const response = await agent.generate("Hello!");
 
 // Stream a response
-const stream = await agent.stream('Tell me a story')
+const stream = await agent.stream("Tell me a story");
 for await (const chunk of stream) {
-  console.log(chunk)
+  console.log(chunk);
 }
 ```
 
-請查看 [Azure OpenAI 模型可用性](https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models)，瞭解各區域提供的選項。
+看[Configuration](#configuration) for other authentication and deployment discovery options.
 
-## Azure 部署的運作方式 {/* #how-azure-deployments-work */}
+查看[Azure OpenAI model availability](https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models) for region-specific options.
 
-Azure 模型 ID 遵循此格式：`azure-openai/your-deployment-name`
+## Azure 部署的工作原理 {/* #how-azure-deployments-work */}
 
-部署名稱為**你的 Azure 帳戶專屬名稱**，並在 Azure Portal 中建立部署時選擇。常見範例：
+Azure 模型 ID 遵循下列模式：`azure-openai/your-deployment-name`
 
-- `azure-openai/my-gpt-5-4-deployment`
-- `azure-openai/production-gpt-5-4`
-- `azure-openai/staging-gpt-5-4-mini`
+部署名稱是**specific to your Azure account** and chosen when you create a deployment in Azure Portal. Common examples:
+
+* `azure-openai/my-gpt-5-4-deployment`
+* `azure-openai/production-gpt-5-4`
+* `azure-openai/staging-gpt-5-4-mini`
 
 ## 設定 {/* #setup */}
 
-在 [Azure OpenAI Studio](https://oai.azure.com/) 中建立部署。資源名稱與 API 金鑰位於 Azure Portal 的「Keys and Endpoint」下。
+建立部署於[Azure OpenAI Studio](https://oai.azure.com/). The resource name and API key are in Azure Portal under "Keys and Endpoint".
 
-## 組態 {/* #configuration */}
+## 配置 {/* #configuration */}
 
-建立 gateway 執行個體並傳入 Mastra。常見的組態模式如下。
+實例化網關並將其傳遞給 Mastra。常見的配置方式如下圖所示。
 
 ### 靜態部署 {/* #static-deployments */}
 
-提供 Azure Portal 中的部署名稱。
+提供來自 Azure 入口網站的部署名稱。
 
 ```typescript
-import { Mastra } from '@mastra/core'
-import { AzureOpenAIGateway } from '@mastra/core/llm'
+import { Mastra } from "@mastra/core";
+import { AzureOpenAIGateway } from "@mastra/core/llm";
 
 export const mastra = new Mastra({
   gateways: {
-    'azure-openai': new AzureOpenAIGateway({
-      resourceName: 'my-openai-resource',
+    "azure-openai": new AzureOpenAIGateway({
+      resourceName: "my-openai-resource",
       apiKey: process.env.AZURE_API_KEY!,
-      deployments: ['gpt-5-4-prod', 'gpt-5-4-mini-dev'],
+      deployments: ["gpt-5-4-prod", "gpt-5-4-mini-dev"],
     }),
   },
-})
+});
 ```
 
-### 動態探索 {/* #dynamic-discovery */}
+### 動態發現 {/* #dynamic-discovery */}
 
-提供 Management API 認證資訊。gateway 會查詢 Azure Management API 以列出部署。
+提供管理 API 憑證。網關查詢 Azure 管理 API 以列出部署。
 
 ```typescript
-import { Mastra } from '@mastra/core'
-import { AzureOpenAIGateway } from '@mastra/core/llm'
+import { Mastra } from "@mastra/core";
+import { AzureOpenAIGateway } from "@mastra/core/llm";
 
 export const mastra = new Mastra({
   gateways: {
-    'azure-openai': new AzureOpenAIGateway({
-      resourceName: 'my-openai-resource',
+    "azure-openai": new AzureOpenAIGateway({
+      resourceName: "my-openai-resource",
       apiKey: process.env.AZURE_API_KEY!,
       management: {
         tenantId: process.env.AZURE_TENANT_ID!,
         clientId: process.env.AZURE_CLIENT_ID!,
         clientSecret: process.env.AZURE_CLIENT_SECRET!,
         subscriptionId: process.env.AZURE_SUBSCRIPTION_ID!,
-        resourceGroup: 'my-resource-group',
+        resourceGroup: "my-resource-group",
       },
     }),
   },
-})
+});
 ```
 
-Service Principal 需要「Cognitive Services User」角色。請參閱 [Azure 文件](https://learn.microsoft.com/en-us/entra/identity-platform/howto-create-service-principal-portal)。
+服務主體需要「認知服務使用者」角色。看[Azure documentation](https://learn.microsoft.com/en-us/entra/identity-platform/howto-create-service-principal-portal).
 
 ### Microsoft Entra ID 驗證 {/* #microsoft-entra-id-authentication */}
 
-若你的 Azure OpenAI 資源已停用 API 金鑰，請使用 Microsoft Entra ID 驗證。傳入任何與 Azure SDK 相容的認證，例如 `@azure/identity` 中的 `DefaultAzureCredential`。
+當為 Azure OpenAI 資源停用 API 金鑰時，請使用 Microsoft Entra ID 驗證。傳遞任何與 Azure SDK 相容的憑證，例如`DefaultAzureCredential` from `@azure/identity`.
 
-若使用 `DefaultAzureCredential`，請在 Mastra 專案中安裝 `@azure/identity`。
+安裝`@azure/identity` in your Mastra project if you use `DefaultAzureCredential`.
 
 ```typescript
-import { DefaultAzureCredential } from '@azure/identity'
-import { Mastra } from '@mastra/core'
-import { AzureOpenAIGateway } from '@mastra/core/llm'
+import { DefaultAzureCredential } from "@azure/identity";
+import { Mastra } from "@mastra/core";
+import { AzureOpenAIGateway } from "@mastra/core/llm";
 
 export const mastra = new Mastra({
   gateways: {
-    'azure-openai': new AzureOpenAIGateway({
-      resourceName: 'my-openai-resource',
+    "azure-openai": new AzureOpenAIGateway({
+      resourceName: "my-openai-resource",
       authentication: {
-        type: 'entraId',
+        type: "entraId",
         credential: new DefaultAzureCredential(),
       },
-      deployments: ['gpt-5-4-prod', 'gpt-5-4-mini-dev'],
+      deployments: ["gpt-5-4-prod", "gpt-5-4-mini-dev"],
     }),
   },
-})
+});
 ```
 
-此身分需要呼叫 Azure OpenAI 的權限，例如 `Cognitive Services OpenAI User` 角色。
+身分需要呼叫 Azure OpenAI 的權限，例如`Cognitive Services OpenAI User` role.
 
-若要使用特定的受控識別，請改為傳入 `ManagedIdentityCredential`。
+對於特定的託管身份，透過`ManagedIdentityCredential` instead.
 
 ```typescript
-import { ManagedIdentityCredential } from '@azure/identity'
+import { ManagedIdentityCredential } from "@azure/identity";
 
-const credential = new ManagedIdentityCredential('client-id')
+const credential = new ManagedIdentityCredential("client-id");
 ```
 
-### 手動指定部署名稱 {/* #manual-deployment-names */}
+### 手動部署名稱 {/* #manual-deployment-names */}
 
-僅提供資源名稱與 API 金鑰。建立 Agent 時指定部署名稱。不提供 IDE 自動完成。
+僅提供資源名稱和 API 金鑰。建立Agent時指定部署名稱。沒有 IDE 自動完成功能。
 
 ```typescript
-import { Mastra } from '@mastra/core'
-import { AzureOpenAIGateway } from '@mastra/core/llm'
+import { Mastra } from "@mastra/core";
+import { AzureOpenAIGateway } from "@mastra/core/llm";
 
 export const mastra = new Mastra({
   gateways: {
-    'azure-openai': new AzureOpenAIGateway({
-      resourceName: 'my-openai-resource',
+    "azure-openai": new AzureOpenAIGateway({
+      resourceName: "my-openai-resource",
       apiKey: process.env.AZURE_API_KEY!,
     }),
   },
-})
+});
 ```
 
-### Azure Responses API {/* #azure-responses-api */}
+### Azure 回應 API {/* #azure-responses-api */}
 
-Azure OpenAI 透過 AI SDK Azure Provider 所使用的 `v1` API 路徑支援 Responses API。當你的 Azure 資源與部署支援該路由時，請設定 `useResponsesAPI: true`。gateway 接著會預設使用 `apiVersion: "v1"` 和 `useDeploymentBasedUrls: false`。
+Azure OpenAI 透過以下方式支援回應 API`v1` API path used by the AI SDK Azure provider. Set `useResponsesAPI: true` when your Azure resource and deployment support that route. The gateway then uses `apiVersion: "v1"` and `useDeploymentBasedUrls: false` by default.
 
 ```typescript
-import { Mastra } from '@mastra/core'
-import { AzureOpenAIGateway } from '@mastra/core/llm'
+import { Mastra } from "@mastra/core";
+import { AzureOpenAIGateway } from "@mastra/core/llm";
 
 export const mastra = new Mastra({
   gateways: {
-    'azure-openai': new AzureOpenAIGateway({
-      resourceName: 'my-openai-resource',
+    "azure-openai": new AzureOpenAIGateway({
+      resourceName: "my-openai-resource",
       apiKey: process.env.AZURE_API_KEY!,
       useResponsesAPI: true,
-      deployments: ['my-gpt-5-4-deployment'],
+      deployments: ["my-gpt-5-4-deployment"],
     }),
   },
-})
+});
 ```
 
-若要使用現有的 Azure chat completions 路由，請省略 `useResponsesAPI` 或將其設為 `false`。為了相容性，該路徑預設保留 `apiVersion: "2024-04-01-preview"` 和以部署為基礎的 URL。
+保持`useResponsesAPI` omitted or set it to `false` for the existing Azure chat completions route. That path keeps `apiVersion: "2024-04-01-preview"` and deployment-based URLs by default for compatibility.
 
-你仍可直接設定 `apiVersion` 和 `useDeploymentBasedUrls`。例如，將 `useDeploymentBasedUrls: false` 設為使用 Azure `v1` URL 格式搭配 chat 模型建構函式；gateway 會將該路由的 `apiVersion` 預設為 `"v1"`。若僅傳入 `apiVersion: "v1"`，為了相容性，仍會保留現有以部署為基礎的 URL 預設值。
+您仍然可以配置`apiVersion` and `useDeploymentBasedUrls` directly. For example, set `useDeploymentBasedUrls: false` to use the Azure `v1` URL shape with the chat model constructor; the gateway defaults `apiVersion` to `"v1"` for that route. Passing `apiVersion: "v1"` by itself keeps the existing deployment-based URL default for compatibility.
 
-請勿同時使用 `useResponsesAPI: true` 與 `useDeploymentBasedUrls: true`；gateway 會拒絕該組態，因為 Responses API 支援使用 Azure `v1` 路由。
+不要合併`useResponsesAPI: true` with `useDeploymentBasedUrls: true`; the gateway rejects that configuration because Responses API support uses the Azure `v1` route.
 
-GA `v1` 路由請使用 `apiVersion: "v1"`。Microsoft 目前透過功能專屬標頭（例如 `"aoai-evals": "preview"`）或 preview/alpha API 路徑提供預覽版 `v1` 功能。對於需要 preview 查詢值的 Azure Provider 組態，gateway 仍接受搭配 `useDeploymentBasedUrls: false` 使用 `apiVersion: "preview"`。日期式 API 版本僅適用於舊版以部署為基礎的路由，因此當 `useResponsesAPI` 為 `true` 或 `useDeploymentBasedUrls` 為 `false` 時，gateway 會拒絕日期式版本。
+使用`apiVersion: "v1"` for the GA `v1` route. Microsoft currently exposes preview `v1` features through feature-specific headers, such as `"aoai-evals": "preview"`, or through preview/alpha API paths. The gateway still accepts `apiVersion: "preview"` with `useDeploymentBasedUrls: false` for Azure provider configurations that require the preview query value. Date-based API versions are only for the legacy deployment-based route, so the gateway rejects them when `useResponsesAPI` is `true` or `useDeploymentBasedUrls` is `false`.
 
-相同的 API 金鑰與 Microsoft Entra ID 驗證模式也適用於 `v1` 路由。
+相同的 API 金鑰和 Microsoft Entra ID 驗證模式可與`v1` route.
 
-### Azure Responses WebSocket 傳輸 {/* #azure-responses-websocket-transport */}
+### Azure 回應 WebSocket 傳輸 {/* #azure-responses-websocket-transport */}
 
-Azure OpenAI 的 Responses API 也支援 WebSocket 模式。請將其用於模型與 tool 之間需要多次往返的 Agent 或 tool 迴圈。單次請求與簡短對話則維持使用標準 HTTP 傳輸。
+Azure OpenAI 也支援回應 API 上的 WebSocket 模式。將其用於具有許多模型Tool往返的Agent或Tool循環。為單次請求和簡短對話保留標準 HTTP 傳輸。
 
-WebSocket 傳輸需要 `useResponsesAPI: true`，因為 Azure 透過 `v1` Responses 路徑提供此功能。接著，在每個串流請求中使用 `providerOptions.azure.transport: "websocket"` 選擇啟用。
+WebSocket 傳輸需要`useResponsesAPI: true`, because Azure exposes it on the `v1` Responses path. Then opt in per stream request with `providerOptions.azure.transport: "websocket"`.
 
 ```typescript
-import { Agent } from '@mastra/core/agent'
+import { Agent } from "@mastra/core/agent";
 
 const agent = new Agent({
-  id: 'azure-ws-agent',
-  name: 'Azure WebSocket Agent',
-  instructions: 'Use tools when they are useful.',
-  model: 'azure-openai/my-gpt-5-4-deployment',
-})
+  id: "azure-ws-agent",
+  name: "Azure WebSocket Agent",
+  instructions: "Use tools when they are useful.",
+  model: "azure-openai/my-gpt-5-4-deployment",
+});
 
-const stream = await agent.stream('Find and improve the slow function.', {
+const stream = await agent.stream("Find and improve the slow function.", {
   providerOptions: {
     azure: {
-      transport: 'websocket',
+      transport: "websocket",
       store: false,
       websocket: {
         closeOnFinish: false,
       },
     },
   },
-})
+});
 
 for await (const chunk of stream.textStream) {
-  process.stdout.write(chunk)
+  process.stdout.write(chunk);
 }
 
-stream.transport?.close()
+stream.transport?.close();
 ```
 
-若要在後續輪次之間保持 socket 開啟，請設定 `closeOnFinish: false`。Azure 會在連線本機記憶體中保留一條回應鏈，因此從最近的 `previous_response_id` 繼續，可降低延續作業的延遲。每條連線一次執行一個回應，且不會多工處理平行執行作業。
+放`closeOnFinish: false` when you want to keep the socket open across follow-up turns. Azure keeps one response chain in connection-local memory, so continuing from the most recent `previous_response_id` can reduce continuation latency. The connection runs one response at a time and does not multiplex parallel runs.
 
-請勿在相同 WebSocket 傳輸上，使用 `previous_response_id` 傳送重疊的後續請求。Mastra 會拒絕重疊的延續請求，因為 Azure 在每條連線上只保留一個處理中的回應。請等待進行中的串流完成，再繼續回應鏈。
+不要發送重疊的後續請求`previous_response_id` on the same WebSocket transport. Mastra rejects overlapping continuation requests because Azure only keeps one in-flight response per connection. Wait for the active stream to finish before continuing the response chain.
 
-## 組態參考 {/* #configuration-reference */}
+### 嚴格的結構化輸出 {/* #strict-structured-output */}
 
-| 選項 | 類型 | 必填 | 說明 |
-| - | - | - | - |
-| `resourceName` | `string` | 是 | Azure OpenAI 資源名稱 |
-| `apiKey` | `string` | 是\* | 來自「Keys and Endpoint」的 API 金鑰 |
-| `authentication` | `object` | 否 | Microsoft Entra ID 驗證 |
-| `authentication.type` | `"entraId"` | 是\* | 驗證模式 |
-| `authentication.credential` | `TokenCredential` | 是\* | `entraId` 驗證模式使用的 Azure SDK 相容認證 |
-| `authentication.scope` | `string` | 否 | 權杖範圍（預設：`https://cognitiveservices.azure.com/.default`） |
-| `apiVersion` | `string` | 否 | API 版本（預設：`2024-04-01-preview`；當 `useResponsesAPI` 為 `true` 或 `useDeploymentBasedUrls` 為 `false` 時則為 `v1`） |
-| `useResponsesAPI` | `boolean` | 否 | 透過 Azure OpenAI Responses API 解析部署（預設：`false`） |
-| `useDeploymentBasedUrls` | `boolean` | 否 | 使用 Azure 以部署為基礎的 URL（預設：`true`；當 `useResponsesAPI` 為 `true` 時則為 `false`） |
-| `deployments` | `string[]` | 否 | 靜態模式的部署名稱 |
-| `management` | `object` | 否 | Management API 認證資訊 |
-| `management.tenantId` | `string` | 是\* | Azure AD 租戶 ID |
-| `management.clientId` | `string` | 是\* | Service Principal 使用者端 ID |
-| `management.clientSecret` | `string` | 是\* | Service Principal 祕密 |
-| `management.subscriptionId` | `string` | 是\* | Azure 訂閱 ID |
-| `management.resourceGroup` | `string` | 是\* | 資源群組名稱 |
+網關發送[structured output](/docs/agents/structured-output) schemas and tool schemas without strict mode by default. Without strict mode the model can leave out keys, and Mastra then fails validation when a required key is missing.
 
-\* 請提供 `apiKey` 或 `authentication.type: "entraId"` 其中之一。若提供 `management`，則必須提供 Management 欄位。
+放`providerOptions.azure.strictJsonSchema: true` to have Azure enforce your schema:
+
+```typescript
+import { z } from "zod";
+
+const response = await agent.generate("Summarize the ticket.", {
+  structuredOutput: {
+    schema: z.object({
+      summary: z.string(),
+      priority: z.enum(["low", "medium", "high"]).optional(),
+    }),
+  },
+  providerOptions: {
+    azure: { strictJsonSchema: true },
+  },
+});
+```
+
+啟用嚴格模式後，Mastra 在發送架構之前準備好架構，以便 Azure 接受它們。每個鍵均按必需列出，可選鍵接受`null` and come back as `undefined`, and validation keywords such as `uniqueItems`, `pattern`, and `minimum` move into the field description. Mastra still validates the result against your original schema.
+
+此設定涵蓋輸出架構和請求中的每個Tool，因為網關的 AI SDK 5 Azure Provider對兩者使用一個標誌。 Azure 嚴格模式無法使用自由格式鍵表達對象，例如`z.record()`, so keep strict mode off for agents whose output or tool schemas use them.
+
+這`azure` key applies when `useResponsesAPI` is `true`. On the chat completions route, set `providerOptions.openai.strictJsonSchema` instead.
+
+## 配置參考 {/* #configuration-reference */}
+
+|選項 |類型 |必填|說明 |
+|--------|------|----------|-------------|
+|`resourceName` | `string` | Yes | Azure OpenAI resource name |
+| `apiKey` | `string` | Yes\* | API key from "Keys and Endpoint" |
+| `authentication` | `object` | No | Microsoft Entra ID authentication |
+| `authentication.type` | `"entraId"` | Yes\* | Authentication mode |
+| `authentication.credential` | `TokenCredential` | Yes\* | Azure SDK-compatible credential for `entraId` authentication mode |
+| `authentication.scope` | `string` | No | Token scope (default: `https://cognitiveservices.azure.com/.default`) |
+| `apiVersion` | `string` | No | API version (default: `2024-04-01-preview`, or `v1` when `useResponsesAPI` is `true` or `useDeploymentBasedUrls` is `false`) |
+| `useResponsesAPI` | `boolean` | No | Resolve deployments through the Azure OpenAI Responses API (default: `false`) |
+| `useDeploymentBasedUrls` | `boolean`|沒有 |使用基於 Azure 部署的 URL（預設：`true`， 或者`false`什麼時候`useResponsesAPI`是`true`) |
+| `deployments` | `string[]`|沒有 |靜態模式的部署名稱 |
+|`management` | `object`|沒有 |管理 API 憑證 |
+|`management.tenantId` | `string`|是\* | Azure AD 租用戶 ID |
+|`management.clientId` | `string`|是\* |服務主體客戶端 ID |
+|`management.clientSecret` | `string`|是\* |服務主體秘密 |
+|`management.subscriptionId` | `string`|是\* | Azure 订阅 ID |
+|`management.resourceGroup` | `string`|是\* |資源組名稱|
+
+\* 提供其中之一`apiKey` or `authentication.type: "entraId"`. Management fields are required if `management` is provided.

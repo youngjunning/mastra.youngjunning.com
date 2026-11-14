@@ -1,0 +1,173 @@
+---
+title: "Clerk | Auth"
+description: "Give Mastra agents Clerk tools through Mastra Connect, and authenticate Mastra server requests with the @mastra/auth-clerk provider and MastraClient."
+packages:
+  - "@mastra/auth-clerk"
+  - "@mastra/client-js"
+  - "@mastra/connect"
+  - "@mastra/core"
+---
+
+import Tabs from "@theme/Tabs";
+import TabItem from "@theme/TabItem";
+import ClerkConnectTools from "@site/src/components/connect/generated/clerk.mdx";
+
+# 文员
+
+通过两种方式将 Clerk 与 Mastra 结合使用：
+
+* **AgentTool**让Agent通过以下方式管理 Clerk 用户、组织和会话[Mastra Connect](/docs/mastra-platform/connect).
+* **[服务器认证](#server-authentication)**&#x4F7F;用 Clerk 验证对 Mastra 服务器的请求`@mastra/auth-clerk` package.
+
+## 连接 {/* #connect */}
+
+在开始之前，请完成[Connect setup](/docs/mastra-platform/connect#get-started) to install `@mastra/connect` and configure your platform project.
+
+<ClerkConnectTools />
+
+## 服务器认证 {/* #server-authentication */}
+
+这`@mastra/auth-clerk` package provides authentication for Mastra using Clerk. It verifies incoming requests using Clerk's authentication system and integrates with the Mastra server using the `auth` option.
+
+### 先决条件 {/* #prerequisites */}
+
+此示例使用 Clerk 身份验证。确保将您的职员凭据添加到您的`.env` file and ensure your Clerk project is properly configured.
+
+```env title=".env"
+CLERK_PUBLISHABLE_KEY=pk_test_...
+CLERK_SECRET_KEY=sk_test_...
+CLERK_JWKS_URI=https://your-clerk-domain.clerk.accounts.dev/.well-known/jwks.json
+```
+
+：：：笔记
+
+您可以在 Clerk Dashboard 的“API 密钥”下找到这些密钥。
+
+:::
+
+### 安装 {/* #installation */}
+
+在您可以使用之前`MastraAuthClerk` class you have to install the `@mastra/auth-clerk` package.
+
+```bash npm2yarn
+npm install @mastra/auth-clerk@latest
+```
+
+### 使用示例 {/* #usage-example */}
+
+```typescript {2,6-10} title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { MastraAuthClerk } from '@mastra/auth-clerk'
+
+export const mastra = new Mastra({
+  server: {
+    auth: new MastraAuthClerk({
+      publishableKey: process.env.CLERK_PUBLISHABLE_KEY,
+      secretKey: process.env.CLERK_SECRET_KEY,
+      jwksUri: process.env.CLERK_JWKS_URI,
+    }),
+  },
+})
+```
+
+：：：笔记
+
+默认`authorizeUser` method allows all authenticated users. To customize user authorization, provide a custom `authorizeUser` function when constructing the provider.
+
+访问[MastraAuthClerk](/reference/auth/clerk) for all available configuration options.
+
+:::
+
+### 客户端设置 {/* #client-side-setup */}
+
+使用 Clerk 身份验证时，您需要从客户端的 Clerk 检索访问令牌并将其传递给您的 Mastra 请求。
+
+#### 检索访问令牌 {/* #retrieving-the-access-token */}
+
+使用 Clerk React hook 来验证用户身份并检索他们的访问令牌：
+
+```typescript title="lib/auth.ts"
+import { useAuth } from '@clerk/nextjs'
+
+export const useClerkAuth = () => {
+  const { getToken } = useAuth()
+
+  const getAccessToken = async () => {
+    const token = await getToken()
+    return token
+  }
+
+  return { getAccessToken }
+}
+```
+
+请参阅[Clerk documentation](https://clerk.com/docs) for more information.
+
+### 配置`MastraClient` {/* #configuring-mastraclient */}
+
+什么时候`auth` is enabled, all requests made with `MastraClient` must include a valid Clerk access token in the `Authorization` header:
+
+```typescript {6} title="lib/mastra/mastra-client.ts"
+import { MastraClient } from '@mastra/client-js'
+
+export const mastraClient = new MastraClient({
+  baseUrl: 'https://<mastra-api-url>',
+  headers: {
+    Authorization: `Bearer ${accessToken}`,
+  },
+})
+```
+
+：：：笔记
+
+访问令牌必须带有前缀`Bearer` in the Authorization header.
+
+访问[Mastra Client SDK](/docs/server/mastra-client) for more configuration options.
+
+:::
+
+#### 发出经过身份验证的请求 {/* #making-authenticated-requests */}
+
+一次`MastraClient` is configured with the Clerk access token, you can send authenticated requests:
+
+<Tabs>
+  <TabItem value="react" label="React">
+    ```tsx title="src/components/test-agent.tsx"
+    'use client'
+
+    import { useAuth } from '@clerk/nextjs'
+    import { MastraClient } from '@mastra/client-js'
+
+    export const TestAgent = () => {
+      const { getToken } = useAuth()
+
+      async function handleClick() {
+        const token = await getToken()
+
+        const client = new MastraClient({
+          baseUrl: 'http://localhost:4111',
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        })
+
+        const weatherAgent = client.getAgent('weatherAgent')
+        const response = await weatherAgent.generate("What's the weather like in New York")
+
+        console.log({ response })
+      }
+
+      return <button onClick={handleClick}>Test Agent</button>
+    }
+    ```
+  </TabItem>
+
+  <TabItem value="curl" label="cURL">
+    ```bash
+    curl -X POST http://localhost:4111/api/agents/weatherAgent/generate \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer <your-clerk-access-token>" \
+      -d '{
+        "messages": "Weather in London"
+      }'
+    ```
+  </TabItem>
+</Tabs>

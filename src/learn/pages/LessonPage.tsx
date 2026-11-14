@@ -1,7 +1,5 @@
 import { useState, useEffect, lazy, Suspense, useMemo } from 'react'
 import { useLocation } from '@docusaurus/router'
-import useBaseUrl from '@docusaurus/useBaseUrl'
-import useDocusaurusContext from '@docusaurus/useDocusaurusContext'
 import Head from '@docusaurus/Head'
 import MDXContent from '@theme/MDXContent'
 import { cn } from '@site/src/lib/utils'
@@ -24,8 +22,7 @@ function PublishedContent({
   lessonNumber: number
   totalLessons: number
 }) {
-  const { contentModules, isSimplifiedChinese, isTaiwanChinese, isHongKongChinese, isJapanese } =
-    useLocalizedLearnContent()
+  const { contentModules } = useLocalizedLearnContent()
   const { watched, seconds, setWatched, setSeconds, setLastVisited } = useLessonProgress(lesson.slug)
 
   useEffect(() => {
@@ -36,7 +33,7 @@ function PublishedContent({
     const loader = contentModules[lesson.slug]
     if (!loader) return null
     return lazy(loader)
-  }, [contentModules, lesson.slug])
+  }, [lesson.slug])
 
   return (
     <>
@@ -58,33 +55,13 @@ function PublishedContent({
       {MdxContent && (
         <div className="markdown mt-6">
           <MDXContent>
-            <Suspense
-              fallback={
-                <div className="py-4 text-(--mastra-text-tertiary)">
-                  {isSimplifiedChinese
-                    ? '正在加载内容……'
-                    : isTaiwanChinese || isHongKongChinese
-                      ? '正在載入內容……'
-                      : isJapanese
-                        ? 'コンテンツを読み込んでいます…'
-                        : 'Loading content...'}
-                </div>
-              }
-            >
+            <Suspense fallback={<div className="py-4 text-(--mastra-text-tertiary)">Loading content...</div>}>
               <MdxContent />
             </Suspense>
           </MDXContent>
         </div>
       )}
-      <MarkAsCompleteButton
-        watched={watched}
-        onToggle={() => setWatched(!watched)}
-        isSimplifiedChinese={isSimplifiedChinese}
-        isTaiwanChinese={isTaiwanChinese}
-        isHongKongChinese={isHongKongChinese}
-        isJapanese={isJapanese}
-        className="mt-8"
-      />
+      <MarkAsCompleteButton watched={watched} onToggle={() => setWatched(!watched)} className="mt-8" />
       <CourseSignupCTA className="mt-8" />
     </>
   )
@@ -93,18 +70,10 @@ function PublishedContent({
 function MarkAsCompleteButton({
   watched,
   onToggle,
-  isSimplifiedChinese,
-  isTaiwanChinese,
-  isHongKongChinese,
-  isJapanese,
   className,
 }: {
   watched: boolean
   onToggle: () => void
-  isSimplifiedChinese: boolean
-  isTaiwanChinese: boolean
-  isHongKongChinese: boolean
-  isJapanese: boolean
   className?: string
 }) {
   const [animating, setAnimating] = useState(false)
@@ -130,33 +99,15 @@ function MarkAsCompleteButton({
       >
         {watched && '✓'}
       </span>
-      {watched
-        ? isSimplifiedChinese
-          ? '已完成'
-          : isTaiwanChinese || isHongKongChinese
-            ? '已完成'
-            : isJapanese
-              ? '完了'
-              : 'Completed'
-        : isSimplifiedChinese
-          ? '将本课标记为已完成'
-          : isTaiwanChinese || isHongKongChinese
-            ? '將本課標記為已完成'
-            : isJapanese
-              ? 'このレッスンを完了としてマーク'
-              : 'Mark lesson as complete'}
+      {watched ? 'Completed' : 'Mark lesson as complete'}
     </button>
   )
 }
 
 export default function LessonPage() {
-  const { course, isSimplifiedChinese, isTaiwanChinese, isHongKongChinese, isJapanese } = useLocalizedLearnContent()
-  const { siteConfig } = useDocusaurusContext()
+  const { course } = useLocalizedLearnContent()
   const location = useLocation()
-  const learnBasePath = useBaseUrl('/learn/')
-  const slug = location.pathname.startsWith(learnBasePath)
-    ? location.pathname.slice(learnBasePath.length).replace(/\/$/, '')
-    : ''
+  const slug = location.pathname.split('/learn/')[1]?.replace(/\/$/, '') ?? ''
   const lessonIndex = getLessonIndex(course.lessons, slug)
 
   if (lessonIndex === -1) return null
@@ -168,16 +119,16 @@ export default function LessonPage() {
   const seoTitle = lesson.seo?.title ?? `${lesson.title} | Mastra`
   const seoDescription = lesson.seo?.description ?? lesson.preview.intro
 
-  const pageUrl = new URL(location.pathname, siteConfig.url).toString()
-  const ogImageUrl = new URL('/img/og-image.png', siteConfig.url).toString()
+  const ogImageUrl = new URL('https://mastra.ai/api/og/blog')
+  ogImageUrl.searchParams.set('title', lesson.title)
+  ogImageUrl.searchParams.set('author', 'Build Your First AI Agent in TypeScript with Guil')
 
   return (
-    <LearnLayout title={seoTitle} description={seoDescription} image={ogImageUrl}>
+    <LearnLayout title={seoTitle} description={seoDescription}>
       <Head>
         <meta property="og:title" content={seoTitle} />
         <meta property="og:description" content={seoDescription} />
-        <meta property="og:image" content={ogImageUrl} />
-        <meta property="og:url" content={pageUrl} />
+        <meta property="og:image" content={ogImageUrl.toString()} />
         {lesson.youtubeId && (
           <>
             <meta property="og:type" content="video.other" />
@@ -188,17 +139,16 @@ export default function LessonPage() {
                 '@type': 'VideoObject',
                 name: lesson.title,
                 description: seoDescription,
-                thumbnailUrl: ogImageUrl,
+                thumbnailUrl: ogImageUrl.toString(),
                 uploadDate: lesson.publishedDate,
                 embedUrl: `https://www.youtube.com/embed/${lesson.youtubeId}`,
                 contentUrl: `https://www.youtube.com/watch?v=${lesson.youtubeId}`,
                 duration: `PT${lesson.durationMin}M`,
                 publisher: {
                   '@type': 'Organization',
-                  name: 'Mastra Documentation Community',
-                  url: siteConfig.url,
+                  name: 'Mastra',
+                  url: 'https://mastra.ai',
                 },
-                url: pageUrl,
               })}
             </script>
           </>

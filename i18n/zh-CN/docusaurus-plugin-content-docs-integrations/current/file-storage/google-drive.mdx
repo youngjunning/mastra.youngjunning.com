@@ -1,0 +1,242 @@
+---
+title: "Google Drive | File Storage"
+description: "Give Mastra agents Google Drive tools through Mastra Connect, and store workspace files in a Drive folder with service-account authentication."
+packages:
+  - "@mastra/connect"
+  - "@mastra/google-drive"
+---
+
+import GoogleDriveConnectTools from "@site/src/components/connect/generated/google-drive.mdx";
+
+# 谷歌云端硬盘
+
+通过两种方式将 Google Drive 与 Mastra 结合使用：
+
+* **AgentTool**让Agent通过 Google Drive 帐户查找、上传和组织文件[Mastra Connect](/docs/mastra-platform/connect).
+* **[Workspace文件系统](#workspace-filesystem)**&#x5C06;Agent的Workspace文件存储在一个 Google Drive 文件夹中，使用`@mastra/google-drive` package.
+
+## 连接 {/* #connect */}
+
+在开始之前，请完成[Connect setup](/docs/mastra-platform/connect#get-started) to install `@mastra/connect` and configure your platform project.
+
+<GoogleDriveConnectTools />
+
+## Workspace文件系统 {/* #workspace-filesystem */}
+
+`GoogleDriveFilesystem`将文件存储在单个 Google Drive 文件夹中。每个目录映射到配置的根目录下的 Drive 文件夹，路径使用 POSIX 语义（例如`/notes/todo.txt`). For interface details, see [WorkspaceFilesystem Interface](/reference/workspace/filesystem).
+
+### 安装 {/* #installation */}
+
+```bash npm2yarn
+npm install @mastra/google-drive
+```
+
+### 用法 {/* #usage */}
+
+添加一个`GoogleDriveFilesystem` to a workspace and assign it to an agent:
+
+```typescript
+import { Agent } from '@mastra/core/agent'
+import { Workspace } from '@mastra/core/workspace'
+import { GoogleDriveFilesystem } from '@mastra/google-drive'
+
+const workspace = new Workspace({
+  filesystem: new GoogleDriveFilesystem({
+    folderId: process.env.GOOGLE_DRIVE_FOLDER_ID!,
+    accessToken: process.env.GOOGLE_DRIVE_ACCESS_TOKEN!,
+  }),
+})
+
+const agent = new Agent({
+  id: 'drive-agent',
+  name: 'Drive Agent',
+  model: '__GATEWAY_OPENAI_MODEL_LUNA__',
+  workspace,
+})
+```
+
+#### 验证 {/* #authentication */}
+
+提供以下身份验证选项之一：
+
+* **`accessToken`**：预先获得的 OAuth 访问令牌。使用`https://www.googleapis.com/auth/drive` scope so the token can see folders shared with the authenticated identity.
+* **`getAccessToken`**：返回令牌的回调。当令牌从外部刷新时很有用。
+* **`serviceAccount`**：Google 服务帐户。与服务帐户电子邮件共享目标文件夹。
+
+##### 服务帐号 {/* #service-account */}
+
+服务帐户身份验证是后端Agent的推荐选项。不需要用户同意流程，也不需要令牌刷新处理。你只需要**two values** from the service account JSON key file: `client_email` and `private_key`.
+
+###### 设置服务帐户 {/* #set-up-the-service-account */}
+
+1. 打开[Google Cloud Console](https://console.cloud.google.com/) and select or create a project.
+2. 前往**APIs & Services > Library**, search for **Google Drive API**, and select **Enable**.
+3. 前往**APIs & Services > Credentials**, select **Create credentials > Service account**, and complete the form. The role can be left blank: Drive permissions are granted by sharing folders, not by IAM roles.
+4. 打开新的服务帐户，转到**Keys** tab, and select **Add key > Create new key > JSON**. The browser downloads a JSON key file.
+5. 复制`client_email` value from the JSON file. This is the address you share Drive folders with.
+
+###### 与服务帐户共享云端硬盘文件夹 {/* #share-the-drive-folder-with-the-service-account */}
+
+服务帐户是其自己的 Google 身份。在您明确与其共享之前，它无法看到云端硬盘中的任何内容。
+
+1. 打开目标文件夹[Google Drive](https://drive.google.com/).
+2. 选择**Share**.
+3. 粘贴服务帐户的`client_email` address.
+4. 将角色设置为**Editor** (for read and write) or **Viewer** (for read-only access). Select **Send**.
+5. 从 URL 复制文件夹 ID。这是之后的片段`/folders/` in `https://drive.google.com/drive/folders/<folderId>`.
+
+：：：警告
+
+服务帐户无法在标准“我的云端硬盘”文件夹中创建文件。服务帐户没有个人云端硬盘存储配额。它创建的任何文件都必须由拥有配额的实体拥有。如果您仅共享个人云端硬盘文件夹，则读取操作可以工作，但写入操作会失败并出现配额错误。
+
+对于写访问，请将文件夹放入**shared drive** (formerly Team Drive) and add the service account as a member of that shared drive. Shared drives provide the storage quota that service-account-created files need.
+
+针对个人云端硬盘文件夹的只读工作负载没有此限制。
+
+:::
+
+###### 配置文件系统 {/* #configure-the-filesystem */}
+
+复制`client_email` and `private_key` from the JSON file into your environment:
+
+```bash filename=".env"
+GOOGLE_DRIVE_FOLDER_ID=1AbCdEfGhIjKlMnOpQrStUvWxYz
+GOOGLE_DRIVE_CLIENT_EMAIL=my-bot@my-project.iam.gserviceaccount.com
+# Wrap the value in quotes — the key contains newlines that must be preserved.
+GOOGLE_DRIVE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkq...\n-----END PRIVATE KEY-----\n"
+```
+
+```typescript
+import { GoogleDriveFilesystem } from '@mastra/google-drive'
+
+const filesystem = new GoogleDriveFilesystem({
+  folderId: process.env.GOOGLE_DRIVE_FOLDER_ID!,
+  serviceAccount: {
+    clientEmail: process.env.GOOGLE_DRIVE_CLIENT_EMAIL!,
+    privateKey: process.env.GOOGLE_DRIVE_PRIVATE_KEY!,
+  },
+})
+```
+
+你**don't** need to copy the entire JSON file or pass other fields like `project_id`, `client_id`, `private_key_id`, or `token_uri`. They're not used. Only `clientEmail` and `privateKey` are required. `privateKeyId`, `scopes`, and `subject` are optional. `scopes` defaults to `['https://www.googleapis.com/auth/drive']`, which is the scope required for the service account to see folders shared with it. The narrower `drive.file` scope only grants access to files the application created itself, so a folder shared with the service account would return `404 Not Found`.
+
+`GoogleDriveFilesystem`自动标准化`privateKey` string before signing. It strips surrounding quotes, including escaped quotes from JSON-wrapped values, and converts literal `\n` sequences to real newlines. It also normalizes `\r\n` line endings, and removes a trailing comma. The key works regardless of how your `.env` loader handles the value.
+
+###### 故障排除 {/* #troubleshoot */}
+
+* **`404 File not found: <folderId>`**：服务帐户无权访问该文件夹。确认该文件夹已与确切的人共享`client_email` address and that the folder ID matches the URL.
+* **`storageQuotaExceeded`写时**：该文件夹位于个人“我的云端硬盘”中。将文件夹移动到共享云端硬盘并将服务帐户添加为成员。
+* **`error:1E08010C:DECODER routines::unsupported`**： 这`privateKey` value is malformed. Confirm the value contains the full PEM block and that newlines are preserved (literal `\n` is fine).
+
+#### 只读模式 {/* #read-only-mode */}
+
+经过`readOnly: true` to block write operations (`writeFile`, `appendFile`, `deleteFile`, `copyFile`, `moveFile`, `mkdir`, `rmdir`).
+
+```typescript
+const filesystem = new GoogleDriveFilesystem({
+  folderId,
+  accessToken,
+  readOnly: true,
+})
+```
+
+### 构造函数参数 {/* #constructor-parameters */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'folderId',
+  type: 'string',
+  description:
+    'ID of the Google Drive folder that acts as the workspace root. All paths are resolved inside this folder.',
+},
+{
+  name: 'accessToken',
+  type: 'string',
+  description: 'OAuth access token with access to the folder.',
+  isOptional: true,
+},
+{
+  name: 'getAccessToken',
+  type: '() => string | Promise<string>',
+  description: 'Callback that returns a fresh OAuth access token. Called on every request that needs authorization.',
+  isOptional: true,
+},
+{
+  name: 'serviceAccount',
+  type: '{ clientEmail: string; privateKey: string; privateKeyId?: string; scopes?: string[]; subject?: string }',
+  description: 'Service account credentials used to mint access tokens via the OAuth 2.0 JWT flow.',
+  isOptional: true,
+},
+{
+  name: 'id',
+  type: 'string',
+  description: 'Unique identifier for this filesystem instance',
+  isOptional: true,
+  defaultValue: '`google-drive:${folderId}`',
+},
+{
+  name: 'readOnly',
+  type: 'boolean',
+  description: 'When true, all write operations are blocked.',
+  isOptional: true,
+  defaultValue: 'false',
+},
+{
+  name: 'instructions',
+  type: 'InstructionsOption',
+  description: 'Override the default instructions returned to tool descriptions.',
+  isOptional: true,
+},
+]}
+/>
+
+### 特性 {/* #properties */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'id',
+  type: 'string',
+  description: 'Filesystem instance identifier',
+},
+{
+  name: 'name',
+  type: 'string',
+  description: "Provider name ('GoogleDriveFilesystem')",
+},
+{
+  name: 'provider',
+  type: 'string',
+  description: "Provider identifier ('google-drive')",
+},
+{
+  name: 'readOnly',
+  type: 'boolean | undefined',
+  description: 'Whether the filesystem is in read-only mode',
+},
+]}
+/>
+
+### 方法 {/* #methods */}
+
+GoogleDriveFilesystem 实现了[WorkspaceFilesystem interface](/reference/workspace/filesystem), providing all standard filesystem methods:
+
+* `readFile(path, options?)`- 下载文件内容
+* `writeFile(path, content, options?)`- 上传或覆盖文件
+* `appendFile(path, content)`- 通过读取并重新上传文件来追加内容
+* `deleteFile(path, options?)`- 删除文件
+* `copyFile(src, dest, options?)`- 使用驱动器复制文件`files.copy` API
+* `moveFile(src, dest, options?)`- 通过交换父文件夹在文件夹之间移动文件
+* `mkdir(path, options?)`- 创建一个文件夹
+* `rmdir(path, options?)`- 删除文件夹
+* `readdir(path, options?)`- 列出文件夹内容（支持`recursive` and `extension` filtering)
+* `stat(path)`- 返回文件或文件夹的云端硬盘元数据
+* `exists(path)`- 检查文件或文件夹是否存在
+
+### 笔记 {/* #notes */}
+
+* Google 云端硬盘允许文件夹中存在多个同名文件。`GoogleDriveFilesystem` resolves paths by picking the first match, so keep names unique within each folder when you rely on path-based lookup.
+* `writeFile`时自动创建父文件夹`recursive` is unset (the default) or `true`. Set `recursive: false` to require the parent folder to already exist.
+* `expectedMtime`在`WriteOptions` is honored. When the stored `modifiedTime` differs, the write is rejected with `StaleFileError` to support optimistic concurrency.
+* Provider仅使用 Drive REST 端点（`https://www.googleapis.com/drive/v3` and `https://www.googleapis.com/upload/drive/v3`) through the built-in `fetch`. No additional dependencies are required.

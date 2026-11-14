@@ -1,0 +1,390 @@
+---
+title: "Reference: Notifications | Signals"
+description: "Reference for notification inbox records, priorities, statuses, delivery decisions, delivery policies, dispatch configuration, and the signal metadata consumers receive."
+packages:
+  - "@mastra/core"
+---
+
+# 通知
+
+通知收件匣記錄是由以下方式儲存的持久狀態`agent.sendNotificationSignal()`。它與傳遞給線程的通知信號不是同一物件。此記錄追蹤路由、優先順序、傳送狀態、重複資料刪除和重試歷史記錄。該訊號在其元資料中攜帶該記錄的摘要和快照。
+
+使用[`Agent.sendNotificationSignal()`](/reference/agents/agent#sendnotificationsignalnotification-options) to create records and the [Notifications guide](/docs/signals/notifications)為輸送流量。
+
+## 通知記錄 {/* #notification-records */}
+
+`NotificationRecord`是儲存的收件匣記錄。
+
+<PropertiesTable
+  content={[
+{
+  name: 'id',
+  type: 'string',
+  description: 'Unique notification record ID.',
+},
+{
+  name: 'threadId',
+  type: 'string',
+  description: 'Thread the notification targets.',
+},
+{
+  name: 'source',
+  type: 'string',
+  description: 'External system that produced the notification, such as `github`, `slack`, or `email`.',
+},
+{
+  name: 'kind',
+  type: 'string',
+  description: 'Notification kind within the source, such as `ci-status`, `mention`, or `direct-message`.',
+},
+{
+  name: 'priority',
+  type: 'NotificationPriority',
+  description: 'Delivery priority. Defaults to `medium` when the notification is created.',
+},
+{
+  name: 'status',
+  type: 'NotificationStatus',
+  description: 'Current lifecycle status of the record.',
+},
+{
+  name: 'summary',
+  type: 'string',
+  description: 'LLM-facing summary used as the notification signal contents.',
+},
+{
+  name: 'payload',
+  type: 'unknown',
+  isOptional: true,
+  description:
+    'Structured payload stored for tools or application code. The model never receives this field as part of the signal.',
+},
+{
+  name: 'resourceId',
+  type: 'string',
+  isOptional: true,
+  description: 'Resource that owns the thread, when known.',
+},
+{
+  name: 'agentId',
+  type: 'string',
+  isOptional: true,
+  description: 'Agent that owns the notification, when known.',
+},
+{
+  name: 'sourceId',
+  type: 'string',
+  isOptional: true,
+  description: 'Identifier of the source object, such as a pull request or message ID.',
+},
+{
+  name: 'dedupeKey',
+  type: 'string',
+  isOptional: true,
+  description: 'Key used to coalesce duplicate pending notifications from the same source and thread.',
+},
+{
+  name: 'coalesceKey',
+  type: 'string',
+  isOptional: true,
+  description: 'Key used to combine related pending notifications from the same source and thread.',
+},
+{
+  name: 'coalescedCount',
+  type: 'number',
+  isOptional: true,
+  description: 'Number of notifications folded into this record.',
+},
+{
+  name: 'attributes',
+  type: 'NotificationSignalAttributes',
+  isOptional: true,
+  description: 'Extra attributes copied onto the emitted notification signal as XML attributes.',
+},
+{
+  name: 'createdAt',
+  type: 'Date',
+  description: 'Time the record was created.',
+},
+{
+  name: 'updatedAt',
+  type: 'Date',
+  description: 'Time the record was last updated.',
+},
+{
+  name: 'deliveredAt',
+  type: 'Date',
+  isOptional: true,
+  description: 'Time a full notification was delivered.',
+},
+{
+  name: 'seenAt',
+  type: 'Date',
+  isOptional: true,
+  description: 'Time the notification was marked seen, including when the inbox tool read it.',
+},
+{
+  name: 'dismissedAt',
+  type: 'Date',
+  isOptional: true,
+  description: 'Time the notification was dismissed.',
+},
+{
+  name: 'archivedAt',
+  type: 'Date',
+  isOptional: true,
+  description: 'Time the notification was archived.',
+},
+{
+  name: 'discardedAt',
+  type: 'Date',
+  isOptional: true,
+  description: 'Time the notification was discarded by the delivery policy.',
+},
+{
+  name: 'deliverAt',
+  type: 'Date',
+  isOptional: true,
+  description: 'Earliest time the dispatcher may attempt full delivery.',
+},
+{
+  name: 'summaryAt',
+  type: 'Date',
+  isOptional: true,
+  description: 'Time the dispatcher should emit a summary for this record. Cleared after the summary is emitted.',
+},
+{
+  name: 'deliveryReason',
+  type: 'string',
+  isOptional: true,
+  description: 'Reason returned by the delivery policy for the current decision.',
+},
+{
+  name: 'deliveryAttempts',
+  type: 'number',
+  isOptional: true,
+  description: 'Number of failed delivery attempts. Reaching five marks the record `failed`.',
+},
+{
+  name: 'lastDeliveryAttemptAt',
+  type: 'Date',
+  isOptional: true,
+  description: 'Time of the most recent delivery attempt.',
+},
+{
+  name: 'lastDeliveryError',
+  type: 'string',
+  isOptional: true,
+  description: 'Error from the most recent failed delivery attempt.',
+},
+{
+  name: 'deliveredSignalId',
+  type: 'string',
+  isOptional: true,
+  description: 'Signal ID of the full notification delivery, when one was emitted.',
+},
+{
+  name: 'summarySignalId',
+  type: 'string',
+  isOptional: true,
+  description: 'Signal ID of the most recent summary that included this record.',
+},
+{
+  name: 'metadata',
+  type: 'Record<string, unknown>',
+  isOptional: true,
+  description: 'Application metadata stored on the record.',
+},
+]}
+/>
+
+## 合併待處理記錄 {/* #coalescing-pending-records */}
+
+`sendNotificationSignal()`可以將新通知合併到現有待處理記錄中，而不是建立另一條通知。合併僅考慮同一執行緒、來源、種類、Agent和資源上的記錄。
+
+每個鍵都有不同的用途：
+
+* `dedupeKey`標識同一事件。當重試或重複的 Webhook 應更新現有記錄時重複使用它。
+* `coalesceKey`組相關事件。當多個事件應成為一筆記錄時使用它，例如同一管道中的多個故障。
+
+儘管用途不同，兩個密鑰都使用相同的匹配規則。
+
+當通知合併時：
+
+* 最新的`summary` and `payload` replace the previous values.
+* `priority`當新通知提供時更新。
+* `attributes`和`metadata` merge, with the new values taking precedence.
+* `coalescedCount`增量。
+
+## 優先事項和狀態 {/* #priorities-and-statuses */}
+
+`NotificationPriority`控制預設交付時間。
+
+```typescript
+type NotificationPriority = 'low' | 'medium' | 'high' | 'urgent'
+```
+
+`NotificationStatus`是記錄的生命週期。
+
+```typescript
+type NotificationStatus =
+  | 'pending'
+  | 'delivered'
+  | 'seen'
+  | 'dismissed'
+  | 'archived'
+  | 'discarded'
+  | 'failed'
+```
+
+`pending`記錄符合發送條件。`delivered` means a full notification signal was emitted. `seen`, `dismissed`, and `archived` are inbox states. `discarded` means the delivery policy rejected the notification. `failed` means delivery reached the five-attempt cap.
+
+## 交付決策 {/* #delivery-decisions */}
+
+交付政策返回`NotificationDeliveryDecision`.
+
+```typescript
+type NotificationDeliveryAction =
+  | 'deliver'
+  | 'queue'
+  | 'defer'
+  | 'summarize'
+  | 'persist'
+  | 'discard'
+
+type NotificationDeliveryDecision = {
+  action: NotificationDeliveryAction
+  deliverAt?: Date
+  summaryAt?: Date
+  reason?: string
+  streamOptions?: AgentExecutionOptions<unknown>
+  hold?: boolean
+}
+```
+
+`deliver`立即發出完整的通知訊號。`queue` and `defer` leave the record pending for later dispatch. `summarize` emits or schedules a summary. `persist` stores the record without emitting a signal. `discard` marks the record discarded without delivering it.
+
+`streamOptions`當傳遞喚醒空閒執行緒時附加。它們在交付時得到解決，因此延遲或匯總通知仍然可以攜帶喚醒執行緒所需的執行選項，例如模型選擇。
+
+`hold`僅適用於交貨時。它使通知處於掛起狀態，而不計算嘗試次數，以便另一個進程的調度程序可以傳遞它。當進程共享通知儲存但無法運行目標執行緒時使用它。`hold` is ignored when the notification is first sent.
+
+## 配送政策 {/* #delivery-policies */}
+
+透過Agent建構函數配置策略`notifications.deliveryPolicy` option.
+
+```typescript
+type NotificationDeliveryPolicyConfig = {
+  default?: NotificationDeliveryAction | NotificationDeliveryDecision
+  priorities?: Partial<
+    Record<NotificationPriority, NotificationDeliveryAction | NotificationDeliveryDecision>
+  >
+  sources?: Record<string, NotificationDeliveryAction | NotificationDeliveryDecision>
+  decide?: (
+    input: NotificationDeliveryPolicyInput,
+  ) =>
+    | NotificationDeliveryAction
+    | NotificationDeliveryDecision
+    | undefined
+    | Promise<NotificationDeliveryAction | NotificationDeliveryDecision | undefined>
+}
+
+type NotificationDeliveryPolicyInput = {
+  record: NotificationRecord
+  threadState: 'active' | 'idle'
+  now: Date
+}
+```
+
+Mastra 按以下順序評估該政策：
+
+1. `decide`
+2. `sources`, 匹配`record.source`
+3. `priorities`, 匹配`record.priority`
+4. `default`
+5. 內建優先權策略
+
+內建策略是：
+
+|優先|空閒執行緒|活動執行緒 |
+| - | - | - |
+|`urgent` | Deliver immediately | Deliver immediately |
+| `high` | Deliver immediately | Emit a summary immediately, then deliver later when the thread is idle |
+| `medium` | Deliver immediately | Batch into a summary |
+| `low` | Batch into a summary | Batch into a summary |
+
+客製化`decide` function runs at receipt time and again at delivery time for records whose receipt-time decision deferred them or scheduled a summary. The record's persisted schedule fixes when and how it delivers. Only `streamOptions` and `hold` from the delivery-time decision are honored. Keep the decider side-effect free.
+
+## 派遣 {/* #dispatch */}
+
+`NotificationDispatchConfig`控制預定的調度程序。
+
+<PropertiesTable
+  content={[
+{
+  name: 'enabled',
+  type: 'boolean',
+  description: 'Whether automatic scheduled dispatch is enabled. Defaults to `true`; set `false` to opt out.',
+  isOptional: true,
+},
+{
+  name: 'cron',
+  type: 'string',
+  description: 'Cron expression for the dispatcher schedule. Defaults to `*/1 * * * *` (once per minute).',
+  isOptional: true,
+},
+{
+  name: 'batchSize',
+  type: 'number',
+  description: 'Maximum notifications processed per dispatch. Defaults to `100`.',
+  isOptional: true,
+},
+]}
+/>
+
+調度程序計劃是在第一個延遲或匯總通知上延遲創建的，因此沒有延遲通知的應用程式永遠不會啟動它。 5次投遞失敗的記錄被標記`failed` and stops being due. The cap is exported as `MAX_NOTIFICATION_DELIVERY_ATTEMPTS`.
+
+## 傳遞的信號元數據 {/* #delivered-signal-metadata */}
+
+當記錄交付時，流消費者會收到一個通知訊號`NotificationSignalMetadata`.
+
+```typescript
+type NotificationSignalMetadata = {
+  signal: 'notification'
+  recordId: string
+  source: string
+  kind: string
+  priority: NotificationPriority
+  status: NotificationStatus
+  coalescedCount?: number
+  deliveredAt?: string
+  seenAt?: string
+}
+```
+
+當 Mastra 發出摘要時，消費者會收到一個摘要訊號`NotificationSummarySignalMetadata`.
+
+```typescript
+type NotificationSummarySignalMetadata = {
+  signal: 'summary'
+  pending: number
+  groups: Array<{ source: string; count: number }>
+  byPriority: Partial<Record<NotificationPriority, number>>
+  notificationIds: string[]
+  priority?: NotificationPriority
+}
+```
+
+這些元資料形狀描述了訊號。存储的记录不是信号，并且信号不包括记录的`payload` or retry history.
+
+## 儲存 {/* #storage */}
+
+通知記錄需要支援的儲存域`notifications`, such as libSQL, PostgreSQL, or MongoDB. Without it, `sendNotificationSignal()` can't store records.
+
+`sendSignal({ type: 'notification' })`繞過收件匣儲存並直接傳遞通知形狀的上下文。使用[`createNotificationInboxTool()`](/reference/signals/create-notification-inbox-tool) to read and manage stored records from an agent.
+
+## 有關的 {/* #related */}
+
+* [`Agent.sendNotificationSignal()`](/reference/agents/agent#sendnotificationsignalnotification-options)
+* [`createNotificationInboxTool()`](/reference/signals/create-notification-inbox-tool)
+* [通知指南](/docs/signals/notifications)
+* [執行緒流](/docs/signals/thread-streams)

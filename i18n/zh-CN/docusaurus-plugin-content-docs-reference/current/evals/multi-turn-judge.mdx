@@ -1,0 +1,152 @@
+---
+title: "Reference: Multi-turn Judge scorer | Evals"
+description: "The createMultiTurnJudgeScorer() function creates an LLM-as-judge scorer that grades a whole conversation against a single plain-English criterion."
+packages:
+  - "@mastra/evals"
+---
+
+import PropertiesTable from "@site/src/components/PropertiesTable";
+
+# 多轮裁判记分员
+
+**添加于：** `@mastra/evals@1.9.0`
+
+这`createMultiTurnJudgeScorer()` function creates an LLM-as-judge scorer that grades a whole conversation against a single plain-English criterion. It returns a **binary**分数：`1`当满足标准时，否则`0`，以及`reason`与法官的解释相呼应。
+
+与其他预置的 LLM 法官读取一条助理消息不同，该记分员会读取累积的每个助理轮次。`run.output`, so it works with the [multi-turn `inputs`](/docs/evals/multi-turn) form of [`runEvals()`](/reference/evals/run-evals).
+
+## 参数 {/* #parameters */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'model',
+  type: 'MastraModelConfig',
+  description:
+    'The language model used to grade the conversation. A smaller, cheaper model is usually sufficient for grading.',
+  required: true,
+},
+{
+  name: 'criterion',
+  type: 'string',
+  description:
+    'What the conversation must satisfy, in plain English, e.g. "The agent gave forecasts for London and Paris, and weather-appropriate packing advice".',
+  required: true,
+},
+{
+  name: 'options',
+  type: 'MultiTurnJudgeScorerOptions',
+  description: 'Configuration options for the scorer',
+  required: false,
+  children: [
+    {
+      name: 'scale',
+      type: 'number',
+      description: 'Scale factor applied to the score (default: 1), so the scorer returns 1 or 0.',
+      required: false,
+    },
+  ],
+},
+]}
+/>
+
+## `.run()`回报 {/* #run-returns */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'score',
+  type: 'number',
+  description: '1 when the judge considers the criterion satisfied, otherwise 0 (multiplied by scale).',
+},
+{
+  name: 'reason',
+  type: 'string',
+  description:
+    "The verdict, the criterion it graded, and the judge's explanation of why the criterion is or is not satisfied.",
+},
+]}
+/>
+
+## 多轮评估的用法 {/* #usage-with-multi-turn-evals */}
+
+将得分手传给`runEvals` alongside an `inputs` array. Every assistant turn is included in the prompt sent to the judge:
+
+```typescript title="src/evals/trip-planning-eval.ts"
+import { runEvals } from '@mastra/core/evals'
+// highlight-next-line
+import { createMultiTurnJudgeScorer } from '@mastra/evals/scorers/prebuilt'
+import { weatherAgent } from '../agents'
+
+const result = await runEvals({
+  data: [
+    {
+      inputs: [
+        "I'm planning a trip to London, Paris, and Tokyo next week.",
+        "How's the weather looking in London?",
+        'And Paris?',
+        'Tokyo too?',
+        'Should I pack an umbrella for the London leg?',
+      ],
+    },
+  ],
+  target: weatherAgent,
+  scorers: [
+    {
+      // highlight-start
+      scorer: createMultiTurnJudgeScorer({
+        model: '__GATEWAY_ANTHROPIC_MODEL_HAIKU__',
+        criterion:
+          'The agent provided weather forecasts for London, Paris, and Tokyo, and gave weather-appropriate packing or clothing advice.',
+      }),
+      // highlight-end
+      threshold: 1,
+    },
+  ],
+})
+```
+
+使用`threshold: 1` to turn the verdict into a pass or fail: the score is binary, so any lower threshold always passes.
+
+## 持续分数 {/* #persisting-scores */}
+
+仅当具有相同 ID 的记分器在 Mastra 实例上注册时，分数才会写入分数存储，因为持久性通过以下方式解析记分器元数据：`Mastra.getScorerById()`. Only the ID is looked up, so the registered instance's `criterion` can be a placeholder:
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { LibSQLStore } from '@mastra/libsql'
+import { createMultiTurnJudgeScorer } from '@mastra/evals/scorers/prebuilt'
+
+export const mastra = new Mastra({
+  agents: { weatherAgent },
+  storage: new LibSQLStore({ url: 'file:./mastra.db' }),
+  scorers: {
+    // highlight-start
+    'multi-turn-judge-scorer': createMultiTurnJudgeScorer({
+      model: '__GATEWAY_ANTHROPIC_MODEL_HAIKU__',
+      criterion: 'placeholder',
+    }),
+    // highlight-end
+  },
+})
+```
+
+看[Score persistence](/docs/evals/overview#score-persistence) for the full requirement and the warning you get when a scorer isn't registered.
+
+## 评分详情 {/* #scoring-details */}
+
+记分器分两个阶段运行：
+
+1. **年级**: 助理消息`run.output` form a numbered transcript that the judge evaluates as a whole against the criterion. Turns containing only tool calls or otherwise lacking text are skipped.
+2. **分数**: 一个`satisfied` verdict scores `1` and anything else scores `0`, multiplied by `scale`.
+
+法官只看到助理说的话。不包括用户的回合和任何Tool结果，因此根据Agent的响应编写标准。这使得评分文本仅限于Agent自己的输出，但这也意味着只有在提示它的问题旁边才有意义的答复（“是的，带一个。”）不能单独判断。对于取决于用户回合的标准，对每个回合进行评分`turns[].scorers` or write a [custom scorer](/docs/evals/multi-turn) that renders both roles.
+
+记录作为不受信任的数据传递给法官，并用明确的分隔符和忽略其中任何读取为指令的指令的指令进行隔离，因此Agent响应无法通过对话形成通过的判决。
+
+## 有关的 {/* #related */}
+
+* [多轮评估](/docs/evals/multi-turn)
+* [`runEvals()`](/reference/evals/run-evals)
+* [评分表](/reference/evals/rubric)
+* [创建记分员](/reference/evals/create-scorer)

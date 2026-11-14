@@ -1,22 +1,22 @@
 ---
-title: "參考：回饋 | 可觀測性"
-description: "可觀測性回饋記錄、filter 與查詢方法的 API 參考。"
+title: 'Reference: Feedback | Observability'
+description: 'Feedback APIs store and query human-in-the-loop observability signals such as ratings, thumbs, comments, and corrections.'
 packages:
-  - "@mastra/core"
-  - "@mastra/observability"
+  - '@mastra/core'
+  - '@mastra/observability'
 ---
 
-import PropertiesTable from "@site/src/components/PropertiesTable";
+import PropertiesTable from '@site/src/components/PropertiesTable';
 
 # 回饋
 
-**新增於：**`@mastra/core@1.18.0`
+**添加於：** `@mastra/core@1.18.0`
 
-回饋 API 可儲存及查詢人工介入的可觀測性 signal，例如評分、拇指評價、留言與修正。如需使用模式，請參閱[回饋指南](/docs/observability/feedback)。
+回饋 API 儲存和查詢人機互動可觀察性訊號，例如評分、按讚、評論和更正。使用[feedback guide](/docs/observability/feedback) for usage patterns.
 
 ## 使用範例 {/* #usage-example */}
 
-以下範例透過可觀測性進入點，為已持久化的 trace 記錄評分。`addFeedback()` 在此進入點上為選用，因此呼叫前請先檢查作用中的可觀測性實作是否支援。
+以下範例透過可觀察性入口點記錄持久追蹤的評級。`addFeedback()` is optional on the entrypoint, so check that the active observability implementation supports it before calling it.
 
 ```typescript
 if (!mastra.observability.addFeedback) {
@@ -35,11 +35,11 @@ await mastra.observability.addFeedback({
 })
 ```
 
-## 建立回饋 {/* #create-feedback */}
+## 創建回饋 {/* #create-feedback */}
 
 ### `addFeedback(args)` {/* #addfeedbackargs */}
 
-透過可觀測性進入點，將回饋新增至已持久化的 trace 或 span。
+向配置的導出器發送有關追蹤或跨度的回饋。
 
 ```typescript
 await mastra.observability.addFeedback?.({
@@ -56,21 +56,25 @@ await mastra.observability.addFeedback?.({
 
 <PropertiesTable
   content={[
-  { name: 'traceId', type: 'string', description: '作為回饋目標定位依據的 trace。', isOptional: true },
-  { name: 'spanId', type: 'string', description: '作為回饋目標定位依據的 span。', isOptional: true },
-  {
-    name: 'correlationContext',
-    type: 'CorrelationContext',
-    description: '用於產生事件的即時 span 或 trace context，不必從儲存空間重新載入目標。',
-    isOptional: true,
-  },
-  { name: 'feedback', type: 'FeedbackInput', description: '要新增的回饋 payload。' },
+{ name: 'traceId', type: 'string', description: 'Trace that anchors the feedback target.', isOptional: true },
+{ name: 'spanId', type: 'string', description: 'Span that anchors the feedback target.', isOptional: true },
+{
+  name: 'correlationContext',
+  type: 'CorrelationContext',
+  description: 'Live span or trace context to emit from without rehydrating the target from storage.',
+  isOptional: true,
+},
+{ name: 'feedback', type: 'FeedbackInput', description: 'Feedback payload to add.' },
 ]}
 />
 
+沒有`correlationContext`, each exporter handles the target trace or span at its own destination. `MastraStorageExporter` resolves it from local storage. A failed local lookup doesn't block other exporters. `MastraPlatformExporter` doesn't require local storage. Use `flush()` or `shutdown()`耗盡待交付的貨物。
+
+本地查找需要目標跨距的父鏈通過其根，因此回饋繼承正確的根標籤。如果重試後仍然缺少任何祖先，則儲存匯出器會記錄警告並跳過本機寫入。其他出口商仍然收到回饋。
+
 ### `createFeedback(args)` {/* #createfeedbackargs */}
 
-透過可觀測性 storage domain 建立一筆回饋記錄。儲存層級呼叫會直接寫入儲存區，因此請包含 `timestamp`。
+透過Observability儲存域建立一條回饋記錄。存儲級呼叫直接寫入存儲，因此包括`timestamp`.
 
 ```typescript
 await observability.createFeedback({
@@ -87,7 +91,7 @@ await observability.createFeedback({
 })
 ```
 
-HTTP 與 client SDK 的建立 route 接受 `CreateFeedbackBody`，並由 server 端設定 `timestamp`。省略 `feedbackId` 時會自動產生：
+HTTP 和客戶端 SDK 建立路由接受`CreateFeedbackBody`, which requires a nonblank `feedback.traceId` and allows an optional `spanId`. The client supplies a missing `feedbackId` and ISO `timestamp` before retries. Direct OSS HTTP calls can omit them for server defaults. An optional top-level `contextMode` selects supplied context or stored-span resolution. OSS defaults to `"provided"`。平台預設為`"resolve"`。看[訊號寫入選項](/reference/client-js/observability#signal-write-options):
 
 ```typescript
 await mastraClient.createFeedback({
@@ -101,9 +105,11 @@ await mastraClient.createFeedback({
 })
 ```
 
+對於OSS HTTP請求，認證使用者的ID優先`feedbackUserId`. Without an authenticated user, supply `feedbackUserId` explicitly or leave it null for anonymous feedback. `userId` describes the span user and isn't used as the HTTP feedback author. Direct storage calls retain the deprecated `userId` author alias when `feedbackUserId` is omitted. An explicit null author stays null.
+
 ### `batchCreateFeedback(args)` {/* #batchcreatefeedbackargs */}
 
-透過可觀測性 storage domain 建立多筆回饋記錄。HTTP route 與 `@mastra/client-js` 不會公開此方法。
+透過Observability儲存域建立多個回饋記錄。此方法不會被 HTTP 路由公開，或者`@mastra/client-js`.
 
 ```typescript
 await observability.batchCreateFeedback({
@@ -128,11 +134,59 @@ await observability.batchCreateFeedback({
 })
 ```
 
+## 刪除回饋 {/* #delete-feedback */}
+
+### `deleteFeedback(args)` {/* #deletefeedbackargs */}
+
+按 ID 刪除最多 1,000 筆回饋記錄。該操作是冪等的：不存在的 id 將被忽略，並且空的`feedbackIds` array is a no-op. When `organizationId` or `resourceId` is provided, only records matching that scope are deleted.
+
+```typescript
+await mastraClient.deleteFeedback({
+  feedbackIds: ['feedback-1', 'feedback-2'],
+})
+```
+
+<PropertiesTable
+  content={[
+{
+  name: 'feedbackIds',
+  type: 'string[]',
+  description: 'Ids of the feedback records to delete. Accepts at most 1,000 ids.',
+},
+{
+  name: 'organizationId',
+  type: 'string',
+  description: 'Restricts the delete to records with this organization id.',
+  isOptional: true,
+},
+{
+  name: 'resourceId',
+  type: 'string',
+  description: 'Restricts the delete to records with this resource id.',
+  isOptional: true,
+},
+]}
+/>
+
+OSS HTTP路由傳回`{ success: boolean }`. `mastraClient.deleteFeedback()` returns `Promise<{ success: boolean } | { accepted: true }>` to also support Platform backends with queued batch deletion. An accepted response means cleanup is queued, and records can remain readable until cleanup runs. See [client deletion response handling](/reference/client-js/observability#deleting-traces). The storage domain method returns `Promise<void>`. Requests with more than 1,000 ids return `400`, and a server running `@mastra/core` older than `1.66.0` returns `501`. ClickHouse vNext, PostgreSQL vNext, DuckDB, and the in-memory store implement deletion. Every other adapter, including LibSQL and MongoDB, throws `OBSERVABILITY_STORAGE_DELETE_FEEDBACK_NOT_IMPLEMENTED`.
+
+在 ClickHouse 上，刪除使用主回饋事件表上的輕量級刪除來刪除讀取中的行，包括 OLAP 查詢，但不能保證立即實際刪除，因此開源部署必須配置一個[observability retention period](/reference/storage/retention) to physically purge them. Each request is marked applied once its delete succeeds; if the delete fails, the request stays unapplied, doesn't block `updateFeedbackReviewStatus()` on the still-visible feedback, and you retry by calling `deleteFeedback()` again. `updateFeedbackReviewStatus()` also retries the delete and throws a not-found error if the retry succeeds, or saves the new status and throws the delete's error if it fails again. Open-source deployments have no background reconciler. ClickHouse applies a TTL to deletion requests only when all five signals have finite retention. See [ClickHouse native TTL](/reference/storage/retention#clickhouse-native-ttl). Delete APIs leave the separate delta cursor table untouched. Its rows contain identifiers rather than feedback payloads and expire within two days.
+
+### `deleteScores(args)` {/* #deletescoresargs */}
+
+按 id 最多刪除 1,000 筆分數記錄。它的行為就像`deleteFeedback()` with `scoreIds` in place of `feedbackIds`, and Oracle Database also implements it. Unsupported adapters throw `OBSERVABILITY_STORAGE_DELETE_SCORES_NOT_IMPLEMENTED`.
+
+```typescript
+await mastraClient.deleteScores({
+  scoreIds: ['score-1', 'score-2'],
+})
+```
+
 ## 列出回饋 {/* #list-feedback */}
 
 ### `listFeedback(args?)` {/* #listfeedbackargs */}
 
-以分頁模式或 delta 模式傳回回饋記錄。
+以頁面模式或增量模式傳回回饋記錄。
 
 ```typescript
 const response = await mastraClient.listFeedback({
@@ -147,42 +201,42 @@ const response = await mastraClient.listFeedback({
 
 <PropertiesTable
   content={[
-  { name: 'mode', type: "'page' | 'delta'", description: "列出模式。預設為 'page'。", isOptional: true },
-  { name: 'filters', type: 'FeedbackFilter', description: '回饋記錄的 filter。', isOptional: true },
-  {
-    name: 'pagination',
-    type: '{ page?: number; perPage?: number }',
-    description: '分頁模式的分頁設定。`page` 從零開始編號。',
-    isOptional: true,
-  },
-  {
-    name: 'orderBy',
-    type: "{ field?: 'timestamp'; direction?: 'ASC' | 'DESC' }",
-    description: '分頁模式的排序設定。',
-    isOptional: true,
-  },
-  {
-    name: 'after',
-    type: 'string',
-    description: '用於增量輪詢的 delta cursor。只適用於 delta 模式。',
-    isOptional: true,
-  },
-  {
-    name: 'limit',
-    type: 'number',
-    description: 'Delta 模式中傳回的更新數量上限。',
-    isOptional: true,
-  },
+{ name: 'mode', type: "'page' | 'delta'", description: "List mode. Defaults to 'page'.", isOptional: true },
+{ name: 'filters', type: 'FeedbackFilter', description: 'Filters for the feedback records.', isOptional: true },
+{
+  name: 'pagination',
+  type: '{ page?: number; perPage?: number }',
+  description: 'Page-mode pagination. `page` is zero-indexed.',
+  isOptional: true,
+},
+{
+  name: 'orderBy',
+  type: "{ field?: 'timestamp'; direction?: 'ASC' | 'DESC' }",
+  description: 'Page-mode sort configuration.',
+  isOptional: true,
+},
+{
+  name: 'after',
+  type: 'string',
+  description: 'Delta cursor for incremental polling. Only valid in delta mode.',
+  isOptional: true,
+},
+{
+  name: 'limit',
+  type: 'number',
+  description: 'Maximum number of updates to return in delta mode.',
+  isOptional: true,
+},
 ]}
 />
 
 ## OLAP 查詢 {/* #olap-queries */}
 
-OLAP 回饋查詢會針對數值型 `value` 欄位運作。
+OLAP 回饋查詢對數字進行操作`value` fields.
 
 ### `getFeedbackAggregate(args)` {/* #getfeedbackaggregateargs */}
 
-傳回單一彙總回饋值。
+傳回一個聚合回饋值。
 
 ```typescript
 const response = await mastraClient.getFeedbackAggregate({
@@ -195,26 +249,26 @@ const response = await mastraClient.getFeedbackAggregate({
 
 <PropertiesTable
   content={[
-  { name: 'feedbackType', type: 'string', description: '要彙總的回饋類型。' },
-  { name: 'feedbackSource', type: 'string', description: '要彙總的回饋來源。', isOptional: true },
-  {
-    name: 'aggregation',
-    type: "'sum' | 'avg' | 'min' | 'max' | 'count' | 'count_distinct' | 'last'",
-    description: '要套用的彙總方式。',
-  },
-  { name: 'filters', type: 'FeedbackFilter', description: '其他 filter。', isOptional: true },
-  {
-    name: 'comparePeriod',
-    type: "'previous_period' | 'previous_day' | 'previous_week'",
-    description: '選用的逐期比較。',
-    isOptional: true,
-  },
+{ name: 'feedbackType', type: 'string', description: 'Feedback type to aggregate.' },
+{ name: 'feedbackSource', type: 'string', description: 'Feedback source to aggregate.', isOptional: true },
+{
+  name: 'aggregation',
+  type: "'sum' | 'avg' | 'min' | 'max' | 'count' | 'count_distinct' | 'last'",
+  description: 'Aggregation to apply.',
+},
+{ name: 'filters', type: 'FeedbackFilter', description: 'Additional filters.', isOptional: true },
+{
+  name: 'comparePeriod',
+  type: "'previous_period' | 'previous_day' | 'previous_week'",
+  description: 'Optional period-over-period comparison.',
+  isOptional: true,
+},
 ]}
 />
 
 ### `getFeedbackBreakdown(args)` {/* #getfeedbackbreakdownargs */}
 
-傳回依維度分組的回饋值。
+傳回按維度分組的回饋值。
 
 ```typescript
 const response = await mastraClient.getFeedbackBreakdown({
@@ -226,7 +280,7 @@ const response = await mastraClient.getFeedbackBreakdown({
 
 ### `getFeedbackTimeSeries(args)` {/* #getfeedbacktimeseriesargs */}
 
-傳回依時間間隔分桶的回饋值。
+傳回按間隔儲存的回饋值。
 
 ```typescript
 const response = await mastraClient.getFeedbackTimeSeries({
@@ -239,7 +293,7 @@ const response = await mastraClient.getFeedbackTimeSeries({
 
 ### `getFeedbackPercentiles(args)` {/* #getfeedbackpercentilesargs */}
 
-傳回依時間間隔分桶的百分位數值。
+傳回按間隔儲存的百分位數值。
 
 ```typescript
 const response = await mastraClient.getFeedbackPercentiles({
@@ -249,288 +303,416 @@ const response = await mastraClient.getFeedbackPercentiles({
 })
 ```
 
-## 型別 {/* #types */}
+## 類型 {/* #types */}
 
 ### `FeedbackRecord` {/* #feedbackrecord */}
 
 <PropertiesTable
   content={[
-  {
-    name: 'feedbackId',
-    type: 'string | null',
-    description: '此回饋事件的唯一 ID。省略時，由 server route 產生。',
-    isOptional: true,
-  },
-  { name: 'timestamp', type: 'Date', description: '記錄回饋的時間。' },
-  {
-    name: 'traceId',
-    type: 'string | null',
-    description: '可用時，作為回饋目標定位依據的 trace。',
-    isOptional: true,
-  },
-  {
-    name: 'spanId',
-    type: 'string | null',
-    description: '可用時，作為回饋目標定位依據的 span。',
-    isOptional: true,
-  },
-  {
-    name: 'feedbackSource',
-    type: 'string | null',
-    description: "選用的來源 metadata，例如 'user'、'qa'、'studio' 或 'system'。",
-    isOptional: true,
-  },
-  {
-    name: 'source',
-    type: 'string | null',
-    description: '`feedbackSource` 的已淘汰 alias。',
-    isOptional: true,
-  },
-  {
-    name: 'feedbackType',
-    type: 'string',
-    description: "回饋類型，例如 'rating'、'thumbs'、'comment' 或 'correction'。",
-  },
-  {
-    name: 'value',
-    type: 'number | string',
-    description: '回饋值。數值型值支援彙總、細分、時間序列與百分位數查詢。',
-  },
-  {
-    name: 'comment',
-    type: 'string | null',
-    description: '回饋的其他留言或 context。',
-    isOptional: true,
-  },
-  {
-    name: 'feedbackUserId',
-    type: 'string | null',
-    description: '提供回饋的使用者。',
-    isOptional: true,
-  },
-  {
-    name: 'sourceId',
-    type: 'string | null',
-    description: '此回饋連結之來源記錄的 ID，例如實驗結果 ID。',
-    isOptional: true,
-  },
-  {
-    name: 'metadata',
-    type: 'Record<string, unknown> | null',
-    description: '回饋記錄的使用者自訂 metadata。',
-    isOptional: true,
-  },
+{
+  name: 'feedbackId',
+  type: 'string | null',
+  description: 'Unique ID for this feedback event. The server route generates one when omitted.',
+  isOptional: true,
+},
+{ name: 'timestamp', type: 'Date', description: 'Time when the feedback was recorded.' },
+{
+  name: 'traceId',
+  type: 'string | null',
+  description: 'Trace that anchors the feedback target when available.',
+  isOptional: true,
+},
+{
+  name: 'spanId',
+  type: 'string | null',
+  description: 'Span that anchors the feedback target when available.',
+  isOptional: true,
+},
+{
+  name: 'feedbackSource',
+  type: 'string | null',
+  description: "Optional source metadata, such as 'user', 'qa', 'studio', or 'system'.",
+  isOptional: true,
+},
+{
+  name: 'source',
+  type: 'string | null',
+  description: 'Deprecated alias for `feedbackSource`.',
+  isOptional: true,
+},
+{
+  name: 'feedbackType',
+  type: 'string',
+  description: "Type of feedback, such as 'rating', 'thumbs', 'comment', or 'correction'.",
+},
+{
+  name: 'value',
+  type: 'number | string',
+  description: 'Feedback value. Numeric values support aggregate, breakdown, time series, and percentile queries.',
+},
+{
+  name: 'comment',
+  type: 'string | null',
+  description: 'Additional comment or context for the feedback.',
+  isOptional: true,
+},
+{
+  name: 'feedbackUserId',
+  type: 'string | null',
+  description: 'User who provided the feedback.',
+  isOptional: true,
+},
+{
+  name: 'sourceId',
+  type: 'string | null',
+  description: 'ID of the source record this feedback is linked to, such as an experiment result ID.',
+  isOptional: true,
+},
+{
+  name: 'metadata',
+  type: 'Record<string, unknown> | null',
+  description: 'User-defined metadata for the feedback record.',
+  isOptional: true,
+},
 ]}
 />
 
-### 共用 context 欄位 {/* #shared-context-fields */}
+### 共享上下文字段 {/* #shared-context-fields */}
 
-回饋記錄可包含共用的可觀測性 context 欄位，用於篩選、分組，以及與 trace、log、指標和分數建立關聯。
+回饋記錄可以包括共享的可觀察性上下文字段，用於過濾、分組以及與追蹤、日誌、指標和分數的關聯。
 
 <PropertiesTable
   content={[
-  {
-    name: 'entityType',
-    type: 'EntityType | null',
-    description: '產生 signal 的實體類型。',
-    isOptional: true,
-  },
-  {
-    name: 'entityId',
-    type: 'string | null',
-    description: '產生 signal 之實體的 ID。',
-    isOptional: true,
-  },
-  {
-    name: 'entityName',
-    type: 'string | null',
-    description: '產生 signal 之實體的名稱。',
-    isOptional: true,
-  },
-  {
-    name: 'parentEntityType',
-    type: 'EntityType | null',
-    description: '父實體的實體類型。',
-    isOptional: true,
-  },
-  { name: 'parentEntityId', type: 'string | null', description: '父實體的 ID。', isOptional: true },
-  { name: 'parentEntityName', type: 'string | null', description: '父實體的名稱。', isOptional: true },
-  {
-    name: 'rootEntityType',
-    type: 'EntityType | null',
-    description: '根實體的實體類型。',
-    isOptional: true,
-  },
-  { name: 'rootEntityId', type: 'string | null', description: '根實體的 ID。', isOptional: true },
-  { name: 'rootEntityName', type: 'string | null', description: '根實體的名稱。', isOptional: true },
-  { name: 'userId', type: 'string | null', description: '觸發執行的人類終端使用者。', isOptional: true },
-  {
-    name: 'organizationId',
-    type: 'string | null',
-    description: '多租戶組織或帳戶。',
-    isOptional: true,
-  },
-  { name: 'resourceId', type: 'string | null', description: '較廣泛的資源 context。', isOptional: true },
-  { name: 'runId', type: 'string | null', description: '執行 run 識別碼。', isOptional: true },
-  {
-    name: 'sessionId',
-    type: 'string | null',
-    description: '用於將 trace 分組的 Session 識別碼。',
-    isOptional: true,
-  },
-  { name: 'threadId', type: 'string | null', description: '對話 thread 識別碼。', isOptional: true },
-  { name: 'requestId', type: 'string | null', description: '用於關聯的 HTTP request ID。', isOptional: true },
-  { name: 'environment', type: 'string | null', description: '部署環境。', isOptional: true },
-  { name: 'serviceName', type: 'string | null', description: '服務名稱。', isOptional: true },
-  {
-    name: 'scope',
-    type: 'Record<string, unknown> | null',
-    description: 'Package、應用程式版本或部署 metadata。',
-    isOptional: true,
-  },
-  {
-    name: 'entityVersionId',
-    type: 'string | null',
-    description: '產生 signal 之實體的版本 ID。',
-    isOptional: true,
-  },
-  {
-    name: 'parentEntityVersionId',
-    type: 'string | null',
-    description: '父實體的版本 ID。',
-    isOptional: true,
-  },
-  {
-    name: 'rootEntityVersionId',
-    type: 'string | null',
-    description: '根實體的版本 ID。',
-    isOptional: true,
-  },
-  { name: 'experimentId', type: 'string | null', description: '實驗或 eval run 識別碼。', isOptional: true },
-  {
-    name: 'executionSource',
-    type: 'string | null',
-    description: '執行來源，例如本機、cloud 或 CI。',
-    isOptional: true,
-  },
-  { name: 'tags', type: 'string[] | null', description: '用於篩選的標籤。', isOptional: true },
+{
+  name: 'entityType',
+  type: 'EntityType | null',
+  description: 'Entity type that produced the signal.',
+  isOptional: true,
+},
+{
+  name: 'entityId',
+  type: 'string | null',
+  description: 'ID of the entity that produced the signal.',
+  isOptional: true,
+},
+{
+  name: 'entityName',
+  type: 'string | null',
+  description: 'Name of the entity that produced the signal.',
+  isOptional: true,
+},
+{
+  name: 'parentEntityType',
+  type: 'EntityType | null',
+  description: 'Entity type of the parent entity.',
+  isOptional: true,
+},
+{ name: 'parentEntityId', type: 'string | null', description: 'ID of the parent entity.', isOptional: true },
+{ name: 'parentEntityName', type: 'string | null', description: 'Name of the parent entity.', isOptional: true },
+{
+  name: 'rootEntityType',
+  type: 'EntityType | null',
+  description: 'Entity type of the root entity.',
+  isOptional: true,
+},
+{ name: 'rootEntityId', type: 'string | null', description: 'ID of the root entity.', isOptional: true },
+{ name: 'rootEntityName', type: 'string | null', description: 'Name of the root entity.', isOptional: true },
+{ name: 'userId', type: 'string | null', description: 'Human end user who triggered execution.', isOptional: true },
+{
+  name: 'organizationId',
+  type: 'string | null',
+  description: 'Multi-tenant organization or account.',
+  isOptional: true,
+},
+{ name: 'resourceId', type: 'string | null', description: 'Broader resource context.', isOptional: true },
+{ name: 'runId', type: 'string | null', description: 'Execution run identifier.', isOptional: true },
+{
+  name: 'sessionId',
+  type: 'string | null',
+  description: 'Session identifier for grouping traces.',
+  isOptional: true,
+},
+{ name: 'threadId', type: 'string | null', description: 'Conversation thread identifier.', isOptional: true },
+{ name: 'requestId', type: 'string | null', description: 'HTTP request ID for correlation.', isOptional: true },
+{ name: 'environment', type: 'string | null', description: 'Deployment environment.', isOptional: true },
+{ name: 'serviceName', type: 'string | null', description: 'Name of the service.', isOptional: true },
+{
+  name: 'scope',
+  type: 'Record<string, unknown> | null',
+  description: 'Package, app version, or deployment metadata.',
+  isOptional: true,
+},
+{
+  name: 'entityVersionId',
+  type: 'string | null',
+  description: 'Version ID of the entity that produced the signal.',
+  isOptional: true,
+},
+{
+  name: 'parentEntityVersionId',
+  type: 'string | null',
+  description: 'Version ID of the parent entity.',
+  isOptional: true,
+},
+{
+  name: 'rootEntityVersionId',
+  type: 'string | null',
+  description: 'Version ID of the root entity.',
+  isOptional: true,
+},
+{
+  name: 'experimentId',
+  type: 'string | null',
+  description: 'Experiment or eval run identifier.',
+  isOptional: true,
+},
+{
+  name: 'executionSource',
+  type: 'string | null',
+  description: 'Source of execution, such as local, cloud, or CI.',
+  isOptional: true,
+},
+{ name: 'tags', type: 'string[] | null', description: 'Labels for filtering.', isOptional: true },
 ]}
 />
 
 ### `FeedbackInput` {/* #feedbackinput */}
 
-請搭配 `mastra.observability.addFeedback()`、`recordedTrace.addFeedback()` 與 `recordedSpan.addFeedback()` 使用 `FeedbackInput`。
+使用`FeedbackInput` with `mastra.observability.addFeedback()`, `recordedTrace.addFeedback()`, and `recordedSpan.addFeedback()`.
 
 <PropertiesTable
   content={[
-  {
-    name: 'feedbackSource',
-    type: 'string',
-    description: '回饋的選用來源 metadata。',
-    isOptional: true,
-  },
-  { name: 'source', type: 'string', description: '`feedbackSource` 的已淘汰 alias。', isOptional: true },
-  { name: 'feedbackType', type: 'string', description: '要記錄的回饋類型。' },
-  { name: 'value', type: 'number | string', description: '要記錄的回饋值。' },
-  { name: 'comment', type: 'string', description: '其他留言或 context。', isOptional: true },
-  { name: 'feedbackUserId', type: 'string', description: '提供回饋的使用者。', isOptional: true },
-  { name: 'userId', type: 'string', description: '`feedbackUserId` 的已淘汰 alias。', isOptional: true },
-  {
-    name: 'metadata',
-    type: 'Record<string, unknown>',
-    description: '其他回饋專屬 metadata。',
-    isOptional: true,
-  },
-  { name: 'experimentId', type: 'string', description: '實驗或 eval run 識別碼。', isOptional: true },
-  {
-    name: 'sourceId',
-    type: 'string',
-    description: '此回饋連結之來源記錄的 ID。',
-    isOptional: true,
-  },
+{
+  name: 'feedbackSource',
+  type: 'string',
+  description: 'Optional source metadata for the feedback.',
+  isOptional: true,
+},
+{ name: 'source', type: 'string', description: 'Deprecated alias for `feedbackSource`.', isOptional: true },
+{ name: 'feedbackType', type: 'string', description: 'Type of feedback to record.' },
+{ name: 'value', type: 'number | string', description: 'Feedback value to record.' },
+{ name: 'comment', type: 'string', description: 'Additional comment or context.', isOptional: true },
+{ name: 'feedbackUserId', type: 'string', description: 'User who provided the feedback.', isOptional: true },
+{ name: 'userId', type: 'string', description: 'Deprecated alias for `feedbackUserId`.', isOptional: true },
+{
+  name: 'metadata',
+  type: 'Record<string, unknown>',
+  description: 'Additional feedback-specific metadata.',
+  isOptional: true,
+},
+{
+  name: 'experimentId',
+  type: 'string',
+  description:
+    'Deprecated. The experiment is derived from the target trace or span. Read `correlationContext.experimentId` on the exported event instead.',
+  isOptional: true,
+},
+{
+  name: 'sourceId',
+  type: 'string',
+  description: 'ID of the source record this feedback is linked to.',
+  isOptional: true,
+},
 ]}
 />
 
 ### `FeedbackFilter` {/* #feedbackfilter */}
 
-請在 `listFeedback()` 與 OLAP 查詢的 `filters` 中使用 `FeedbackFilter`。
+使用`FeedbackFilter` in `listFeedback()` and OLAP query `filters`.
 
 <PropertiesTable
   content={[
-  {
-    name: 'timestamp',
-    type: '{ start?: Date; end?: Date; startExclusive?: boolean; endExclusive?: boolean }',
-    description: '依時間戳記範圍篩選。',
-    isOptional: true,
-  },
-  { name: 'traceId', type: 'string', description: '依 trace ID 篩選。', isOptional: true },
-  { name: 'spanId', type: 'string', description: '依 span ID 篩選。', isOptional: true },
-  {
-    name: 'feedbackType',
-    type: 'string | string[]',
-    description: '依一或多個回饋類型篩選。',
-    isOptional: true,
-  },
-  { name: 'feedbackSource', type: 'string', description: '依回饋來源篩選。', isOptional: true },
-  { name: 'source', type: 'string', description: '`feedbackSource` 的已淘汰 alias。', isOptional: true },
-  {
-    name: 'feedbackUserId',
-    type: 'string',
-    description: '依提供回饋的使用者篩選。',
-    isOptional: true,
-  },
-  { name: 'entityType', type: 'EntityType', description: '依實體類型篩選。', isOptional: true },
-  { name: 'entityName', type: 'string', description: '依實體名稱篩選。', isOptional: true },
-  { name: 'entityVersionId', type: 'string', description: '依實體版本 ID 篩選。', isOptional: true },
-  { name: 'parentEntityType', type: 'EntityType', description: '依父實體類型篩選。', isOptional: true },
-  { name: 'parentEntityName', type: 'string', description: '依父實體名稱篩選。', isOptional: true },
-  {
-    name: 'parentEntityVersionId',
-    type: 'string',
-    description: '依父實體版本 ID 篩選。',
-    isOptional: true,
-  },
-  { name: 'rootEntityType', type: 'EntityType', description: '依根實體類型篩選。', isOptional: true },
-  { name: 'rootEntityName', type: 'string', description: '依根實體名稱篩選。', isOptional: true },
-  { name: 'rootEntityVersionId', type: 'string', description: '依根實體版本 ID 篩選。', isOptional: true },
-  { name: 'userId', type: 'string', description: '依人類終端使用者 ID 篩選。', isOptional: true },
-  { name: 'organizationId', type: 'string', description: '依組織 ID 篩選。', isOptional: true },
-  { name: 'resourceId', type: 'string', description: '依資源 ID 篩選。', isOptional: true },
-  { name: 'runId', type: 'string', description: '依 run ID 篩選。', isOptional: true },
-  { name: 'sessionId', type: 'string', description: '依 session ID 篩選。', isOptional: true },
-  { name: 'threadId', type: 'string', description: '依 thread ID 篩選。', isOptional: true },
-  { name: 'requestId', type: 'string', description: '依 request ID 篩選。', isOptional: true },
-  { name: 'serviceName', type: 'string', description: '依服務名稱篩選。', isOptional: true },
-  { name: 'environment', type: 'string', description: '依環境篩選。', isOptional: true },
-  { name: 'executionSource', type: 'string', description: '依執行來源篩選。', isOptional: true },
-  {
-    name: 'experimentId',
-    type: 'string',
-    description: '依實驗或 eval run 識別碼篩選。',
-    isOptional: true,
-  },
-  {
-    name: 'tags',
-    type: 'string[]',
-    description: '依標籤篩選。相符記錄必須包含所有指定標籤。',
-    isOptional: true,
-  },
+{
+  name: 'timestamp',
+  type: '{ start?: Date; end?: Date; startExclusive?: boolean; endExclusive?: boolean }',
+  description: 'Filter by timestamp range.',
+  isOptional: true,
+},
+{ name: 'traceId', type: 'string', description: 'Filter by trace ID.', isOptional: true },
+{ name: 'spanId', type: 'string', description: 'Filter by span ID.', isOptional: true },
+{
+  name: 'feedbackType',
+  type: 'string | string[]',
+  description: 'Filter by one or more feedback types.',
+  isOptional: true,
+},
+{ name: 'feedbackSource', type: 'string', description: 'Filter by feedback source.', isOptional: true },
+{ name: 'source', type: 'string', description: 'Deprecated alias for `feedbackSource`.', isOptional: true },
+{
+  name: 'feedbackUserId',
+  type: 'string',
+  description: 'Filter by the user who provided the feedback.',
+  isOptional: true,
+},
+{
+  name: 'reviewStatus',
+  type: "'needs-review' | 'reviewed'",
+  description: 'Filter by review status.',
+  isOptional: true,
+},
+{ name: 'entityType', type: 'EntityType', description: 'Filter by entity type.', isOptional: true },
+{ name: 'entityName', type: 'string', description: 'Filter by entity name.', isOptional: true },
+{ name: 'entityVersionId', type: 'string', description: 'Filter by entity version ID.', isOptional: true },
+{ name: 'parentEntityType', type: 'EntityType', description: 'Filter by parent entity type.', isOptional: true },
+{ name: 'parentEntityName', type: 'string', description: 'Filter by parent entity name.', isOptional: true },
+{
+  name: 'parentEntityVersionId',
+  type: 'string',
+  description: 'Filter by parent entity version ID.',
+  isOptional: true,
+},
+{ name: 'rootEntityType', type: 'EntityType', description: 'Filter by root entity type.', isOptional: true },
+{ name: 'rootEntityName', type: 'string', description: 'Filter by root entity name.', isOptional: true },
+{ name: 'rootEntityVersionId', type: 'string', description: 'Filter by root entity version ID.', isOptional: true },
+{ name: 'userId', type: 'string', description: 'Filter by human end-user ID.', isOptional: true },
+{ name: 'organizationId', type: 'string', description: 'Filter by organization ID.', isOptional: true },
+{ name: 'resourceId', type: 'string', description: 'Filter by resource ID.', isOptional: true },
+{ name: 'runId', type: 'string', description: 'Filter by run ID.', isOptional: true },
+{ name: 'sessionId', type: 'string', description: 'Filter by session ID.', isOptional: true },
+{ name: 'threadId', type: 'string', description: 'Filter by thread ID.', isOptional: true },
+{ name: 'requestId', type: 'string', description: 'Filter by request ID.', isOptional: true },
+{ name: 'serviceName', type: 'string', description: 'Filter by service name.', isOptional: true },
+{ name: 'environment', type: 'string', description: 'Filter by environment.', isOptional: true },
+{ name: 'executionSource', type: 'string', description: 'Filter by execution source.', isOptional: true },
+{
+  name: 'experimentId',
+  type: 'string',
+  description: 'Filter by experiment or eval run identifier.',
+  isOptional: true,
+},
+{
+  name: 'tags',
+  type: 'string[]',
+  description: 'Filter by tags. Matching records must have all specified tags.',
+  isOptional: true,
+},
 ]}
 />
 
-## HTTP route {/* #http-routes */}
+## 更換回饋 {/* #replace-feedback */}
 
-| 方法 | 路徑 | 用途 | 權限 |
+`PUT /api/observability/feedback/:feedbackId`接受完整的`{ feedback: { ... } }` replacement. Keep the original `feedbackId`, `traceId`, and `timestamp`, and include every field you want to retain. Omitted optional fields are cleared. The URL and body IDs must match. See [the client example](/reference/client-js/observability#replacing-feedback).
+
+OSS 在返回成功之前寫入其配置的存儲，並獨立通知支援導出器。`contextMode` has the same meaning as on create. In `"resolve"` mode, the local trace or span must exist. A missing feedback record is created from the full replacement. Changing an existing record's trace or timestamp returns `409`.
+
+記憶體中、PostgreSQL vNext、DuckDB 和 ClickHouse vNext 儲存支援替換。查看`capabilities.feedbackReplacement` on the server. Unsupported versions return `501`. Sequential retries of the original HTTP create don't undo a replacement. Direct storage `createFeedback()` calls retain upsert behavior. Pass `onConflict: 'ignore'` to keep an existing record.
+
+ClickHouse 支援使用現有架構，無需遷移。來自不同進程的並發寫入可能會發生競爭，因此它不能保證重疊創建和替換之間的順序。使用此適配器時，將編輯序列化至相同回饋記錄。
+
+若要在不依賴本機儲存的情況下將取代傳送至配置的匯出器，請使用可觀察性入口點：
+
+```typescript
+await mastra.observability.replaceFeedback?.({
+  traceId: 'trace-123',
+  feedback: {
+    feedbackId: 'feedback-1',
+    timestamp: new Date('2026-11-11T12:00:00.123Z'),
+    feedbackType: 'thumbs',
+    value: -1,
+  },
+})
+```
+
+每個出口商獨立處理其目的地。`MastraStorageExporter` resolves local span context when needed, and `MastraPlatformExporter` sends a PUT to Platform. Exporters without a replacement handler skip the event. `flush()` and `shutdown()` wait for pending deliveries.
+
+## 更新審核狀態 {/* #updating-review-status */}
+
+若要變更已設定的匯出器目標的稽核狀態，請傳遞回饋 ID 和`"reviewed"` or `"needs-review"`:
+
+```typescript
+await mastra.observability.updateFeedbackReviewStatus?.({
+  feedbackId: 'feedback-123',
+  reviewStatus: 'reviewed',
+})
+await mastra.observability.flush()
+```
+
+即使回饋未儲存在本機，也會將更新稽核傳送給支援它們的每個匯出器。稱呼`flush()` or `shutdown()` to wait for pending deliveries.
+
+## HTTP 路由 {/* #http-routes */}
+
+這些路由屬於 Mastra 運行時並使用其配置的可觀察性儲存。它們與[unversioned Mastra Platform Feedback API](/docs/mastra-platform/api#feedback-api), which doesn't provide a feedback creation route.
+
+|方法|路徑|目的|許可 |
 | - | - | - | - |
-| `GET` | `/api/observability/feedback` | 列出回饋記錄 | 無衍生權限 |
-| `POST` | `/api/observability/feedback` | 建立回饋記錄 | 無衍生權限 |
-| `POST` | `/api/observability/feedback/aggregate` | 傳回單一彙總值 | `observability:read` |
-| `POST` | `/api/observability/feedback/breakdown` | 依維度將回饋分組 | `observability:read` |
-| `POST` | `/api/observability/feedback/timeseries` | 依時間間隔將回饋分桶 | `observability:read` |
-| `POST` | `/api/observability/feedback/percentiles` | 傳回百分位數序列 | `observability:read` |
+|`GET` | `/api/observability/feedback` | List feedback records | `observability:read` |
+| `POST` | `/api/observability/feedback` | Create a feedback record | `observability:write` |
+| `PUT` | `/api/observability/feedback/:feedbackId` | Replace a complete feedback record | `observability:write` |
+| `DELETE` | `/api/observability/feedback` | Delete feedback records by id | `observability:delete` |
+| `DELETE` | `/api/observability/scores` | Delete score records by id | `observability:delete` |
+| `PATCH` | `/api/observability/feedback/:feedbackId/review-status` | Update review status | `observability:write` |
+| `POST` | `/api/observability/feedback/aggregate` | Return one aggregate value | `observability:read` |
+| `POST` | `/api/observability/feedback/breakdown` | Group feedback by dimensions | `observability:read` |
+| `POST` | `/api/observability/feedback/timeseries`|按間隔進行鏟鬥回饋 |`observability:read` |
+| `POST` | `/api/observability/feedback/percentiles`|回傳百分位數系列 |`observability:read` |
 
-## 相關內容 {/* #related */}
+### 列出查詢參數 {/* #list-query-parameters */}
 
-- [回饋指南](/docs/observability/feedback)
-- [Client SDK 可觀測性參考](/reference/client-js/observability)
-- [可觀測性設定](/reference/observability/tracing/configuration)
+`GET /api/observability/feedback`將其參數作為 URL 查詢參數。這[Mastra Platform Feedback API](/docs/mastra-platform/api#feedback-api) accepts the same parameters on its `GET /feedback` endpoint.
+
+```bash
+curl -sS "http://localhost:4111/api/observability/feedback?traceId=trace-123&environment=production&feedbackType=rating&page=0&perPage=20"
+```
+
+每一個領域[`FeedbackFilter`](#feedbackfilter) is accepted as a top-level query parameter with the same name, for example `traceId`, `spanId`, `feedbackType`, `feedbackSource`, `feedbackUserId`, `reviewStatus`, `entityName`, `environment`, `experimentId`, or `tags`. Repeat a parameter to pass multiple values where the filter accepts an array, such as `feedbackType=rating&feedbackType=thumbs`. Pass object-valued filters such as `timestamp` as JSON, for example `timestamp={"start":"2026-01-01T00:00:00Z"}` URL-encoded.
+
+其餘參數控制分頁和增量輪詢：
+
+<PropertiesTable
+  content={[
+{
+  name: 'mode',
+  type: "'page' | 'delta'",
+  description: "List mode. Defaults to 'page'.",
+  isOptional: true,
+},
+{
+  name: 'page',
+  type: 'number',
+  description: 'Zero-indexed page number. Page mode only.',
+  isOptional: true,
+  defaultValue: '0',
+},
+{
+  name: 'perPage',
+  type: 'number',
+  description: 'Records per page, from 1 to 100. Page mode only.',
+  isOptional: true,
+  defaultValue: '10',
+},
+{
+  name: 'field',
+  type: "'timestamp'",
+  description: 'Sort field. Page mode only.',
+  isOptional: true,
+  defaultValue: "'timestamp'",
+},
+{
+  name: 'direction',
+  type: "'ASC' | 'DESC'",
+  description: 'Sort direction. Page mode only.',
+  isOptional: true,
+  defaultValue: "'DESC'",
+},
+{
+  name: 'after',
+  type: 'string',
+  description: 'Opaque delta cursor returned by the previous delta response. Delta mode only.',
+  isOptional: true,
+},
+{
+  name: 'limit',
+  type: 'number',
+  description: 'Maximum number of updates to return, from 1 to 100. Delta mode only.',
+  isOptional: true,
+},
+]}
+/>
+
+混合模式傳回的請求`400`, for example `page` or `perPage` with `mode=delta`, or `after` or `limit` without it. The analytics routes take the same JSON bodies as [`getFeedbackAggregate()`](#getfeedbackaggregateargs), [`getFeedbackBreakdown()`](#getfeedbackbreakdownargs), [`getFeedbackTimeSeries()`](#getfeedbacktimeseriesargs), and [`getFeedbackPercentiles()`](#getfeedbackpercentilesargs).
+
+## 有關的 {/* #related */}
+
+* [回饋指導](/docs/observability/feedback)
+* [客戶端 SDK Observability參考](/reference/client-js/observability)
+* [Observability配置](/reference/observability/tracing/configuration)

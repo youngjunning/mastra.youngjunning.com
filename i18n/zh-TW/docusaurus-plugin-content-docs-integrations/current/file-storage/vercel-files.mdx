@@ -1,0 +1,224 @@
+---
+title: "Vercel Files | File Storage"
+description: "Store Mastra workspace files through Vercel Files and FilesSDK adapters for S3, R2, GCS, Azure Blob, Vercel Blob, MinIO, or local storage."
+packages:
+  - "@mastra/files-sdk"
+---
+
+# 維塞爾文件
+
+將檔案儲存在任何支援的儲存後端中[FilesSDK](https://files-sdk.dev)：對 S3、Cloudflare R2、Google Cloud Storage、Azure Blob、Vercel Blob、MinIO、本機檔案系統等的統一抽象。接口詳情請參見[工作空間檔案系統接口](/reference/workspace/filesystem).
+
+使用`FilesSDKFilesystem` when you want a single adapter that can target multiple storage backends with the same code. Swap the underlying driver without changing the workspace setup. If you only target one backend and want first-class options for that backend, prefer the dedicated provider (for example [`S3Filesystem`](/integrations/file-storage/amazon-s3) or [`GCSFilesystem`](/integrations/file-storage/google-cloud-storage)).
+
+## 安裝 {/* #installation */}
+
+```bash npm2yarn
+npm install @mastra/files-sdk files-sdk
+```
+
+`files-sdk`是您使用要使用的適配器配置的對等依賴項。
+
+## 用法 {/* #usage */}
+
+創建一個`Files` instance from FilesSDK with the adapter of your choice, then pass it to `FilesSDKFilesystem`:
+
+```typescript
+import { Agent } from '@mastra/core/agent'
+import { Workspace } from '@mastra/core/workspace'
+import { FilesSDKFilesystem } from '@mastra/files-sdk'
+import { Files } from 'files-sdk'
+import { s3 } from 'files-sdk/s3'
+
+const files = new Files({
+  adapter: s3({
+    bucket: 'my-bucket',
+    region: 'us-east-1',
+  }),
+})
+
+const workspace = new Workspace({
+  filesystem: new FilesSDKFilesystem({ files }),
+})
+
+const agent = new Agent({
+  id: 'file-agent',
+  name: 'file-agent',
+  model: '__GATEWAY_ANTHROPIC_MODEL_OPUS__',
+  workspace,
+})
+```
+
+### 交換適配器 {/* #swapping-adapters */}
+
+相同`FilesSDKFilesystem` works with any FilesSDK adapter. Replace the driver factory to switch backends:
+
+```typescript
+import { Files } from 'files-sdk'
+import { r2 } from 'files-sdk/r2'
+import { gcs } from 'files-sdk/gcs'
+import { azure } from 'files-sdk/azure'
+import { neon } from 'files-sdk/neon'
+import { fs } from 'files-sdk/fs'
+
+// Cloudflare R2
+const r2Files = new Files({ adapter: r2({ accountId, bucket, accessKeyId, secretAccessKey }) })
+
+// Google Cloud Storage
+const gcsFiles = new Files({ adapter: gcs({ bucket, projectId }) })
+
+// Azure Blob
+const azureFiles = new Files({ adapter: azure({ container, connectionString }) })
+
+// Neon Object Storage (reads AWS_* variables from `neon env pull`)
+const neonFiles = new Files({ adapter: neon({ bucket }) })
+
+// Local filesystem (useful for tests and development)
+const localFiles = new Files({ adapter: fs({ root: './workspace' }) })
+```
+
+請參閱[FilesSDK documentation](https://files-sdk.dev) for the full adapter catalog and configuration options.
+
+### 只讀掛載 {/* #read-only-mounts */}
+
+```typescript
+const filesystem = new FilesSDKFilesystem({
+  files,
+  readOnly: true,
+})
+```
+
+所有寫入操作（`writeFile`, `appendFile`, `deleteFile`, `copyFile`, `moveFile`, `mkdir`, `rmdir`) throw `WorkspaceReadOnlyError`當讀取成功時。
+
+## 建構函數參數 {/* #constructor-parameters */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'files',
+  type: 'Files',
+  description: 'A pre-configured FilesSDK `Files` instance bound to the adapter and credentials you want to use.',
+},
+{
+  name: 'id',
+  type: 'string',
+  description: 'Unique identifier for this filesystem instance.',
+  isOptional: true,
+  defaultValue: 'Auto-generated',
+},
+{
+  name: 'displayName',
+  type: 'string',
+  description: 'Human-friendly display name for the UI.',
+  isOptional: true,
+},
+{
+  name: 'icon',
+  type: 'FilesystemIcon',
+  description: 'Icon identifier for the UI.',
+  isOptional: true,
+},
+{
+  name: 'description',
+  type: 'string',
+  description: 'Short description of this filesystem for the UI.',
+  isOptional: true,
+},
+{
+  name: 'readOnly',
+  type: 'boolean',
+  description: 'When true, all write operations are blocked.',
+  isOptional: true,
+  defaultValue: 'false',
+},
+]}
+/>
+
+## 特性 {/* #properties */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'id',
+  type: 'string',
+  description: 'Filesystem instance identifier.',
+},
+{
+  name: 'name',
+  type: 'string',
+  description: "Provider name ('FilesSDKFilesystem').",
+},
+{
+  name: 'provider',
+  type: 'string',
+  description: "Provider identifier ('files-sdk').",
+},
+{
+  name: 'readOnly',
+  type: 'boolean | undefined',
+  description: 'Whether the filesystem is in read-only mode.',
+},
+]}
+/>
+
+## 方法 {/* #methods */}
+
+`FilesSDKFilesystem`實施[WorkspaceFilesystem interface](/reference/workspace/filesystem), providing all standard filesystem methods:
+
+* `readFile(path, options?)`- 讀取文件內容
+* `writeFile(path, content, options?)`- 將內容寫入文件
+* `appendFile(path, content)`- 將內容附加到文件
+* `deleteFile(path, options?)`- 刪除文件
+* `copyFile(src, dest, options?)`- 複製文件
+* `moveFile(src, dest, options?)`- 移動或重新命名文件
+* `mkdir(path, options?)`
+* `rmdir(path, options?)`- 刪除目錄
+* `readdir(path, options?)`- 列出目錄內容
+* `exists(path)`- 檢查路徑是否存在
+* `stat(path)`- 取得檔案或目錄元數據
+
+### `init()` {/* #init */}
+
+初始化檔案系統。驗證配置的適配器是否可以列出具有提供的憑證的金鑰。
+
+```typescript
+await filesystem.init()
+```
+
+### `getInfo()` {/* #getinfo */}
+
+傳回有關此檔案系統實例的元資料。
+
+```typescript
+const info = filesystem.getInfo()
+// { id: '...', name: 'FilesSDKFilesystem', provider: 'files-sdk', status: 'ready' }
+```
+
+### `files` {/* #files */}
+
+底層FilesSDK`Files` instance is exposed as a public property if you need to call adapter-specific APIs directly.
+
+```typescript
+const url = await filesystem.files.url('reports/q3.pdf')
+```
+
+## 物件存儲語義 {/* #object-store-semantics */}
+
+`FilesSDKFilesystem`將配置的後端視為物件存儲，即使底層適配器是分層的（例如`fs`). This keeps behavior consistent across adapters:
+
+* **`mkdir`**&#x662F;一個空操作。當具有該前綴的鍵存在時，目錄隱式存在。
+* **`exists`**&#x56DE;報`true` only when an exact key is present as a file, or when the path is a prefix that contains at least one child key. Empty leftover directories on hierarchical adapters don't count.
+* **`deleteFile`**&#x6295;擲`FileNotFoundError` when the key doesn't exist, unless `{ force: true }` is passed.
+* **`deleteFile`**&#x5728;目錄上代表`rmdir({ recursive: true })`, matching the [`S3Filesystem`](/integrations/file-storage/amazon-s3) and [`GCSFilesystem`](/integrations/file-storage/google-cloud-storage) behavior.
+* **`moveFile`**&#x88AB;實現為`copyFile` followed by `deleteFile`. It isn't **atomic**. If the source delete fails after a successful copy, the destination remains and the source isn't removed.
+* **`appendFile`**&#x662F;讀-修改-寫入操作。對同一鍵的並發追加可能會相互覆蓋。這是物件儲存固有的，而不是 FilesSDK 特有的。
+* **`readdir({ recursive: true })`**&#x767C;出中間目錄條目（例如，`a/b` is emitted alongside `a/b/c.txt`).
+
+## 有關的 {/* #related */}
+
+* [Workspace檔案系統介面](/reference/workspace/filesystem)
+* [S3檔案系統參考](/integrations/file-storage/amazon-s3)
+* [GCS檔案系統參考](/integrations/file-storage/google-cloud-storage)
+* [AzureBlob 檔案系統參考](/integrations/file-storage/azure-blob)
+* [檔案系統](/docs/sandbox/filesystem)
+* [文件SDK文檔](https://files-sdk.dev)

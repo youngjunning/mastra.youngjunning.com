@@ -1,46 +1,50 @@
 ---
-title: "指標總覽 | Observability"
-description: "了解 Mastra 從已追蹤的執行作業中自動發出的指標。"
+title: "Metrics"
+description: "Collect automatic duration, token usage, and cost metrics from Mastra traces, store them in supported databases, and analyze them in Studio."
 packages:
   - "@mastra/observability"
 ---
 
-# 指標總覽
+# 指標
 
-Mastra 會自動從已追蹤的執行作業中發出效能與使用量指標，不需要手動設定 instrumentation。這些指標會在 span 完成時衍生產生。
+當追蹤操作完成時，Mastra 會自動從跨度中匯出指標。不需要單獨的計量儀器。
 
-系統會自動發出下列類別的指標：
+馬斯特拉發出：
 
-- **持續時間指標**：Agent、Workflow、Tool、模型呼叫與 Processor 的執行時間。
-- **Token 使用量指標**：依類型（文字、快取、音訊、圖片、推理）細分的輸入與輸出 token 數量。
-- **成本估算**：根據內嵌的定價登錄資料，估算每次模型呼叫的成本。
+* **持續時間指標**用於Agent運行、Workflow、Tool、模型呼叫和處理器
+* **代幣使用指標**用於模型輸入和輸出，包括Provider報告時的詳細令牌類別
+* **成本估算**根據代幣使用情況、Provider、模型和模型價格計算[models.dev](https://models.dev) or from a [custom gateway](/models/gateways/custom-gateways#model-pricing)
 
-:::note
+指標保留追蹤關聯上下文，因此您可以透過尋找相關跨度來調查圖表中的變更。請參閱[Automatic metrics reference](/reference/observability/metrics/automatic-metrics) for metric names, labels, and cost fields.
 
-指標需要可執行分析的 Observability Store。大多數關聯式資料庫（LibSQL、MSSQL）不支援指標。記憶體內 Storage 會在重新啟動時重設。
+## 何時使用指標 {/* #when-to-use-metrics */}
 
-本機開發請透過 `@mastra/duckdb` 使用 [DuckDB](https://duckdb.org/)。正式環境請透過 `@mastra/clickhouse` 使用 [ClickHouse](https://clickhouse.com/)。啟用 Observability domain 的 `PostgresStoreVNext` 也支援指標，但務必提供時間範圍，以避免掃描完整 partition。
+* 監控Agent、Tool、Workflow和模型呼叫之間的延遲
+* 隨著時間的推移追蹤代幣消耗和估計成本
+* 比較不同Agent或Tool的成功率和錯誤率
+* 衡量提示、模型或程式碼變更的效果
 
-Google Cloud Spanner 支援指標，但不建議用於高負載的指標工作。Spanner adapter 預設會停用指標，因為指標會產生大量寫入與掃描作業。只有輕量工作負載才應設定 `disableMetrics: false`，否則請將指標導向 OLAP Store。
+## 儲存支援 {/* #storage-support */}
 
-:::
+指標需要具有分析能力的可觀察性儲存：
 
-## 使用指標的時機 {/* #when-to-use-metrics */}
+* **鴨資料庫**透過`@mastra/duckdb` is recommended for local development.
+* **克利克屋**透過`@mastra/clickhouse` is recommended for high-volume production workloads.
+* **PostgresStoreVNext**當其可觀測域啟用時支援指標。
+* **記憶體儲存**支援指標，但當進程重新啟動時其資料會遺失。
+* **谷歌雲端扳手**預設情況下禁用指標。放`disableMetrics: false` only for light workloads, or route metrics to a dedicated OLAP store.
 
-- 監控 Agent、Tool、Workflow 與模型呼叫的延遲
-- 追蹤 token 用量與成本隨時間變化的趨勢
-- 比較成功率與錯誤率，找出錯誤頻繁的 Agent 或 Tool
-- 比較 prompt、模型或程式碼變更前後的效能
+其他儲存適配器（包括 LibSQL、MSSQL 和 MongoDB）可以儲存其他Observability訊號，但不會實現指標儲存和查詢。
 
-## 開始使用 {/* #get-started */}
+## 設定本地指標 {/* #set-up-local-metrics */}
 
-安裝必要套件：
+安裝可觀察性、應用程式儲存和 DuckDB 套件：
 
 ```bash npm2yarn
 npm install @mastra/observability @mastra/libsql @mastra/duckdb
 ```
 
-接著使用 Composite Store 設定 Observability，將 Observability domain 導向 DuckDB：
+配置將可觀察域路由到 DuckDB 的組合儲存：
 
 ```ts title="src/mastra/index.ts"
 import { Mastra } from '@mastra/core/mastra'
@@ -72,37 +76,16 @@ export const mastra = new Mastra({
 })
 ```
 
-## Studio {/* #studio */}
+`MastraStorageExporter`將指標儲存到配置的可觀察性儲存中並使它們可供 Studio 使用。使用`MastraPlatformExporter` instead, or alongside it, to send metrics to Mastra Platform.
 
-Studio 指標儀表板會透過 KPI 卡片、詳細細分資料、token 使用量時間軸與可設定的時間範圍，呈現所有自動指標。完整操作說明請參閱 [Studio Observability](/docs/studio/observability)。
+## 查看和查詢指標 {/* #view-and-query-metrics */}
 
-## Mastra 測量的項目 {/* #what-mastra-measures */}
+使用[Studio observability dashboard](/docs/studio/observability) to inspect KPI cards, breakdowns, and time-series charts. For custom dashboards and analysis, use the observability store, `@mastra/client-js`, HTTP endpoints, or CLI described in the [Metric queries reference](/reference/observability/metrics/queries).
 
-Mastra 會自動發出三類指標：
+在生產中，始終在指標查詢中包含時間戳範圍。時間限制限制了掃描的數據，並允許分區後端跳過不相關的分區或區塊。
 
-- **持續時間**：Agent、Workflow、Tool、模型呼叫與 Processor 的執行時間（毫秒）。
-- **Token 使用量**：依類型（文字、快取、音訊、圖片、推理）細分的輸入與輸出 token 數量。
-- **成本估算**：根據內嵌的定價登錄資料，估算每次模型呼叫的成本。
+## 有關的 {/* #related */}
 
-每項指標都帶有 Trace 關聯 context，讓你能從儀表板上的尖峰深入查看造成該尖峰的確切 span。
-
-如需指標名稱、label 與成本欄位的完整清單，請參閱[自動指標參考](/reference/observability/metrics/automatic-metrics)。
-
-## 自動指標的運作方式 {/* #how-automatic-metrics-work */}
-
-Mastra 會自動將 Agent 執行、Workflow 步驟、Tool 呼叫與模型生成作業設為 span。span 結束時，Observability layer 會從中擷取指標：
-
-1. **持續時間**：根據 span 的開始與結束 timestamp 計算。
-1. **Token 使用量**：從模型生成 span 的 `usage` attribute 擷取。
-1. **成本估算**：將每項 token 指標傳入內嵌的定價登錄資料，依 Provider 與模型名稱進行比對。
-
-儲存前，所有指標 label 都會通過 cardinality filter，封鎖已知的高基數值（例如 Trace ID 與 UUID），以維持 Storage 效率。接著，內部 event buffer 會批次處理指標，並由 `MastraStorageExporter` 將其 flush 至 Storage。
-
-## 後續步驟 {/* #next-steps */}
-
-- [自動指標參考](/reference/observability/metrics/automatic-metrics)
-- [查詢指標](/docs/observability/metrics/querying)
-- [Tracing 總覽](/docs/observability/tracing/overview)
-- [Studio Observability](/docs/studio/observability)
-- [Observability 總覽](/docs/observability/overview)
-- [`MastraStorageExporter` 參考](/docs/observability/integrations/exporters/mastra-storage)
+* [Observability概述](/docs/observability/overview)
+* [追蹤使用情況](/docs/observability/tracing/overview)
+* [MastraStorageExporter](/docs/observability/integrations/exporters/mastra-storage)

@@ -1,187 +1,188 @@
 ---
-title: "参考：SensitiveDataFilter | Observability"
-description: SensitiveDataFilter 处理器的 API 参考
+title: 'Reference: SensitiveDataFilter | Observability'
+description: "SensitiveDataFilter is a span output processor that redacts values whose field names match a configured list."
 packages:
-  - "@mastra/core"
+  - '@mastra/observability'
 ---
 
-import PropertiesTable from "@site/src/components/PropertiesTable";
+import PropertiesTable from '@site/src/components/PropertiesTable';
 
-# SensitiveDataFilter
+# 敏感数据过滤器
 
-一个用于从 Span 字段中遮盖敏感信息的 SpanOutputProcessor。
+`SensitiveDataFilter`是一个跨度输出处理器，用于编辑字段名称与配置列表匹配的值。[`Observability`](/reference/observability/tracing/configuration#observabilityregistryconfig)默认情况下将其应用于普通的可观察性配置。
 
-## 默认自动应用 {/* #auto-applied-by-default */}
+## 使用示例 {/* #usage-example */}
 
-`Observability` 会自动将 `SensitiveDataFilter` 追加到每个已配置实例的 `spanOutputProcessors` 中，以便在机密信息到达 Mastra cloud exporter 等 Exporter 之前将其遮盖。该过滤器最后运行（在所有用户提供的处理器之后），因此上游处理器引入或暴露的敏感数据仍会被遮盖。除非要自定义其选项，否则无需手动添加。
+使用顶级配置自动应用的过滤器`sensitiveDataFilter` option. The filter runs after user-provided span output processors so it can redact values they add or expose.
 
-要停用或自定义自动应用的过滤器，请使用 [`Observability` 注册表配置](/reference/observability/tracing/configuration#observabilityregistryconfig)中的 `sensitiveDataFilter` 选项：
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core/mastra'
+import { Observability, MastraStorageExporter } from '@mastra/observability'
 
-```typescript
-import { Observability } from '@mastra/observability'
-
-new Observability({
-  configs: {/* ... */},
-  // disable the auto-applied filter
-  sensitiveDataFilter: false,
-  // or customize it
-  // sensitiveDataFilter: { sensitiveFields: ['mySecret'], redactionStyle: 'partial' },
+export const mastra = new Mastra({
+  observability: new Observability({
+    configs: {
+      default: {
+        serviceName: 'my-service',
+        exporters: [new MastraStorageExporter()],
+      },
+    },
+    sensitiveDataFilter: {
+      sensitiveFields: ['password', 'authorization', 'customerSecret'],
+      redactionToken: '[HIDDEN]',
+      redactionStyle: 'full',
+    },
+  }),
 })
 ```
 
-如果配置的 `spanOutputProcessors` 中已包含 `SensitiveDataFilter`，系统会跳过自动应用的过滤器，以避免重复遮盖。预先实例化的 `ObservabilityInstance` 值不会被修改。如有需要，请自行向其处理器添加 `SensitiveDataFilter`。
+通过`sensitiveFields` replaces the default field list. Include every default field you still want to redact.
+
+要禁用所有普通配置的自动过滤，请设置`sensitiveDataFilter` to `false`:
+
+```typescript
+new Observability({
+  configs: {
+    debug: {
+      serviceName: 'debug-service',
+      exporters: [new MastraStorageExporter()],
+    },
+  },
+  sensitiveDataFilter: false,
+})
+```
+
+如果普通配置已经包含`SensitiveDataFilter` in `spanOutputProcessors`, `Observability` uses that instance and doesn't add another. Pre-instantiated `ObservabilityInstance` values aren't modified. Add the processor when constructing those instances if they need filtering.
 
 ## 构造函数 {/* #constructor */}
 
-```typescript prettier:false
+```typescript oxfmt:false
 new SensitiveDataFilter(options?: SensitiveDataFilterOptions)
 ```
 
-## `SensitiveDataFilterOptions` {/* #sensitivedatafilteroptions */}
+<PropertiesTable
+  content={[
+{
+  name: 'sensitiveFields',
+  type: 'string[]',
+  description:
+    'Complete list of field names to redact. Matching is case-insensitive and ignores separators. Replaces the default list when provided.',
+  isOptional: true,
+  defaultValue:
+    "['password', 'token', 'secret', 'key', 'apikey', 'auth', 'authorization', 'bearer', 'bearertoken', 'jwt', 'credential', 'clientsecret', 'privatekey', 'refresh', 'ssn']",
+},
+{
+  name: 'redactionToken',
+  type: 'string',
+  description: 'Replacement value used for full redaction and short values under partial redaction.',
+  isOptional: true,
+  defaultValue: "'[REDACTED]'",
+},
+{
+  name: 'redactionStyle',
+  type: "'full' | 'partial' | 'indexed'",
+  description: 'Controls how matched values are redacted.',
+  isOptional: true,
+  defaultValue: "'full'",
+},
+]}
+/>
 
 ```typescript
 interface SensitiveDataFilterOptions {
-  /**
-   * List of sensitive field names to redact.
-   * Matching is case-insensitive and normalizes separators
-   * (api-key, api_key, Api Key → apikey).
-   * Defaults include: password, token, secret, key, apikey, auth,
-   * authorization, bearer, bearertoken, jwt, credential,
-   * clientsecret, privatekey, refresh, ssn.
-   */
   sensitiveFields?: string[]
-
-  /**
-   * The token used for full redaction.
-   * Default: "[REDACTED]"
-   */
   redactionToken?: string
-
-  /**
-   * Style of redaction to use:
-   * - "full": always replace with redactionToken
-   * - "partial": show 3 characters from the start and end, redact the middle
-   * Default: "full"
-   */
   redactionStyle?: RedactionStyle
 }
+
+type RedactionStyle = 'full' | 'partial' | 'indexed'
 ```
 
-<PropertiesTable
-  props={[
-  {
-    name: 'sensitiveFields',
-    type: 'string[]',
-    description: '要遮盖的字段名（不区分大小写，忽略分隔符差异）',
-    required: false,
-  },
-  {
-    name: 'redactionToken',
-    type: 'string',
-    description: '完全遮盖时使用的替换 token',
-    required: false,
-  },
-  {
-    name: 'redactionStyle',
-    type: "'full' | 'partial'",
-    description: '遮盖样式',
-    required: false,
-  },
-]}
-/>
+## 密文样式 {/* #redaction-styles */}
 
-## `RedactionStyle` {/* #redactionstyle */}
+### 完全密文 {/* #full-redaction */}
+
+完整编辑将每个匹配的原始值替换为`redactionToken`.
+
+```jsonc oxfmt:false
+// Before
+{ "apiKey": "sk-abc123xyz789", "userId": "user_123" }
+
+// After
+{ "apiKey": "[REDACTED]", "userId": "user_123" }
+```
+
+### 部分编辑 {/* #partial-redaction */}
+
+部分密文保留前三个字符。使用六个或更少字符的值`redactionToken` instead. Non-string primitive values are converted to strings before redaction.
 
 ```typescript
-type RedactionStyle = 'full' | 'partial'
+const filter = new SensitiveDataFilter({
+  redactionStyle: 'partial',
+})
 ```
 
-## 方法 {/* #methods */}
+```jsonc oxfmt:false
+// Before
+{ "apiKey": "sk-abc123xyz789" }
 
-### process {/* #process */}
-
-```typescript prettier:false
-process(span: AnySpan): AnySpan
+// After
+{ "apiKey": "sk-…789" }
 ```
 
-通过过滤关键字段中的敏感数据来处理 Span，这些字段包括 attributes、metadata、input、output 和 errorInfo。
+### 索引编辑 {/* #indexed-redaction */}
 
-<PropertiesTable
-  props={[
-  {
-    name: 'span',
-    type: 'AnySpan',
-    description: '要过滤的输入 Span',
-    required: true,
-  },
-]}
-/>
-
-**返回：** 敏感值已被遮盖的新 Span。
-
-### shutdown {/* #shutdown */}
-
-```typescript prettier:false
-async shutdown(): Promise<void>
-```
-
-该处理器无需清理。
-
-## 属性 {/* #properties */}
-
-```typescript prettier:false
-readonly name = 'sensitive-data-filter';
-```
-
-## 默认敏感字段 {/* #default-sensitive-fields */}
-
-未提供自定义字段时：
+例如，索引编辑将每个唯一值替换为从与其匹配的第一个字段名称派生的稳定标记`[APIKEY_1]`. The same value maps to the same token across the spans of a trace while the trace's mapping is retained, so redacted values stay correlatable without exposing the raw value. Later occurrences under other sensitive fields reuse the first token.
 
 ```typescript
-[
-  'password',
-  'token',
-  'secret',
-  'key',
-  'apikey',
-  'auth',
-  'authorization',
-  'bearer',
-  'bearertoken',
-  'jwt',
-  'credential',
-  'clientsecret',
-  'privatekey',
-  'refresh',
-  'ssn',
-]
+const filter = new SensitiveDataFilter({
+  redactionStyle: 'indexed',
+})
 ```
 
-## 处理行为 {/* #processing-behavior */}
+```jsonc oxfmt:false
+// Before (two spans in the same trace)
+[{ "apiKey": "sk-alice-key" }, { "apiKey": "sk-bob-key" }]
 
-### 字段匹配 {/* #field-matching */}
+// After
+[{ "apiKey": "[APIKEY_1]" }, { "apiKey": "[APIKEY_2]" }]
+```
 
-- **不区分大小写**：`APIKey`、`apikey` 和 `ApiKey` 都会匹配
-- **忽略分隔符差异**：`api-key`、`api_key` 和 `apiKey` 会被视为相同字段
-- **精确匹配**：规范化后，字段必须完全匹配
-  - `token` 会匹配 `token`、`Token` 和 `TOKEN`
-  - `token` 不会匹配 `promptTokens` 或 `tokenCount`
+映射的范围是按跟踪确定的。每个跟踪都会重新编号，因此来自不同跟踪的标记无法链接。
 
-### 遮盖样式 {/* #redaction-styles */}
+状态以两种方式受到限制。过滤器保留 1000 个最近使用的跟踪的映射。除此之外，最近最少使用的跟踪将被逐出，并且到达已逐出跟踪的跨度会开始新的映射，因此后面的值可能会收到新的令牌。每个跟踪还跟踪最多 1000 个唯一值。一旦达到该上限，已跟踪的值将保留其代币，并且新值将被编辑`redactionToken`.
 
-#### 完全遮盖（默认） {/* #full-redaction-default */}
+在分配标记之前，非字符串值将转换为字符串。
 
-所有匹配值都会替换为 redactionToken。
+## 现场匹配 {/* #field-matching */}
 
-#### 部分遮盖 {/* #partial-redaction */}
+在比较之前，字段名称为小写并去除非字母数字字符：
 
-- 显示开头和结尾各 3 个字符
-- 长度不超过 6 个字符的值会被完全遮盖
-- 非字符串值会先转换为字符串，再进行部分遮盖
+* `api-key`, `api_key`, `Api Key`, and `apiKey` normalize to `apikey`.
+* 归一化后匹配准确。`token` matches `Token`, but doesn't match `promptTokens`, `tokenCount`, or `authToken`.
 
-### 错误处理 {/* #error-handling */}
+当匹配字段包含对象或数组时，过滤器会遍历该值并编辑其中的敏感字段，而不是替换完整的结构。
 
-如果过滤字段失败，该字段会替换为：
+## 加工行为 {/* #processing-behavior */}
+
+`process()`独立过滤这些顶级跨度字段：
+
+* `attributes`
+* `metadata`
+* `input`
+* `output`
+* `errorInfo`
+* `requestContext`
+
+在每个字段中，处理器：
+
+* 遍历嵌套对象和数组。
+* 解析和过滤包含对象或数组的 JSON 字符串。然后它会序列化过滤后的值。
+* 保留无效的 JSON 字符串不变。
+* 果酱`Date` instances.
+* 将重复的对象引用替换为`[Circular Reference]`.
+
+如果过滤在一个顶级跨度字段中的任何位置失败，则该完整字段将替换为以下标记：
 
 ```typescript
 {
@@ -191,14 +192,58 @@ readonly name = 'sensitive-data-filter';
 }
 ```
 
-### 处理的字段 {/* #processed-fields */}
+## 方法 {/* #methods */}
 
-过滤器会递归处理：
+### 加工 {/* #processing */}
 
-- `span.attributes` - Span 元数据和属性
-- `span.metadata` - 自定义元数据
-- `span.input` - 输入数据
-- `span.output` - 输出数据
-- `span.errorInfo` - 错误信息
+#### `process(span)` {/* #processspan */}
 
-能够安全处理嵌套对象、数组和循环引用。
+就地编辑所提供的跨度上支持的字段并返回相同的跨度。
+
+```typescript
+import type { AnySpan } from '@mastra/core/observability'
+import { SensitiveDataFilter } from '@mastra/observability'
+
+const filter = new SensitiveDataFilter()
+
+export function redactSpan(span: AnySpan): AnySpan {
+  return filter.process(span)
+}
+```
+
+<PropertiesTable
+  content={[
+{
+  name: 'span',
+  type: 'AnySpan',
+  description: 'Span whose attributes, metadata, input, output, error information, and request context are filtered.',
+},
+]}
+/>
+
+返回：`AnySpan`
+
+### 生命周期 {/* #lifecycle */}
+
+#### `shutdown()` {/* #shutdown */}
+
+完成处理器关闭并清除索引编辑使用的每跟踪状态。
+
+```typescript
+await filter.shutdown()
+```
+
+返回：`Promise<void>`
+
+## 特性 {/* #properties */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'name',
+  type: 'string',
+  description: 'Processor identifier.',
+  defaultValue: "'sensitive-data-filter'",
+},
+]}
+/>

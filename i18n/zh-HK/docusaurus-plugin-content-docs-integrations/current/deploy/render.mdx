@@ -1,0 +1,416 @@
+---
+title: "Render | Deploy"
+description: "Give Mastra agents Render tools through Mastra Connect, and deploy Mastra APIs, workers, and distributed agent workflows on Render."
+packages:
+  - "@mastra/connect"
+---
+
+import Steps from "@site/src/components/Steps";
+import StepItem from "@site/src/components/StepItem";
+import RenderMcpConnectTools from "@site/src/components/connect/generated/render-mcp.mdx";
+
+# 使成為
+
+使用[Render](https://render.com/?utm_source=partner\&utm_medium=partnerships\&utm_campaign=2026_partnership_mastra)與Mastra有兩種方式：
+
+* **AgentTool**讓Agent程式透過以下方式管理渲染服務、環境變數、日誌和指標[Mastra Connect](/docs/mastra-platform/connect).
+* **[部署](#deploy-on-render)**&#x5728; Render 上運行您的 Mastra 應用程式。
+
+## 連接 {/* #connect */}
+
+在開始之前，請完成[Connect setup](/docs/mastra-platform/connect#get-started) to install `@mastra/connect` and configure your platform project.
+
+<RenderMcpConnectTools />
+
+## 在渲染上部署 {/* #deploy-on-render */}
+
+在 Render 上部署 Mastra 應用程式。將 Mastra API 託管為[web service](https://render.com/docs/web-services?utm_source=partner\&utm_medium=partnerships\&utm_campaign=2026_partnership_mastra), or use [Render Workflows](https://render.com/docs/workflows?utm_source=partner\&utm_medium=partnerships\&utm_campaign=2026_partnership_mastra) for long-running tasks with independent retry policies.
+
+選擇適合您的應用程式的部署路徑：
+
+* **馬斯特拉API**：部署馬斯特拉[server](/docs/server/overview) as a web service with a public endpoint. The [Web Services guide](https://render.com/docs/web-services?utm_source=partner\&utm_medium=partnerships\&utm_campaign=2026_partnership_mastra) explains how to deploy custom code or a supported [server adapter](/docs/server/server-adapters).
+* **馬斯特拉Workflow**：在一項任務中運行整個 Mastra Workflow。 Render 控制外部運行，而 Mastra 管理其步驟和狀態。看[Defining Workflow Tasks](https://render.com/docs/workflows-defining?utm_source=partner\&utm_medium=partnerships\&utm_campaign=2026_partnership_mastra) for configuration details.
+* **分散式Agent營運**：為每個操作提供自己的計算計劃、逾時和重試策略。渲染Workflow處理執行佇列並提供運行可觀察性。
+
+本部分建立一個編輯管道，從三個角度並行審查草稿，然後將回饋傳遞給編輯Agent。如果您想要部署 Mastra API 或將整個 Mastra Workflow作為一項任務執行，請使用上面的連結。
+
+### 渲染Workflow如何與 Mastra 集成 {/* #how-render-workflows-integrate-with-mastra */}
+
+Mastra 提供Agent程式和應用程式邏輯，而渲染Workflow定義執行邊界。典型的管道有三層：
+
+1. 父渲染任務協調運作。
+2. 子渲染任務呼叫 Mastra Agent來進行集中工作。
+3. 最終的渲染任務結合了結果。
+
+從一個渲染任務呼叫另一個渲染任務會建立一個鍊式任務運行。每個鍊式運行都在其自己的實例中執行。您可以單獨設定該任務的計算、逾時和重試。
+
+本節建立一個編輯管道，從三個角度並行審查草稿，然後使用 Mastra 編輯器Agent程式產生修訂版本。您可以嘗試執行副本[live demo](https://render-workflows-mastra.onrender.com).
+
+### 設定 {/* #setup */}
+
+您需要一個渲染帳戶和渲染 CLI。 CLI 在開發期間執行本機任務伺服器。您也可以使用它在 Render 上建立Workflow服務。
+
+安裝 CLI 並登入：
+
+```bash
+brew install render
+render login
+```
+
+:::注意
+需要渲染 CLI`v2.12.0` or later. For other installation methods, see the [Render CLI docs](https://render.com/docs/cli?utm_source=partner\&utm_medium=partnerships\&utm_campaign=2026_partnership_mastra).
+:::
+
+建立一個名為的空 Mastra 項目`render-workflows`:
+
+```bash npm2yarn
+npm create mastra@latest render-workflows -- --empty
+```
+
+```bash
+cd render-workflows
+```
+
+安裝渲染SDK：
+
+```bash npm2yarn
+npm install @renderinc/sdk tsx
+```
+
+為您的模型提供者設定 API 金鑰。此範例使用 OpenAI：
+
+```text title=".env"
+OPENAI_API_KEY=your_openai_api_key
+```
+
+任何支持的[Mastra model provider](/models) works.
+
+### 建構分散式Agent管道 {/* #build-a-distributed-agent-pipeline */}
+
+#### 創建Agent {/* #create-the-agents */}
+
+在`src/mastra`, create an `agents` directory with `reviewer-agent.ts` and `editor-agent.ts`. Define both agents:
+
+```ts title="src/mastra/agents/reviewer-agent.ts"
+import { Agent } from '@mastra/core/agent'
+
+export const reviewerAgent = new Agent({
+  id: 'reviewer-agent',
+  name: 'Reviewer Agent',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  instructions: `
+    Review the supplied draft only from the requested perspective.
+    Identify concrete problems and recommend specific changes.
+    Do not rewrite the full draft.
+  `,
+})
+```
+
+```ts title="src/mastra/agents/editor-agent.ts"
+import { Agent } from '@mastra/core/agent'
+
+export const editorAgent = new Agent({
+  id: 'editor-agent',
+  name: 'Editor Agent',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  instructions: `
+    Revise the supplied draft using the reviewers' feedback.
+    Return the complete revised draft and nothing else.
+    Preserve accurate details and do not introduce unsupported claims.
+  `,
+})
+```
+
+#### 配置 Mastra 實例 {/* #configure-the-mastra-instance */}
+
+將兩個Agent程式加入 Mastra 實例中`src/mastra/index.ts`:
+
+```ts title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core/mastra'
+import { editorAgent } from './agents/editor-agent.js'
+import { reviewerAgent } from './agents/reviewer-agent.js'
+
+export const mastra = new Mastra({
+  agents: {
+    editorAgent,
+    reviewerAgent,
+  },
+})
+```
+
+從 Mastra 實例檢索Agent程式使它們能夠存取共用應用程式服務，例如日誌記錄、儲存和可觀察性。
+
+#### 建立審核任務 {/* #create-the-review-task */}
+
+在`src`, create a `tasks` directory. The reviewer agent handles one area of focus. Its compute plan, five-minute timeout, and retry policy apply only to that analysis. A temporary model-provider failure can trigger another attempt without restarting the other reviewers.
+
+```ts title="src/tasks/review-task.ts"
+import { task } from '@renderinc/sdk/workflows'
+import { mastra } from '../mastra/index.js'
+
+type Review = {
+  focus: string
+  feedback: string
+}
+
+export const reviewDraft = task(
+  {
+    name: 'review_draft',
+    plan: 'starter',
+    timeoutSeconds: 300,
+    retry: {
+      maxRetries: 2,
+      waitDurationMs: 1_000,
+      backoffScaling: 2,
+    },
+  },
+  async function reviewDraft(draft: string, focus: string): Promise<Review> {
+    const reviewer = mastra.getAgentById('reviewer-agent')
+    const response = await reviewer.generate(`
+      Review this draft for ${focus}.
+      Draft: ${draft}
+    `)
+    if (!response.text) {
+      throw new Error(`The ${focus} review returned no text`)
+    }
+    return {
+      focus,
+      feedback: response.text,
+    }
+  },
+)
+```
+
+#### 建立修訂任務 {/* #create-the-revision-task */}
+
+此任務結合回饋並產生修訂草案。它使用比每個審閱者更大的計算計劃和更長的超時。
+
+```ts title="src/tasks/revision-task.ts"
+import { task } from '@renderinc/sdk/workflows'
+import { mastra } from '../mastra/index.js'
+
+type Review = {
+  focus: string
+  feedback: string
+}
+
+export const reviseDraft = task(
+  {
+    name: 'revise_draft',
+    plan: 'standard',
+    timeoutSeconds: 600,
+    retry: {
+      maxRetries: 2,
+      waitDurationMs: 1_000,
+      backoffScaling: 2,
+    },
+  },
+  async function reviseDraft(draft: string, reviews: Review[]): Promise<{ draft: string }> {
+    const editor = mastra.getAgentById('editor-agent')
+    const response = await editor.generate(`
+      Revise the draft using the review feedback.
+      Draft: ${draft}
+      Reviews: ${JSON.stringify(reviews, null, 2)}
+    `)
+    if (!response.text) {
+      throw new Error('The editor returned no text')
+    }
+    return {
+      draft: response.text,
+    }
+  },
+)
+```
+
+#### 建立編排任務 {/* #create-the-orchestration-task */}
+
+家長同時發出三項審查`Promise.all()`, then sends their combined feedback to the revision step. Retries are disabled at this level because each child defines its own policy. If you enable orchestration retries, ensure that another attempt can't duplicate external side effects or other non-idempotent work.
+
+```ts title="src/tasks/editorial-task.ts"
+import { task } from '@renderinc/sdk/workflows'
+import { reviewDraft } from './review-task.js'
+import { reviseDraft } from './revision-task.js'
+
+export const editorialPipeline = task(
+  {
+    name: 'editorial_pipeline',
+    plan: 'starter',
+    timeoutSeconds: 1_200,
+    retry: {
+      maxRetries: 0,
+      waitDurationMs: 1_000,
+      backoffScaling: 2,
+    },
+  },
+  async function editorialPipeline(draft: string): Promise<{ draft: string }> {
+    const focuses = ['technical clarity', 'structure and flow', 'reader usefulness']
+    const reviews = await Promise.all(focuses.map(focus => reviewDraft(draft, focus)))
+    return reviseDraft(draft, reviews)
+  },
+)
+```
+
+#### 註冊任務 {/* #register-the-tasks */}
+
+創造`src/index.ts` and import the editorial task:
+
+```ts title="src/index.ts"
+import './tasks/editorial-task.js'
+```
+
+運行入口點載入模組並註冊定義的每個任務`task()`.
+
+改變你的`tsconfig.json`:
+
+```json title="tsconfig.json"
+{
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": "src",
+    "outDir": "dist",
+    "noEmit": false
+  }
+}
+```
+
+將這些腳本加入到`package.json`:
+
+```json title="package.json"
+{
+  "scripts": {
+    "build": "tsc",
+    "dev:workflows": "tsx src/index.ts",
+    "start:workflows": "node dist/index.js"
+  }
+}
+```
+
+這些文件是完整的管道。[render-examples/render-workflows-mastra](https://github.com/render-examples/render-workflows-mastra) mirrors this `src/` layout and adds a web UI that starts the parent task.
+
+### 運行管道 {/* #run-the-pipeline */}
+
+#### 當地的 {/* #local */}
+
+啟動本機渲染Workflow開發伺服器：
+
+```bash
+render workflows dev -- "npm run dev:workflows"
+```
+
+在另一個終端機中，列出已註冊的任務：
+
+```bash
+render workflows tasks list --local
+```
+
+啟動編輯管道：
+
+```bash
+render workflows tasks start editorial_pipeline \
+  --local \
+  --input='["Render Workflows runs long-running tasks outside the request lifecycle."]'
+```
+
+本地伺服器將運行及其日誌保存在記憶體中，因此您可以在運行完成後檢查它們`render workflows runs list <task-name> --local`.
+
+#### 生產 {/* #production */}
+
+在渲染上運行管道需要*workflow service*. This is the Render service that holds your task definitions: it builds your repository, registers every task it finds, and provisions an instance for each run.
+
+<Steps>
+  <StepItem>
+    #### 將專案推送到 Git 儲存庫 {/* #push-the-project-to-a-git-repository */}
+
+    Render 從 GitHub、GitLab 或 Bitbucket 上的儲存庫建立Workflow服務，因此將您的專案推送到這些提供者之一。第一次使用提供者時，Render 會要求存取您的儲存庫的權限。
+  </StepItem>
+
+  <StepItem>
+    #### 建立Workflow服務 {/* #create-the-workflow-service */}
+
+    在[Render Dashboard](https://dashboard.render.com?utm_source=partner\&utm_medium=partnerships\&utm_campaign=2026_partnership_mastra), select **New > Workflow** and link the repository from the previous step. Then complete the creation form:
+
+    |領域 |價值|
+    | - | - |
+    |**Language** | Node |
+    | **Region** | The region of any other Render services your tasks connect to |
+    | **Build Command** | `npm install && npm run build` |
+    | **Start Command** | `npm run start:workflows` |
+
+    點選**Deploy Workflow**. Render builds the project and registers `review_draft`, `revise_draft`, and `editorial_pipeline`, which then appear on the workflow's **Tasks** page.
+
+    渲染 CLI 無需離開終端即可建立相同的服務：
+
+    ```bash
+    render workflows create \
+      --name mastra-workflows \
+      --repo . \
+      --runtime node \
+      --build-command "npm install && npm run build" \
+      --run-command "npm run start:workflows"
+    ```
+
+    `--repo .`讀到`origin` remote of your local repository, so the project must already be pushed.
+  </StepItem>
+
+  <StepItem>
+    #### 設定Workflow的環境變數 {/* #set-the-workflows-environment-variables */}
+
+    添加`OPENAI_API_KEY`, or the key for your chosen model provider, to the workflow service in the Dashboard before the first run.
+  </StepItem>
+
+  <StepItem>
+    #### 開始跑步 {/* #start-a-run */}
+
+    ```bash
+    render workflows tasks start mastra-workflows/editorial_pipeline \
+      --input='["Render Workflows runs long-running tasks outside the request lifecycle."]'
+    ```
+
+    這個標識符的第一部分是Workflow的 slug，第二部分是任務名稱。兩者都顯示在渲染儀表板的任務頁面上，因此如果您的Workflow具有不同的名稱，請使用此處顯示的名稱。
+
+    開啟渲染儀表板中的Workflow以檢查每個任務的執行、嘗試、結果和日誌流程。
+  </StepItem>
+</Steps>
+
+### 從您的應用程式觸發 {/* #trigger-from-your-application */}
+
+您可以使用 Render SDK 從 Mastra 應用程式、Web 服務或腳本非同步觸發管道。
+
+從程式碼觸發運行需要渲染 API 金鑰，您可以在[Render account settings](https://render.com/docs/api?utm_source=partner\&utm_medium=partnerships\&utm_campaign=2026_partnership_mastra#1-create-an-api-key). Set it in the calling service:
+
+```text title=".env"
+RENDER_API_KEY=rnd_your_api_key
+```
+
+SDK讀取`RENDER_API_KEY` from the environment automatically.
+
+啟動任務並立即返回其運行 ID：
+
+```ts title="src/start-editorial-pipeline.ts"
+import { Render } from '@renderinc/sdk'
+
+const render = new Render()
+
+export async function startEditorialPipeline(draft: string) {
+  const run = await render.workflows.startTask('mastra-workflows/editorial_pipeline', [draft])
+
+  return {
+    taskRunId: run.taskRunId,
+  }
+}
+```
+
+任務在之後繼續運行`startTask()` returns. Call `await run.get()` when the caller should wait for the completed result instead.
+
+從請求處理程序返回任務運行 ID 可以讓應用程式做出回應，而無需保持請求對整個管道處於開啟狀態。
+
+## 有關的 {/* #related */}
+
+* [現場演示](https://render-workflows-mastra.onrender.com)
+* [渲染Workflow文檔](https://render.com/docs/workflows?utm_source=partner\&utm_medium=partnerships\&utm_campaign=2026_partnership_mastra)
+* [定義渲染Workflow任務](https://render.com/docs/workflows-defining?utm_source=partner\&utm_medium=partnerships\&utm_campaign=2026_partnership_mastra)
+* [觸發任務運行](https://render.com/docs/workflows-running?utm_source=partner\&utm_medium=partnerships\&utm_campaign=2026_partnership_mastra)
+* [渲染Workflow TypeScript SDK](https://render.com/docs/workflows-sdk-typescript?utm_source=partner\&utm_medium=partnerships\&utm_campaign=2026_partnership_mastra)
+* [渲染Workflow限制和定價](https://render.com/docs/workflows-limits?utm_source=partner\&utm_medium=partnerships\&utm_campaign=2026_partnership_mastra)
+* [渲染 cron 作業](https://render.com/docs/cronjobs?utm_source=partner\&utm_medium=partnerships\&utm_campaign=2026_partnership_mastra)

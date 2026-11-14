@@ -1,25 +1,25 @@
 ---
-title: "参考：handleChatStream() | AI SDK"
-description: handleChatStream() 的 API 参考；这是一个与框架无关的处理程序，用于以 AI SDK 兼容格式流式传输 Agent 聊天。
+title: "Reference: handleChatStream() | AI SDK"
+description: "Framework-agnostic handler for streaming agent chat in AI SDK-compatible format."
 packages:
   - "@mastra/ai-sdk"
 ---
 
 import PropertiesTable from "@site/src/components/PropertiesTable";
 
-# handleChatStream()
+# 处理聊天流()
 
-与框架无关的处理程序，用于以 AI SDK 兼容格式流式传输 Agent 聊天。当需要在 Hono 或 Mastra 自有的 [apiRoutes](/docs/server/custom-api-routes) 功能之外处理聊天 stream 时，请直接使用此函数。
+与框架无关的处理程序，用于以 AI SDK 兼容格式进行流Agent聊天。当您需要在 Hono 或 Mastra 自己的外部处理聊天流时，直接使用此功能[apiRoutes](/docs/server/custom-api-routes)特征。
 
-`handleChatStream()` 返回一个 `ReadableStream`，可使用 [`createUIMessageStreamResponse()`](https://ai-sdk.dev/docs/reference/ai-sdk-ui/create-ui-message-stream-response) 对其进行封装。
+`handleChatStream()`返回一个`ReadableStream` that you can wrap with [`createUIMessageStreamResponse()`](https://ai-sdk.dev/docs/reference/ai-sdk-ui/create-ui-message-stream-response).
 
-`handleChatStream()` 保留现有的 AI SDK v5 默认行为。如果应用使用 AI SDK v6 类型，请传入 `version: 'v6'`。
+`handleChatStream()`默认为 AI SDK v5 以实现向后兼容。传入与您安装的AI SDK匹配的版本，例如`version: 'v7'` for AI SDK v7.
 
-如果要在 Mastra server 中创建聊天路由，请使用 [`chatRoute()`](/reference/ai-sdk/chat-route)。
+使用[`chatRoute()`](/reference/ai-sdk/chat-route) if you want to create a chat route inside a Mastra server.
 
-## UI stream 中的结构化输出 {/* #structured-output-in-ui-streams */}
+## UI 流中的结构化输出 {/* #structured-output-in-ui-streams */}
 
-将 `structuredOutput` 传递给底层 Agent 执行时，最终的结构化输出对象会作为自定义 data part 发送到 AI SDK 兼容的 UI stream 中：
+当你通过时`structuredOutput` to the underlying agent execution, the final structured output object is emitted in the AI SDK-compatible UI stream as a custom data part:
 
 ```json
 {
@@ -30,13 +30,13 @@ import PropertiesTable from "@site/src/components/PropertiesTable";
 }
 ```
 
-`object` 字段包含完整的结构化输出值。Mastra 仅为最终结构化输出对象发送此事件；UI stream 不会公开部分结构化输出 chunk。
+这`object` field contains your full structured output value. Mastra emits this event for the final structured output object only. Partial structured output chunks aren't exposed in the UI stream.
 
-可通过 AI SDK UI 的自定义数据处理机制（如 `onData`）读取此事件，或从消息 data part 渲染它。
+使用AI SDK UI的自定义数据处理读取此事件，例如`onData`, or render it from message data parts.
 
 ## 使用示例 {/* #usage-example */}
 
-Next.js App Router 示例：
+Next.js 应用程序路由器示例：
 
 ```typescript title="app/api/chat/route.ts"
 import { handleChatStream } from '@mastra/ai-sdk'
@@ -48,6 +48,7 @@ export async function POST(req: Request) {
   const stream = await handleChatStream({
     mastra,
     agentId: 'weatherAgent',
+    version: 'v7',
     params,
     messageMetadata: () => ({ createdAt: new Date().toISOString() }),
   })
@@ -55,121 +56,141 @@ export async function POST(req: Request) {
 }
 ```
 
+## 保持连接活跃 {/* #keeping-connections-alive */}
+
+Agent和负载均衡器通常会关闭一段时间内不发送任何字节的连接，这会在长时间推理突发或缓慢的Tool调用期间丢弃响应。将编码后的响应包裹起来[`withSseHeartbeat()`](/reference/ai-sdk/with-sse-heartbeat) to emit periodic SSE comments while the stream is idle:
+
+```typescript title="app/api/chat/route.ts"
+import { handleChatStream, withSseHeartbeat } from '@mastra/ai-sdk'
+import { createUIMessageStreamResponse } from 'ai'
+
+return withSseHeartbeat(createUIMessageStreamResponse({ stream }), 15000)
+```
+
 ## 参数 {/* #parameters */}
 
 <PropertiesTable
   content={[
-  {
-    name: 'version',
-    type: "'v5' | 'v6'",
-    description:
-      "选择要输出的 AI SDK stream 协议。省略此项或传入 `'v5'` 可使用现有默认行为；当应用使用 AI SDK v6 response helper 的类型时，传入 `'v6'`。",
-    isOptional: true,
-    defaultValue: "'v5'",
-  },
-  {
-    name: 'mastra',
-    type: 'Mastra',
-    description: '包含已注册 Agent 的 Mastra 实例。',
-    isOptional: false,
-  },
-  {
-    name: 'agentId',
-    type: 'string',
-    description: '用于聊天的 Agent ID。',
-    isOptional: false,
-  },
-  {
-    name: 'agentVersion',
-    type: "{ versionId: string } | { status?: 'draft' | 'published' }",
-    description:
-      "选择特定的 Agent 版本。传入 `{ versionId: '<id>' }` 可指定确切版本，或传入 `{ status: 'draft' }` / `{ status: 'published' }` 按状态解析。需要配置 [Editor](/docs/editor/overview)。",
-    isOptional: true,
-  },
-  {
-    name: 'params',
-    type: 'ChatStreamHandlerParams',
-    description: '聊天 stream 的参数，包括消息和可选的恢复数据。',
-    isOptional: false,
-  },
-  {
-    name: 'params.messages',
-    type: 'UIMessage[]',
-    description: '对话中的消息数组。',
-    isOptional: false,
-  },
-  {
-    name: 'params.resumeData',
-    type: 'Record<string, any>',
-    description: '用于恢复已暂停 Agent 执行的数据。必须设置 `runId`。',
-    isOptional: true,
-  },
-  {
-    name: 'params.runId',
-    type: 'string',
-    description: 'run ID。提供 `resumeData` 时为必填。',
-    isOptional: true,
-  },
-  {
-    name: 'params.providerOptions',
-    type: 'Record<string, Record<string, unknown>>',
-    description:
-      '传递给语言模型的 Provider 专用选项（例如 `{ openai: { reasoningEffort: "high" } }`）。它会与 `defaultOptions.providerOptions` 合并，且 `params` 优先。',
-    isOptional: true,
-  },
-  {
-    name: 'params.requestContext',
-    type: 'RequestContext',
-    description: '传递给 Agent 执行的 request context。',
-    isOptional: true,
-  },
-  {
-    name: 'defaultOptions',
-    type: 'AgentExecutionOptions',
-    description: '传递给 Agent 执行的默认选项。这些选项会与 params 合并，且 params 优先。',
-    isOptional: true,
-  },
-  {
-    name: 'sendStart',
-    type: 'boolean',
-    description: '是否在 stream 中发送开始事件。',
-    isOptional: true,
-    defaultValue: 'true',
-  },
-  {
-    name: 'sendFinish',
-    type: 'boolean',
-    description: '是否在 stream 中发送结束事件。',
-    isOptional: true,
-    defaultValue: 'true',
-  },
-  {
-    name: 'sendReasoning',
-    type: 'boolean',
-    description: '是否在 stream 中包含推理步骤。',
-    isOptional: true,
-    defaultValue: 'false',
-  },
-  {
-    name: 'sendSources',
-    type: 'boolean',
-    description: '是否在 stream 中包含来源引用。',
-    isOptional: true,
-    defaultValue: 'false',
-  },
-  {
-    name: 'onError',
-    type: '(error: unknown) => string',
-    description:
-      'stream 遇到错误时调用。返回的字符串将作为错误消息发送给客户端。可用它在错误到达客户端前进行清理，例如防止内部基础设施详情泄露给最终用户。',
-    isOptional: true,
-  },
-  {
-    name: 'messageMetadata',
-    type: '(options: { part: UIMessageStreamPart }) => Record<string, unknown> | undefined',
-    description:
-      '接收当前 stream part 并返回 metadata 的函数，返回值将附加到开始和结束 chunk。详情请参阅 [AI SDK 消息 metadata 文档](https://ai-sdk.dev/docs/ai-sdk-ui/message-metadata)。',
-    isOptional: true,
-  },
+{
+  name: 'version',
+  type: "'v5' | 'v6' | 'v7'",
+  description:
+    "Selects the AI SDK stream contract to emit. Omit it or pass `'v5'` for the existing default behavior. Pass `'v6'` when your app is typed against AI SDK v6 response helpers. Pass `'v7'` when your app is typed against AI SDK v7.",
+  isOptional: true,
+  defaultValue: "'v5'",
+},
+{
+  name: 'mastra',
+  type: 'Mastra',
+  description: 'The Mastra instance containing registered agents.',
+  isOptional: false,
+},
+{
+  name: 'agentId',
+  type: 'string',
+  description: 'The ID of the agent to use for chat.',
+  isOptional: false,
+},
+{
+  name: 'agentVersion',
+  type: "{ versionId: string } | { status?: 'draft' | 'published' }",
+  description:
+    "Selects a specific agent version. Pass `{ versionId: '<id>' }` to target an exact version, or `{ status: 'draft' }` / `{ status: 'published' }` to resolve by status. Requires the [Editor](/docs/studio/editor) to be configured.",
+  isOptional: true,
+},
+{
+  name: 'params',
+  type: 'ChatStreamHandlerParams',
+  description: 'Parameters for the chat stream, including messages and optional resume data.',
+  isOptional: false,
+},
+{
+  name: 'params.messages',
+  type: 'UIMessage[]',
+  description: 'Array of messages in the conversation.',
+  isOptional: false,
+},
+{
+  name: 'params.resumeData',
+  type: 'Record<string, any>',
+  description: 'Data for resuming a suspended agent execution. Requires `runId` to be set.',
+  isOptional: true,
+},
+{
+  name: 'params.runId',
+  type: 'string',
+  description: 'The run ID. Required when `resumeData` is provided.',
+  isOptional: true,
+},
+{
+  name: 'params.providerOptions',
+  type: 'Record<string, Record<string, unknown>>',
+  description:
+    'Provider-specific options passed to the language model (e.g. `{ openai: { reasoningEffort: "high" } }`). Merged with `defaultOptions.providerOptions`, with `params` taking precedence.',
+  isOptional: true,
+},
+{
+  name: 'params.requestContext',
+  type: 'RequestContext',
+  description: 'Request context to pass to the agent execution.',
+  isOptional: true,
+},
+{
+  name: 'defaultOptions',
+  type: 'AgentExecutionOptions',
+  description:
+    'Default options passed to agent execution. These are merged with params, with params taking precedence.',
+  isOptional: true,
+},
+{
+  name: 'sendStart',
+  type: 'boolean',
+  description: 'Whether to send start events in the stream.',
+  isOptional: true,
+  defaultValue: 'true',
+},
+{
+  name: 'sendFinish',
+  type: 'boolean',
+  description: 'Whether to send finish events in the stream.',
+  isOptional: true,
+  defaultValue: 'true',
+},
+{
+  name: 'sendReasoning',
+  type: 'boolean',
+  description: 'Whether to include reasoning steps in the stream.',
+  isOptional: true,
+  defaultValue: 'false',
+},
+{
+  name: 'sendSources',
+  type: 'boolean',
+  description: 'Whether to include source citations in the stream.',
+  isOptional: true,
+  defaultValue: 'false',
+},
+{
+  name: 'includeSubAgentMetadata',
+  type: 'boolean',
+  description:
+    'Whether to stream sub-agent progress as `data-tool-agent` and `data-tool-agent-step` parts when the agent delegates to sub-agents. These parts can include sub-agent reasoning and tool calls and results. Set to `false` if your clients should not receive them.',
+  isOptional: true,
+  defaultValue: 'true',
+},
+{
+  name: 'onError',
+  type: '(error: unknown) => string',
+  description:
+    'Called when the stream encounters an error. Return the string that will be sent to the client as the error message. Use this to sanitize errors before they reach the client — for example, to prevent internal infrastructure details from leaking to end users.',
+  isOptional: true,
+},
+{
+  name: 'messageMetadata',
+  type: '(options: { part: UIMessageStreamPart; traceId?: string }) => Record<string, unknown> | undefined',
+  description:
+    "A function that receives the current stream part and returns metadata to attach to start and finish chunks. Also receives the run's `traceId` (undefined when tracing is disabled), so you can return it as metadata, for example `({ part, traceId }) => (part.type === 'start' ? { traceId } : undefined)`. See the [AI SDK message metadata docs](https://ai-sdk.dev/docs/ai-sdk-ui/message-metadata) for details.",
+  isOptional: true,
+},
 ]}
 />

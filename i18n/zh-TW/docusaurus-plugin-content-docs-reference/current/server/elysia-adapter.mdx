@@ -1,0 +1,255 @@
+---
+title: "Reference: Elysia adapter | Server"
+description: "The @mastra/elysia package provides a server adapter for running Mastra with Elysia."
+packages:
+  - "@mastra/elysia"
+---
+
+import PropertiesTable from "@site/src/components/PropertiesTable";
+
+# 艾莉西亞適配器
+
+這`@mastra/elysia`軟體包提供了一個伺服器適配器，用於運行 Mastra[艾莉西亞](https://elysiajs.com).
+
+:::資訊
+
+有關一般適配器概念、建構函式選項和初始化流程，請參閱[Server Adapters](/docs/server/server-adapters).
+
+:::
+
+## 安裝 {/* #installation */}
+
+安裝 Elysia 轉接器和 Elysia 車架：
+
+```bash npm2yarn
+npm install @mastra/elysia@latest elysia
+```
+
+## 使用範例 {/* #usage-example */}
+
+```typescript title="server.ts"
+import { Elysia } from 'elysia'
+import { MastraServer } from '@mastra/elysia'
+import { mastra } from './mastra'
+
+const app = new Elysia()
+const server = new MastraServer({ app, mastra })
+
+await server.init()
+
+app.listen(3000)
+
+console.log('Server running on http://localhost:3000')
+```
+
+`init()`不会启动 Mastra 的后台工作人员。運行[scheduled workflows](/docs/workflows/scheduled-workflows), agent schedules, or event listeners, call `await mastra.startWorkers()` after the server starts listening. See [Start background workers](/docs/server/server-adapters#start-background-workers).
+
+## 建構函數參數 {/* #constructor-parameters */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'app',
+  type: 'Elysia',
+  description: 'Elysia app instance',
+  isOptional: false,
+},
+{
+  name: 'mastra',
+  type: 'Mastra',
+  description: 'Mastra instance',
+  isOptional: false,
+},
+{
+  name: 'prefix',
+  type: 'string',
+  description: 'Route path prefix (e.g., `/api/v2`)',
+  isOptional: true,
+  defaultValue: "'/api'",
+},
+{
+  name: 'openapiPath',
+  type: 'string',
+  description: 'Path to serve OpenAPI spec (e.g., `/openapi.json`)',
+  isOptional: true,
+  defaultValue: "''",
+},
+{
+  name: 'bodyLimitOptions',
+  type: 'BodyLimitOptions',
+  typeDescription: '{ maxSize: number, onError: (error: unknown) => unknown }',
+  description: 'Request body size limits',
+  isOptional: true,
+},
+{
+  name: 'streamOptions',
+  type: 'StreamOptions',
+  typeDescription: '{ redact?: boolean }',
+  description:
+    'Stream redaction config. When true (default), redacts sensitive data from stream chunks before sending to clients.',
+  isOptional: true,
+  defaultValue: '{ redact: true }',
+},
+{
+  name: 'customRouteAuthConfig',
+  type: 'Map<string, boolean>',
+  description:
+    'Per-route auth overrides. Keys are `METHOD:PATH` (e.g., `GET:/api/health`). Value `false` makes route public, `true` requires auth.',
+  isOptional: true,
+},
+{
+  name: 'tools',
+  type: 'ToolsInput',
+  typeDescription: 'Record<string, ToolAction | VercelTool>',
+  description: 'Available tools for the server',
+  isOptional: true,
+},
+{
+  name: 'taskStore',
+  type: 'InMemoryTaskStore',
+  description: 'Task store for A2A (Agent-to-Agent) operations',
+  isOptional: true,
+},
+{
+  name: 'mcpOptions',
+  type: 'MCPOptions',
+  typeDescription:
+    '{ setRequestAuth?: (req, requestContext) => void | Promise<void>, serverless?: boolean, sessionIdGenerator?: () => string }',
+  description:
+    'MCP transport options, such as `setRequestAuth` to control what tools see as `context.mcp.extra.authInfo`. Defaults to `server.mcpOptions` from your `Mastra` config.',
+  isOptional: true,
+},
+]}
+/>
+
+## 新增自訂路線 {/* #adding-custom-routes */}
+
+直接將路線新增至 Elysia 應用程式：
+
+```typescript title="server.ts"
+import { Elysia } from 'elysia'
+import { MastraServer } from '@mastra/elysia'
+import { mastra } from './mastra'
+
+const app = new Elysia()
+const server = new MastraServer({ app, mastra })
+
+// Before init - runs before Mastra middleware
+app.get('/early-health', () => ({ status: 'ok' }))
+
+await server.init()
+
+// After init - has access to Mastra context
+app.get('/custom', ({ mastra }) => {
+  return { agents: Object.keys(mastra.listAgents()) }
+})
+```
+
+：：：提示
+
+之前新增的路線`init()` run without Mastra context. Add routes after `init()` to access the Mastra instance and request context.
+
+:::
+
+當您需要 Mastra 管理的身份驗證和路由元資料時，例如`requiresAuth`, prefer [`registerApiRoute()`](/reference/server/register-api-route). For raw Elysia routes mounted directly on `app`, use `createAuthMiddleware()`:
+
+```typescript title="server.ts"
+import { Elysia } from 'elysia'
+import { createAuthMiddleware, MastraServer } from '@mastra/elysia'
+import { mastra } from './mastra'
+
+const app = new Elysia()
+const server = new MastraServer({ app, mastra })
+
+await server.init()
+
+app.get('/custom/protected', async ctx => {
+  const authResponse = await createAuthMiddleware({ mastra })(ctx)
+  if (authResponse) return authResponse
+
+  const user = ctx.requestContext.get('user')
+  return { user }
+})
+
+app.get('/custom/public', async ctx => {
+  const authResponse = await createAuthMiddleware({ mastra, requiresAuth: false })(ctx)
+  if (authResponse) return authResponse
+
+  return { ok: true }
+})
+```
+
+當身份驗證Provider刷新過期會話時，`createAuthMiddleware()` forwards the refreshed session headers (such as `Set-Cookie`) to the response, including error responses. `MastraServer` registers the `applyAuthRefreshHeaders` hook during `init()`, so routes added after `init()` get these headers alongside any cookies your route sets.
+
+如果你使用`createAuthMiddleware()` without `MastraServer`, register the hook yourself before defining routes:
+
+```typescript title="server.ts"
+import { Elysia } from 'elysia'
+import { applyAuthRefreshHeaders, createAuthMiddleware } from '@mastra/elysia'
+import { mastra } from './mastra'
+
+const app = new Elysia()
+  .onAfterHandle({ as: 'global' }, applyAuthRefreshHeaders)
+  .onError({ as: 'global' }, applyAuthRefreshHeaders)
+
+app.get('/custom/protected', () => ({ ok: true }), {
+  beforeHandle: createAuthMiddleware({ mastra }),
+})
+```
+
+## 存取上下文 {/* #accessing-context */}
+
+在 Elysia 處理程序註冊後`init()`, access Mastra context from the handler context:
+
+```typescript title="server.ts"
+app.get('/custom', ({ mastra, requestContext, abortSignal }) => {
+  const agent = mastra.getAgent('myAgent')
+  const user = requestContext.get('user')
+
+  return { agent: agent.name, user, aborted: abortSignal.aborted }
+})
+```
+
+可用的上下文鍵：
+
+|關鍵|描述 |
+| - | - |
+|`mastra` | Mastra instance |
+| `requestContext` | Request context map |
+| `abortSignal` | Request cancellation signal |
+| `registeredTools` | Available tools |
+| `taskStore` | Task store for A2A operations |
+| `customRouteAuthConfig` | Per-route auth overrides |
+| `user` | Authenticated user in `requestContext` when auth is configured |
+
+## OpenAPI 幫助程式 {/* #openapi-helpers */}
+
+使用`getMastraOpenAPIDoc()` when you need to pass Mastra's generated OpenAPI document to Elysia tooling such as `@elysiajs/openapi`:
+
+```typescript title="server.ts"
+import { openapi } from '@elysiajs/openapi'
+import { Elysia } from 'elysia'
+import { getMastraOpenAPIDoc, MastraServer } from '@mastra/elysia'
+import { mastra } from './mastra'
+
+const app = new Elysia()
+const server = new MastraServer({ app, mastra })
+
+await server.init()
+
+app.use(
+  openapi({
+    documentation: getMastraOpenAPIDoc(server),
+  }),
+)
+```
+
+稱呼`clearMastraOpenAPICache(server)` if you need to regenerate the cached document for the same server instance.
+
+## MCP支援 {/* #mcp-support */}
+
+Elysia 適配器透過 Streamable HTTP 為每個註冊的 MCP 伺服器提供服務：`/api/mcp/:serverId/mcp`.
+
+## 手動初始化 {/* #manual-initialization */}
+
+對於自訂中間件排序，請單獨呼叫每個方法，而不是`init()`. See [manual initialization](/docs/server/server-adapters#manual-initialization) for details.

@@ -1,0 +1,233 @@
+---
+title: "LSP inspection"
+description: "Configure Language Server Protocol support in Mastra workspaces so agents can inspect symbols, definitions, references, diagnostics, and project structure."
+packages:
+  - "@mastra/core"
+---
+
+# LSP檢查
+
+語言伺服器協定 (LSP) 檢查為Agent程式提供有關專案代碼的語義資訊。語言伺服器可以識別符號的類型、聲明、實作和診斷，因為它理解語言和項目結構。
+
+## LSP 增加了什麼 {/* #what-lsp-adds */}
+
+文件和搜尋Tool回答有關程式碼庫的不同問題：
+
+|Tool|最適合 |
+| - | - |
+|`read_file` | Reading the exact contents and surrounding context of a known file |
+| `grep` | Finding text or regular-expression matches across files |
+| [搜尋](/docs/sandbox/search)|透過關鍵字或語意相似性檢索索引檔 |
+| LSP檢定|在項目中取得類型感知資訊並遵循符號 |
+
+LSP 檢查是這些Tool的補充，而不是取代它們。Agent可以使用`grep` to find a symbol and inspect it through LSP to locate its declaration. It can then use `read_file` to read the full implementation before making a change.
+
+## 設定LSP {/* #set-up-lsp */}
+
+LSP 啟動一個長時間運行的語言伺服器程序並與其交換 JSON-RPC 訊息。在啟用 LSP 之前，請確保您的配置包括：
+
+* 靜態的[sandbox](/docs/sandbox/overview) with a process manager whose process handles provide readable output and writable input streams. Sandbox resolvers aren't supported.
+* 這`vscode-jsonrpc` and `vscode-languageserver-protocol` packages installed in the Mastra application.
+* 語言伺服器二進位檔案及其運行時安裝在沙箱進程運行的位置。
+* 透過與 Mastra 應用程式和沙箱進程相符的路徑，可以獲得絕對專案根目錄和專案檔案。
+
+Mastra 具有針對 TypeScript 和 JavaScript、Python、Go 和 Rust 的內建伺服器定義。仍必須安裝匹配的語言伺服器二進位。你可以[register another server](#custom-language-servers) for other file types.
+
+安裝共享協議包：
+
+```bash npm2yarn
+npm install vscode-jsonrpc vscode-languageserver-protocol
+```
+
+然後為您的專案安裝語言伺服器。例如，安裝 TypeScript 及其語言伺服器：
+
+```bash npm2yarn
+npm install typescript typescript-language-server
+```
+
+建立靜態`LocalSandbox` and point the filesystem, sandbox, and LSP root at the same directory:
+
+```typescript title="src/mastra/workspaces.ts"
+import { resolve } from 'node:path'
+import { LocalFilesystem, LocalSandbox, Workspace } from '@mastra/core/workspace'
+
+const projectPath = resolve('./workspace')
+
+export const workspace = new Workspace({
+  filesystem: new LocalFilesystem({
+    basePath: projectPath,
+  }),
+  sandbox: new LocalSandbox({
+    workingDirectory: projectPath,
+  }),
+  lsp: {
+    root: projectPath,
+  },
+})
+```
+
+文件系統為專案提供Agent文件Tool。當 LSP 查詢第一次需要它時，沙箱會在同一目錄中啟動語言伺服器。如果任何所需的協定包、進程管理器或伺服器二進位檔案不可用，Mastra 會停用 LSP 或傳回沒有可用的語言伺服器。
+
+## {/* #inspect-code-with-the-agent-tool */}
+
+當LSP使能時，Agent接收`mastra_workspace_lsp_inspect`. Its input identifies a file and places a cursor on one symbol:
+
+```json
+{
+  "path": "/absolute/path/to/workspace/src/orders.ts",
+  "line": 10,
+  "match": "const order = await <<<findOrder(orderId)"
+}
+```
+
+`line`是 1 索引的。將該行內容複製到`match`, then insert exactly one `<<<` marker immediately before the symbol to inspect. The marker isn't part of the source file.
+
+此Tool傳回語言伺服器可以提供的欄位：
+
+|領域 |輸出|
+| - | - |
+|`hover` | Type information or documentation, with its markup kind |
+| `diagnostics` | Severity, message, and source for diagnostics on the inspected line |
+| `definition` | Declaration locations with a one-line preview when the file is readable |
+| `implementation` | Implementation locations |
+| `error` | A setup, server, or query error when inspection can't run |
+
+忽略不可用的結果欄位。定義和實施位置確定從哪裡繼續`read_file` for full context.
+
+## 配置LSP {/* #configure-lsp */}
+
+放`lsp: true` to use the defaults. Replace it with an object when you need to control the root, server discovery, timeouts, or retained clients:
+
+```typescript oxfmt:false
+lsp: {
+  root: projectPath,
+  diagnosticTimeout: 4_000,
+  initTimeout: 8_000,
+  maxOpenClients: 4,
+  disableServers: ['eslint'],
+  binaryOverrides: {
+    typescript: '/opt/mastra-tools/typescript-language-server --stdio',
+  },
+  searchPaths: ['/opt/mastra-tools'],
+},
+```
+
+`binaryOverrides`將內建伺服器 ID 對應到其完整啟動命令。`searchPaths` adds package roots whose `node_modules` may contain required modules or binaries. As a last-resort fallback, you can set a `packageRunner` such as `pnpm dlx`. Package-runner fallback is disabled by default because it may install software or hang in some project layouts.
+
+`diagnosticTimeout`控制直接的時間長度`getDiagnostics()` and `getDiagnosticsMulti()` APIs wait for diagnostics. The agent inspection tool currently waits up to five seconds.
+
+Mastra 通常透過向上尋找該伺服器的專案標記來找到每個檔案的專案根。它回落到`lsp.root` when it finds no marker. See the [LSP configuration reference](/reference/workspace/workspace-class) for all options and defaults.
+
+### 限制保留客戶 {/* #limit-retained-clients */}
+
+`maxOpenClients`限制為一種配置保留的語言伺服器客戶端。它必須是一個正整數。當達到限制時，Mastra 會關閉最近最少使用且沒有活動查詢租約的用戶端。
+
+如果每個保留的客戶端都有有效的租約，則下一次獲取將等待最多五秒才能釋放租約。如果沒有可用的，`prepareQuery()` and `getDiagnostics()` return `null`. `getDiagnosticsMulti()` omits a server it couldn't acquire. Omitting `maxOpenClients` leaves the number of retained clients unlimited. Mastra Code uses a default limit of `4`.
+
+### Tool名稱重新映射 {/* #tool-name-remapping */}
+
+透過配置Agent檢查Tool`tools`. For example, add this entry to expose a shorter name:
+
+```typescript
+import { WORKSPACE_TOOLS } from '@mastra/core/workspace'
+
+const tools = {
+  [WORKSPACE_TOOLS.LSP.LSP_INSPECT]: {
+    name: 'lsp_inspect',
+  },
+}
+```
+
+添加`tools` alongside `lsp` in the configuration. The `name` changes the exposed tool name, but the configuration key remains `WORKSPACE_TOOLS.LSP.LSP_INSPECT`. Set `enabled: false` on the same entry to remove the tool.
+
+請參閱[tool configuration reference](/reference/workspace/workspace-class#tool-configuration) for approval settings, dynamic policies, output limits, and hooks shared by generated agent tools.
+
+## 自訂語言伺服器 {/* #custom-language-servers */}
+
+在下面新增一個伺服器`lsp.servers` when a language isn't built in or when you need to replace a built-in definition:
+
+```typescript oxfmt:false
+lsp: {
+  root: projectPath,
+  servers: {
+    phpactor: {
+      id: 'phpactor',
+      name: 'Phpactor Language Server',
+      languageIds: ['php'],
+      extensions: ['.php'],
+      markers: ['composer.json'],
+      command: 'phpactor language-server',
+      initializationOptions: {
+        indexer: { enabled: true },
+      },
+    },
+  },
+},
+```
+
+每個定義都支援這些欄位：
+
+|領域 |必填|描述 |
+| - | - | - |
+|`id` | Yes | Unique server ID. Use a built-in ID to replace that definition. |
+| `name` | Yes | Human-readable name used in logs and errors. |
+| `languageIds` | Yes | LSP language identifiers handled by the server. |
+| `extensions` | Yes | File extensions handled by the server, including the dot. |
+| `markers` | Yes | Files or directories used to find the project root. |
+| `command` | Yes | Full command that starts the server. |
+| `initializationOptions` | No | Settings sent during the LSP initialization handshake. |
+
+自訂定義與內建定義合併。具有相同的自訂定義`id` replaces the built-in one. When a server lists multiple language IDs, Mastra maps each configured extension to the first ID.
+
+## 直接查詢LSP {/* #query-lsp-directly */}
+
+應用程式程式碼可以直接查詢配置的LSP管理器。`getDiagnostics()` and `getDiagnosticsMulti()` manage their client leases and document open and close notifications internally.
+
+`prepareQuery()`向客戶端公開懸停、定義、實作和其他直接查詢。向其傳遞絕對文件路徑。它打開文件並返回租約。在釋放該租約之前關閉文件，並將這兩個呼叫放入`finally` block:
+
+```typescript
+async function inspectHover(filePath: string, line: number, character: number) {
+  const query = await workspace.lsp?.prepareQuery(filePath)
+  if (!query) return null
+
+  try {
+    return await query.client.queryHover(query.uri, {
+      line,
+      character,
+    })
+  } finally {
+    query.client.notifyClose(filePath)
+    query.release()
+  }
+}
+```
+
+直接客戶部位的索引為 0。洩漏的租約可以防止空閒客戶端在以下情況下被驅逐：`maxOpenClients` is set. During teardown, Mastra waits up to five seconds for active leases before forcing the language servers to shut down. Managed LSP clients close before the sandbox is destroyed.
+
+## 限制 {/* #limitations */}
+
+* LSP 僅適用於具有相符的內建或自訂伺服器的檔案類型。
+* 僅靠檔案系統無法運行語言伺服器。 LSP 需要一個具有雙向流程管理器的靜態沙箱。
+* `LocalFilesystem`遏制和`allowedPaths` don't constrain LSP inspection. Restrict `lsp.root` to a trusted project, and don't expose the LSP tool when users can submit untrusted host paths.
+* 外部包裝檢查可能會解析聲明文件，例如`.d.ts` instead of runtime source.
+* 語言伺服器可能會忽略它們不支援的懸停、診斷、定義或實現結果。
+
+### 遠端沙箱 {/* #remote-sandboxes */}
+
+遠端 LSP 不是後端透明的。 language-server 命令透過遠端沙箱進程管理器運行，但二進位發現、檔案讀取和一些來源預覽仍然使用 Mastra 主機。
+
+僅當滿足所有這些條件時才使用遠端 LSP：
+
+* 遠端進程管理器提供可讀輸出和可寫入輸入流。
+* 此專案在 Mastra 主機和遠端沙箱中使用相符的絕對路徑。
+* 解析的伺服器命令安裝在遠端映像中。配置它`binaryOverrides` for a built-in server or `lsp.servers.command` for a custom server.
+* 主機可以讀取檢查和定義預覽所需的檔案。
+
+本機檔案系統和遠端沙箱不會自動同步。僅安裝在主機上的二進位檔案無法在遠端沙箱中運行，且僅遠端檔案無法提供所有主機端結果。對於僅限遠端項目，請使用`grep`, indexed [search](/docs/sandbox/search), and sandbox commands until LSP file access is backend-transparent.
+
+## 有關的 {/* #related */}
+
+* [檔案系統](/docs/sandbox/filesystem)
+* [沙箱](/docs/sandbox/overview)
+* [搜尋](/docs/sandbox/search)
+* [配置參考](/reference/workspace/workspace-class)

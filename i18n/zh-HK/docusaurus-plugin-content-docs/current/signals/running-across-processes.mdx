@@ -1,0 +1,138 @@
+---
+title: 'Running across processes | Signals'
+description: 'Run Mastra agent threads across multiple processes with a shared PubSub backend and thread leases.'
+packages:
+  - '@mastra/core'
+  - '@mastra/redis-streams'
+  - '@mastra/valkey-streams'
+  - '@mastra/google-cloud-pubsub'
+---
+
+# 跨進程運行
+
+當您執行多個 Mastra 進程時，訊號可能會到達與執行Agent程式的進程不同的進程。這些進程需要相互傳遞輸入並就哪個進程可以運行一個達成一致[thread](/docs/memory/message-history#threads-and-resources).
+
+Mastra 使用共享[PubSub](/docs/server/pubsub) backend to carry signals between processes. A [lease](/reference/pubsub/lease-provider)，一種有時間限制的所有權聲明，賦予一個行程對執行緒的責任。共用儲存保存對話歷史記錄。當多個進程可以處理同一線程時，您需要全部三個。
+
+## 為什麼需要共享後端 {/* #why-you-need-a-shared-backend */}
+
+預設[`EventEmitterPubSub`](/reference/pubsub/event-emitter) delivers events inside one process. That's enough for a single server, but it can't reach another instance.
+
+考慮共享資料庫的兩個 API 實例。使用者在 A 上啟動運行，然後他們的下一則訊息到達 B。如果沒有共享後端，B 無法發佈到 A 的運行並在同一執行緒上啟動第二次運行。兩者都調用模型並寫入訊息，從而留下競爭運行。
+
+共享後端修復交付：B 在線程主題上發布，A 進行消費。租約可確保只有一個程序聲明該執行緒。到達它的其他路線。
+
+每個可以處理相同執行緒的實例都需要相同的 PubSub 後端和儲存。不同的後端無法針對相同資料庫進行協調。
+
+## 選擇拓撲 {/* #choose-a-topology */}
+
+根據進程運行的位置選擇後端。
+
+|部署|後端 |它提供什麼 |
+| - | - | - |
+|一個流程 |[`EventEmitterPubSub`](/reference/pubsub/event-emitter) (default) | In-process delivery and leases |
+| Several processes on one host | [`UnixSocketPubSub`](/reference/pubsub/unix-socket-pubsub) | Delivery and leases over a Unix domain socket |
+| Several hosts | [`RedisStreamsPubSub`](/reference/pubsub/redis-streams) or [`ValkeyStreamsPubSub`](/reference/pubsub/valkey-streams) | Cross-host delivery, retained events, and leases |
+| Several hosts with Google Cloud Pub/Sub | [`GoogleCloudPubSub`](/reference/pubsub/google-cloud-pubsub) | Cross-host delivery without leases |
+
+[`UnixSocketPubSub`](/reference/pubsub/unix-socket-pubsub)選擇一個進程作為套接字Agent，如果退出則重新選擇一個新進程。它不能跨機器工作。
+
+[`GoogleCloudPubSub`](/reference/pubsub/google-cloud-pubsub)跨進程傳遞事件但不實現租約。 Mastra 無法判斷哪個實例擁有線程，因此任何接收到訊號的實例都可以嘗試運行它。僅當另一層保證每個執行緒一個行程時才使用它。
+
+## 線程所有權和租約 {/* #thread-ownership-and-leases */}
+
+Mastra 在開始跑步之前獲得了租約。只有持有者可以運行該線程，其他進程將訊號路由到它。
+
+預設情況下，租約持續 15 秒，所有者每 5 秒更新一次。續約間隔是租約存活時間 (TTL) 的三分之一。這讓業主有時間在索賠到期之前從錯過的續約中恢復過來。看[Configuration](#configuration) to change these values.
+
+如果續約失敗且當地截止日期已過，業主將停止跑步。它無法再證明另一個進程沒有聲明該線程，並且繼續意味著兩個所有者向一個對話寫入內容。然後，新所有者從儲存中開始下一次運行。
+
+[持久劑](/docs/harness/durable-agents#run-ownership)當Workflow儲存不支援運行防護時，使用相同的租約。支援隔離的儲存體會記錄聲明並拒絕來自遺失聲明的執行的寫入。這[`LeaseProvider` reference](/reference/pubsub/lease-provider) documents the contract.
+
+## 將訊號路由到另一個進程 {/* #route-signals-to-another-process */}
+
+當訊號到達時，運行時會尋找執行緒的目前所有者。如果發布了一個訊號，則該訊號將在線程主題上發布，並且所有者將加入其活動運行或從其佇列啟動一個訊號。
+
+如果沒有通告擁有者，則接收程序會嘗試聲明該執行緒。獲勝意味著該進程運行Agent程式。丟失意味著另一個進程先聲明了它，因此該進程轉發信號並`accepted` resolves to `deliver` rather than `wake`. [`sendSignal()`](/reference/agents/agent#sendsignalsignal-options) documents the accepted result.
+
+放`ifIdle.requireClaimedOwner: true` when an idle wake must not start a run on an arbitrary instance. The wake only reaches an advertised owner, and `accepted` rejects if none responds within the discovery window.
+
+## 交貨保證和副本 {/* #delivery-guarantees-and-duplicates */}
+
+PubSub 後端可以在逾時、確認失敗或崩潰後重新傳送事件。因此，運行時假設至少傳遞一次。當所有者保留其簿記時，重新傳遞的訊號不會啟動相同邏輯訊息的第二次運行。
+
+這並不能保證每個事件都一次交付。如果您的處理程序寫入資料庫或觸發其他操作，請使其具有冪等性：處理相同事件兩次應該與處理一次具有相同的效果。
+
+## 信號和進程崩潰 {/* #signals-and-process-crashes */}
+
+崩潰後什麼能存活取決於資料所在的位置：
+
+* 運行時佇列駐留在進程記憶體中。在跑步消耗它們之前發生的碰撞會失去這些訊號。
+* 發送的訊號`persist` behavior are written to memory storage and survive a restart when that storage is shared.
+* [狀態訊號](/docs/signals/state-signals)它們的追蹤儲存在線程上，並透過共享儲存重新啟動後仍然存在。
+* [通知](/docs/signals/notifications)是通知儲存中的持久記錄。他們的調度員可以在重新啟動後重試交付。
+* 共享 PubSub 後端傳輸事件，但不是持久的輸入佇列。保留的事件可以幫助訂閱者重新連接，但它們不會取代儲存。
+* 持久Agent恢復從其檢查點恢復運行。它不會恢復崩潰進程的記憶體訊號佇列。
+
+如果訊號必須在接受它的進程中倖存下來，請將其保留或記錄在您自己的系統中。不要依賴 PubSub 保留作為記錄系統。
+
+## 無伺服器 {/* #serverless */}
+
+無伺服器函數一旦回傳回應就會凍結。如果您的函數開始運行，請透過消耗其輸出流來使其保持活動狀態，直到運行完成。
+
+將此工作傳遞給您的平台`waitUntil` so it can continue after the HTTP response:
+
+```typescript title="src/routes/signal.ts"
+const result = agent.sendSignal(signal, { resourceId, threadId })
+
+ctx.waitUntil(
+  result.accepted.then(async accepted => {
+    if (accepted.action === 'wake') {
+      await accepted.output.consumeStream()
+    }
+  }),
+)
+```
+
+`accepted` resolves to `deliver` and there's no local output to drain. When this invocation wins the lease, it gets `wake` and must stay alive until the output settles.
+
+在無伺服器平台上也使用共享的 PubSub 後端和共享儲存。短暫的實例使得記憶體中的隊列特別脆弱。
+
+## 優雅關機 {/* #graceful-shutdown */}
+
+停止接受新的 webhook 或訊號請求，然後讓正在進行的工作穩定下來。產生的Mastra伺服器句柄`SIGINT` and `SIGTERM`, stops accepting connections, drains active requests, and calls [`mastra.shutdown()`](/docs/deployment/mastra-server#graceful-shutdown-and-rolling-deploys). If you embed Mastra in your own server, call it from your shutdown hook.
+
+訊號提供者有自己的生命週期。稱呼[`provider.stop()`](/reference/signals/signal-provider#stop) to stop polling and clear in-memory subscriptions. Stop routing webhooks to a [`WebhookSignalProvider`](/reference/signals/webhook-signal-provider) before shutdown so new requests don't arrive while the process exits.
+
+## 配置 {/* #configuration */}
+
+共享的 Redis Streams 後端處理訊號傳遞和線程租用：
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { PostgresStore } from '@mastra/pg'
+import { RedisStreamsPubSub } from '@mastra/redis-streams'
+
+export const mastra = new Mastra({
+  agents: { agent },
+  storage: new PostgresStore({
+    id: 'mastra-storage',
+    connectionString: process.env.DATABASE_URL,
+  }),
+  pubsub: new RedisStreamsPubSub({
+    url: process.env.REDIS_URL,
+    keyPrefix: 'mastra:my-app',
+  }),
+})
+```
+
+每個實例點`storage` at the same database, so persisted signals, state signals, and notification records survive a restart and are visible to whichever process owns the thread.
+
+使用相同的`keyPrefix` on every coordinating instance, and a different prefix for environments sharing one Redis server. Vercel's managed Redis and Upstash Redis both work with `RedisStreamsPubSub`.
+
+租約設定是環境變數：
+
+* `MASTRA_AGENT_THREAD_LEASE_TTL_MS`設定租賃期限。預設為`15000` milliseconds.
+* `MASTRA_AGENT_THREAD_LEASE_RENEW_INTERVAL_MS`設定更新間隔。預設值為 TTL 的三分之一，且不短於 TTL 的值將回退到該值。
+
+保持兩個值在實例之間保持一致。較短的 TTL 可以更快地釋放崩潰的所有者線程，但為緩慢更新留下的空間較小。較長的 TTL 會起到相反的作用。保留預設值，除非您的部署有理由更改它們。請參閱[`RedisStreamsPubSub` reference](/reference/pubsub/redis-streams) for other backends.

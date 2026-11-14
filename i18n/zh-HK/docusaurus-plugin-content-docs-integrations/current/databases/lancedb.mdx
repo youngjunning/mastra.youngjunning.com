@@ -1,0 +1,141 @@
+---
+title: "LanceDB | Database"
+description: "Use LanceDB for Mastra application storage and vector operations, configure tables and initialization, and account for its observability limitations."
+packages:
+  - "@mastra/lance"
+---
+
+# 蘭斯資料庫
+
+LanceDB儲存實作利用LanceDB資料庫系統提供了高效能的儲存解決方案，該系統擅長處理傳統資料儲存和向量作業。
+
+:::警告\[不支援可觀察性]
+
+蘭斯資料庫存儲**doesn't support the observability domain**. Traces from the `MastraStorageExporter`無法持久化到 LanceDB，且[工作室的](/docs/studio/overview)可觀察性功能不適用於 LanceDB 作為您唯一的儲存提供者。若要啟用可觀察性，請使用[複合儲存](/reference/storage/composite#specialized-storage-for-observability)將Observability資料路由到受支援的提供者（例如 ClickHouse）。
+
+:::
+
+## 安裝 {/* #installation */}
+
+```bash npm2yarn
+npm install @mastra/lance@latest
+```
+
+## 用法 {/* #usage */}
+
+### 基本儲存使用 {/* #basic-storage-usage */}
+
+```typescript
+import { LanceStorage } from '@mastra/lance'
+
+// Connect to a local database
+const storage = await LanceStorage.create('my-storage', '/path/to/db')
+
+// Connect to a LanceDB cloud database
+const storage = await LanceStorage.create('my-storage', 'db://host:port')
+
+// Connect to a cloud database with custom options
+const storage = await LanceStorage.create('my-storage', 's3://bucket/db', {
+  storageOptions: { timeout: '60s' },
+})
+```
+
+## 參數 {/* #parameters */}
+
+### `LanceStorage.create()` {/* #lancestoragecreate */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'name',
+  type: 'string',
+  description: 'Name identifier for the storage instance',
+  isOptional: false,
+},
+{
+  name: 'uri',
+  type: 'string',
+  description: 'URI to connect to the LanceDB database. Can be a local path, cloud DB URL, or S3 bucket URL',
+  isOptional: false,
+},
+{
+  name: 'options',
+  type: 'ConnectionOptions',
+  description: 'Connection options for LanceDB, such as timeout settings, authentication, etc.',
+  isOptional: true,
+},
+]}
+/>
+
+## 附加說明 {/* #additional-notes */}
+
+### 模式管理 {/* #schema-management */}
+
+LanceStorage 實作自動處理模式建立和更新。它將 Mastra 的模式類型映射到 Apache Arrow 資料類型，LanceDB 在內部使用這些資料類型：
+
+* `text`, `uuid` → Utf8
+* `int`, `integer` → Int32
+* `float`→ 浮點32
+* `jsonb`, `json` → Utf8 (serialized)
+* `binary`→ 二進位
+
+### 初始化 {/* #initialization */}
+
+當您將儲存空間傳遞給 Mastra 類別時，`init()` is called automatically before any storage operation:
+
+```typescript
+import { Mastra } from '@mastra/core'
+import { LanceStorage } from '@mastra/lance'
+
+const storage = await LanceStorage.create('my-storage', '/path/to/db')
+
+const mastra = new Mastra({
+  storage, // init() is called automatically
+})
+```
+
+如果您直接使用儲存空間而不使用 Mastra，則必須致電`init()` explicitly to create the tables:
+
+```typescript
+import { LanceStorage } from '@mastra/lance'
+
+const storage = await LanceStorage.create('my-storage', '/path/to/db')
+
+// Required when using storage directly
+await storage.init()
+
+// Access domain-specific stores via getStore()
+const memoryStore = await storage.getStore('memory')
+const thread = await memoryStore?.getThreadById({ threadId: '...' })
+```
+
+:::警告
+如果`init()` isn't called, tables won't be created and storage operations will fail silently or throw errors.
+:::
+
+### 部署選項 {/* #deployment-options */}
+
+LanceDB儲存可以針對不同的部署場景進行設定：
+
+* **本地發展**：使用本機檔案路徑進行開發和測試
+  ```text
+  /path/to/db
+  ```
+* **雲端部署**：連線到託管的 LanceDB 實例
+  ```text
+  db://host:port
+  ```
+* **S3存儲**：使用Amazon S3進行大容量雲端存儲
+  ```text
+  s3://bucket/db
+  ```
+
+### 餐桌管理 {/* #table-management */}
+
+LanceStorage提供了管理表的方法：
+
+* 使用自訂架構建立表
+* 刪除表
+* 清空表（刪除所有記錄）
+* 按鍵載入記錄
+* 插入單一和批次記錄

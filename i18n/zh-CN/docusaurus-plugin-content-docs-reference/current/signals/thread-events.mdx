@@ -1,0 +1,88 @@
+---
+title: "Reference: Thread events | Signals"
+description: "Reference for subscribeThreadEvents(), its scope options, unsubscribe behavior, and the public queue-count-changed thread event."
+packages:
+  - "@mastra/core"
+---
+
+# 线程事件
+
+`subscribeThreadEvents()`观察线程上本地挂起的输入。这是一个狭窄的队列计数事件面，与[`subscribeToThread()`](/reference/agents/agent#subscribetothreadoptions)，它流式传输Agent输出。
+
+## `subscribeThreadEvents(scope, listener)` {/* #subscribethreadeventsscope-listener */}
+
+订阅一个资源和线程的线程事件。
+
+```typescript
+const scope = {
+  resourceId: 'user-123',
+  threadId: 'thread-abc',
+}
+
+const unsubscribe = agent.subscribeThreadEvents(scope, event => {
+  if (event.type === 'queue-count-changed') {
+    console.log(`${event.count} messages are pending`)
+  }
+})
+
+// Later, when you no longer need updates:
+unsubscribe()
+```
+
+当您拨打电话时，计数会发生变化[`queueMessage()`](/reference/agents/agent#queuemessagemessage-options) or [`queueSignal()`](/reference/agents/agent#queuesignalsignal-options) while a run is active on the thread.
+
+`SubscribeAgentThreadEventsOptions`接受：
+
+<PropertiesTable
+  content={[
+{
+  name: 'resourceId',
+  type: 'string',
+  description: 'Resource that owns the thread.',
+},
+{
+  name: 'threadId',
+  type: 'string',
+  description: 'Thread to observe.',
+},
+{
+  name: 'queueOwnerId',
+  type: 'string',
+  isOptional: true,
+  description:
+    'Restricts queue-count notifications to messages submitted by the calling Agent under this owner ID. Omit to observe all locally pending messages on the shared thread.',
+},
+]}
+/>
+
+当您订阅时，侦听器会接收具有当前本地计数的同步基线事件，然后仅在其计数发生变化时进行更新。返回的取消订阅函数是幂等的，不会取消排队的消息。
+
+计数是运行时本地的。该计数包括使用相同运行时和 PubSub 实例的其他会话或Agent提交的消息。
+
+该计数包括在本地 FIFO 中等待的消息以及获取或转移其租约时未取消的消息。它会在取消、执行切换、转发给另一个所有者或失败时下降，而不是在模型生成完成时下降。闲着的`queueMessage()` handoff is immediate and isn't represented as a cancellable pending slot.
+
+该计数仅涵盖共享队列中的条目[`queueMessage()`](/reference/agents/agent#queuemessagemessage-options) and [`queueSignal()`](/reference/agents/agent#queuesignalsignal-options). It doesn't include signals waiting for delivery into an active run.
+
+所有者范围的观察与调用Agent、其本地运行时、资源、线程和所有者 ID 相匹配。使用[`cancelQueuedMessages()`](/reference/agents/agent#cancelqueuedmessagesoptions) to cancel selected pending input or an owner group.
+
+AgentController 会话在订阅时甚至在提交后续操作之前都会观察共享线程计数。`session.steer()` aborts the current run before sending the new input without clearing queued follow-ups. Session cleanup stops observation and cancels unfinished local preparation, but leaves submitted messages in the Agent queue.
+
+## `AgentThreadEvent` {/* #agentthreadevent */}
+
+今天发出的唯一事件类型是`queue-count-changed`.
+
+```typescript
+type AgentThreadEvent = {
+  type: 'queue-count-changed'
+  count: number
+}
+```
+
+`count`是观察队列中本地待处理消息的数量。复合线程状态、单个消息生命周期、运行和批准事件不会作为公共线程事件发出。 Mastra 将来可能会将它们添加为单独的事件类型。
+
+## 有关的 {/* #related */}
+
+* [`Agent.subscribeToThread()`](/reference/agents/agent#subscribetothreadoptions)
+* [`Agent.cancelQueuedMessages()`](/reference/agents/agent#cancelqueuedmessagesoptions)
+* [块类型参考](/reference/streaming/ChunkType)
+* [AgentController后续队列](/reference/agent-controller/session#follow-ups)

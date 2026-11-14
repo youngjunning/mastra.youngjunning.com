@@ -1,7 +1,6 @@
 import Link from '@docusaurus/Link'
 import { cn } from '@site/src/lib/utils'
 import type { Lesson } from '../types'
-import { useLocalizedLearnContent } from '../localization'
 
 type LessonNavProps = {
   prev?: Lesson
@@ -10,7 +9,6 @@ type LessonNavProps = {
 }
 
 export function LessonNav({ prev, next, className }: LessonNavProps) {
-  const { isSimplifiedChinese, isTaiwanChinese, isHongKongChinese, isJapanese } = useLocalizedLearnContent()
   const prevPublished = prev && prev.status === 'published'
   const nextPublished = next && next.status === 'published'
 
@@ -30,15 +28,7 @@ export function LessonNav({ prev, next, className }: LessonNavProps) {
             <span aria-hidden>←</span>
             <span>
               {prev.title}
-              <span className="ml-1 text-xs">
-                {isSimplifiedChinese
-                  ? '（预计于 2026 年 3 月上旬推出）'
-                  : isTaiwanChinese || isHongKongChinese
-                    ? '（預計於 2026 年 3 月上旬推出）'
-                    : isJapanese
-                      ? '（2026 年 3 月上旬公開予定）'
-                      : '(Coming Early March 2026)'}
-              </span>
+              <span className="ml-1 text-xs">(Coming Early March 2026)</span>
             </span>
           </span>
         )
@@ -59,15 +49,7 @@ export function LessonNav({ prev, next, className }: LessonNavProps) {
           <span className="flex items-center gap-2 rounded-lg border border-(--border) px-4 py-2 text-sm text-(--mastra-text-muted) opacity-60">
             <span>
               {next.title}
-              <span className="ml-1 text-xs">
-                {isSimplifiedChinese
-                  ? '（预计于 2026 年 3 月上旬推出）'
-                  : isTaiwanChinese || isHongKongChinese
-                    ? '（預計於 2026 年 3 月上旬推出）'
-                    : isJapanese
-                      ? '（2026 年 3 月上旬公開予定）'
-                      : '(Coming Early March 2026)'}
-              </span>
+              <span className="ml-1 text-xs">(Coming Early March 2026)</span>
             </span>
             <span aria-hidden>→</span>
           </span>

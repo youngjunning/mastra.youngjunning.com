@@ -1,19 +1,23 @@
 ---
-title: "參考：createCodingAgent() | 編程助手"
-description: "createCodingAgent() 的 API 參考；此工廠函數會建立編程助手，並為 Workspace、任務訊號、錯誤重試及目標評審提供可攜式預設設定。"
+title: "Reference: createCodingAgent() | Coding Agent"
+description: "Use createCodingAgent() to build a coding agent with a local workspace, task signals, network retries, memory integration, and the goal-judge prompt."
 packages:
   - "@mastra/core"
 ---
 
-# createCodingAgent()
+# 建立編碼Agent()
 
-`createCodingAgent()` 會建立一個編程 [`Agent`](/reference/agents/agent)，並為編程助手必備的部分提供可攜式預設設定：本機 Workspace、任務清單訊號 Provider、網絡重試錯誤 Processor，以及目標評審 prompt。只需提供 `model`、`instructions` 和 `tools` 即可取得可運作的 Agent，亦可覆寫任何預設設定。
+**添加於：** `@mastra/core@1.48.0`
 
-傳回值是標準 `Agent`，因此可用於任何接受 `Agent` 的地方，包括作為傳入 [`AgentController`](/reference/agent-controller/agent-controller-class) 的 Agent。
+`createCodingAgent()`建構編碼[`Agent`](/reference/agents/agent) with the essential defaults a coding agent always needs: a local workspace, the task-list signal provider when `memory`配置，網路重試錯誤處理器，以及目標判斷提示。只供應`model`和`instructions`取得工作Agent，或覆寫任何預設值。
+
+傳回值是一個標準值`Agent`, so it works anywhere an `Agent` does: including as the agent passed to an [`AgentController`](/reference/agent-controller/agent-controller-class). The function lives in `@mastra/core` with no hosted service behind it, and every default it fills in is a primitive you can also configure on [`new Agent()`](/reference/agents/agent) yourself.
+
+預設值匹配[Mastra Code](https://code.mastra.ai) runs on. The prompt, modes, and tools that make up that product aren't included: `createCodingAgent()` sets up only the runtime pieces listed under [Defaults](#defaults).
 
 ## 使用範例 {/* #usage-example */}
 
-傳入模型、指示及 Tool。工廠函數會填入 Workspace、任務訊號、錯誤 Processor 及目標 prompt：
+傳遞模型和說明。`createCodingAgent()` fills in the workspace and the error processors. The task signal provider is added when `memory` is configured, and the goal prompt when a `goal` is configured:
 
 ```typescript title="src/mastra/coding-agent.ts"
 import { createCodingAgent } from '@mastra/core/coding-agent'
@@ -23,94 +27,128 @@ const agent = createCodingAgent({
   name: 'My Coding Agent',
   model: '__GATEWAY_OPENAI_MODEL_BASE__',
   instructions: 'You are a helpful coding assistant.',
-  tools: {},
 })
+
+const result = await agent.generate('Which test files mention the /health endpoint?')
 ```
+
+Agent收到[workspace tools](/reference/workspace/workspace-class#filesystem-tools) for its resolved workspace, so `tools` is only needed for capabilities beyond the workspace, such as opening a pull request. Mastra also adds a description of the workspace to the system prompt.
+
+：：：警告
+
+預設Workspace使用應用程式進程的權限在主機上執行命令。看[Workspace](#workspace) for how to swap in an isolated sandbox.
+
+:::
+
+對於 Mastra Code 使用的行為提示，涵蓋儲存庫探索、編輯、命令和提交、構建`instructions` with [`buildBasePrompt()`](/reference/coding-agent/build-base-prompt).
 
 ## 參數 {/* #parameters */}
 
-`createCodingAgent()` 接受 [`AgentConfig`](/reference/agents/agent#constructor-parameters) 的所有欄位及以下欄位。你提供的欄位一律優先於工廠函數的預設設定。
+`createCodingAgent()`接受各領域[`AgentConfig`](/reference/agents/agent#constructor-parameters) plus the fields below. Fields you provide replace the corresponding default, except for `signals`: the default task signal provider is merged into the providers you pass. See [Signals](#signals).
 
 <PropertiesTable
   content={[
-  {
-    name: 'model',
-    type: 'MastraLanguageModel | DynamicArgument<MastraLanguageModel>',
-    description: 'Agent 使用的語言模型。直接傳遞至 Agent。',
-  },
-  {
-    name: 'instructions',
-    type: 'string | DynamicArgument<string>',
-    description: 'Agent 的系統指示。直接傳遞至 Agent。',
-  },
-  {
-    name: 'tools',
-    type: 'ToolsInput | DynamicArgument<ToolsInput>',
-    description: 'Agent 可用的 Tool。直接傳遞至 Agent。',
-    isOptional: true,
-  },
-  {
-    name: 'workspace',
-    type: 'AnyWorkspace | undefined',
-    description:
-      '為 Agent 提供支援的 Workspace。省略此 key 時，系統會建立預設的本機 Workspace。明確設為 undefined 時，工廠函數不會建立預設值；如果 Workspace 在其他位置接駁（例如 AgentController 層級），可用此方式停用預設值。',
-    isOptional: true,
-  },
-  {
-    name: 'basePath',
-    type: 'string',
-    description: '省略 workspace 時所建立之預設 Workspace 的基礎路徑。',
-    isOptional: true,
-    defaultValue: 'process.cwd()',
-  },
-  {
-    name: 'signals',
-    type: 'SignalProvider[]',
-    description: 'Agent 的訊號 Provider。省略時，預設使用單一 TaskSignalProvider。',
-    isOptional: true,
-  },
-  {
-    name: 'errorProcessors',
-    type: 'Processor[]',
-    description:
-      'Agent 的錯誤 Processor。省略時，預設會針對未知串流錯誤重試，並使用專門的 ECONNRESET 及錯誤請求政策，另外加入 PrefillErrorHandler 及 ProviderHistoryCompat。',
-    isOptional: true,
-  },
-  {
-    name: 'goal',
-    type: 'AgentGoalConfig',
-    description: '目標設定。提供此設定但未有 prompt 時，prompt 預設為 DEFAULT_GOAL_JUDGE_PROMPT。',
-    isOptional: true,
-  },
+{
+  name: 'model',
+  type: 'MastraLanguageModel | DynamicArgument<MastraLanguageModel>',
+  description: 'The language model the agent uses. Passed straight through to Agent.',
+},
+{
+  name: 'instructions',
+  type: 'string | DynamicArgument<string>',
+  description: 'System instructions for the agent. Passed straight through to Agent.',
+},
+{
+  name: 'tools',
+  type: 'ToolsInput | DynamicArgument<ToolsInput>',
+  description: 'Tools available to the agent. Passed straight through to Agent.',
+  isOptional: true,
+},
+{
+  name: 'workspace',
+  type: 'AnyWorkspace | undefined',
+  description:
+    'The workspace backing the agent. When the key is omitted, a default local workspace is built. When set explicitly to undefined, no default is built. Opt out this way when the workspace is wired elsewhere, for example at the AgentController level.',
+  isOptional: true,
+},
+{
+  name: 'basePath',
+  type: 'string',
+  description: 'Base path for the default workspace built when workspace is omitted.',
+  isOptional: true,
+  defaultValue: 'process.cwd()',
+},
+{
+  name: 'signals',
+  type: 'SignalProvider[]',
+  description:
+    'Signal providers for the agent. A TaskSignalProvider is added only when memory is configured, and it is merged into the providers you pass rather than replacing them. Without memory, the agent gets exactly the providers you pass, or none.',
+  isOptional: true,
+},
+{
+  name: 'errorProcessors',
+  type: 'Processor[]',
+  description:
+    'Error processors for the agent. When omitted, defaults to unknown stream-error retries with specialized ECONNRESET and bad-request policies, plus PrefillErrorHandler, ProviderHistoryCompat, UnsupportedFileHandler, and CyberRefusalHandler.',
+  isOptional: true,
+},
+{
+  name: 'outputProcessors',
+  type: 'Processor[]',
+  description: 'Output processors for the agent. When omitted, defaults to CyberRefusalHandler.',
+  isOptional: true,
+},
+{
+  name: 'goal',
+  type: 'AgentGoalConfig',
+  description:
+    'Goal configuration. When provided without a prompt, the prompt defaults to DEFAULT_GOAL_JUDGE_PROMPT.',
+  isOptional: true,
+},
 ]}
 />
 
-## 傳回值 {/* #returns */}
+## 退貨 {/* #returns */}
 
 <PropertiesTable
   content={[
-  {
-    name: 'agent',
-    type: 'Agent',
-    description: '已套用解析後 Workspace、訊號、錯誤 Processor 及目標的編程助手。',
-  },
+{
+  name: 'agent',
+  type: 'Agent',
+  description: 'A coding agent with the resolved workspace, signals, error processors, and goal applied.',
+},
 ]}
 />
 
-## 預設設定 {/* #defaults */}
+## 預設值 {/* #defaults */}
 
-只有當你未提供相應欄位時，工廠函數才會填入預設值。呼叫端提供的值一律優先。
+僅當您不提供相應欄位時才會填入預設值。`signals` is the exception: the task signal provider is appended to the providers you pass.
 
-| 欄位 | 省略時的預設值 |
+|領域 |省略時預設 |
 | - | - |
-| `workspace` | 一個以 `LocalFilesystem` 及 `LocalSandbox` 支援的 [`Workspace`](/reference/workspace/workspace-class)，其根目錄設於基礎路徑。 |
-| `signals` | 單一 [`TaskSignalProvider`](/reference/signals/task-signal-provider)。 |
-| `errorProcessors` | 針對未知串流錯誤重試，並使用專門的 ECONNRESET 及錯誤請求政策，另外加入 `PrefillErrorHandler` 及 `ProviderHistoryCompat`。 |
-| `goal.prompt` | `DEFAULT_GOAL_JUDGE_PROMPT`（只在已設定 `goal` 時使用）。 |
+|`workspace` | A [`Workspace`](/reference/workspace/workspace-class) backed by `LocalFilesystem` and `LocalSandbox` rooted at the base path. |
+| `signals` | A [`TaskSignalProvider`](/reference/signals/task-signal-provider), added only when `memory` is configured. |
+| `errorProcessors` | Unknown stream-error retries with specialized ECONNRESET and bad-request policies, plus `PrefillErrorHandler`, `ProviderHistoryCompat`, and `CyberRefusalHandler`. |
+| `outputProcessors` | [`CyberRefusalHandler`](/reference/processors/cyber-refusal-handler). |
+| `maxProcessorRetries` | `DEFAULT_MAX_PROCESSOR_RETRIES`(3)，因此輸出通道網路拒絕重試是有預算的。 |
+|`goal.prompt` | `DEFAULT_GOAL_JUDGE_PROMPT`（僅當`goal`已配置）。 |
 
-### Workspace {/* #workspace */}
+其他什麼都不填寫，沒有預設的`model`, `instructions`, `tools`, `memory`, storage, or input processors.
 
-省略 `workspace` key 時，工廠函數會建立一個以 `basePath` 為根目錄的本機 Workspace（預設為 `process.cwd()`）：
+每個預設值都有一個明確的選擇退出：
+
+|預設 |如何選擇退出 |
+| - | - |
+|工作空間 |`workspace: undefined` |
+| Task tracking | Don't configure `memory` on the agent |
+| Error processors | `errorProcessorDefaults: false` |
+| Output processors | `outputProcessors: []` |
+| Processor retry budget | `maxProcessorRetries: 0` |
+| Goal judge prompt | Omit `goal`, or pass your own `goal.prompt` |
+
+### 工作空間 {/* #workspace */}
+
+當`workspace` key is omitted, a local workspace rooted at `basePath` (default `process.cwd()`) is built:
 
 ```typescript
 import { Workspace, LocalFilesystem, LocalSandbox } from '@mastra/core/workspace'
@@ -121,31 +159,140 @@ new Workspace({
 })
 ```
 
-如要停用預設值（例如在 [`AgentController`](/reference/agent-controller/agent-controller-class) 層級注入 Workspace 時），請明確傳入 `workspace: undefined`：
+要保持該形狀但在不同的目錄中工作，請傳遞`basePath`:
 
 ```typescript
+import { createCodingAgent } from '@mastra/core/coding-agent'
+
 const agent = createCodingAgent({
   id: 'my-coding-agent',
   name: 'My Coding Agent',
   model: '__GATEWAY_OPENAI_MODEL_BASE__',
   instructions: 'You are a helpful coding assistant.',
-  tools: {},
+  basePath: '/srv/checkouts/my-app',
+})
+```
+
+透過一個`workspace` to build the backends yourself. Here the agent reads the whole repository while commands run inside one package. A remote sandbox takes the place of `LocalSandbox` in the same slot, see [Sandbox](/docs/sandbox/overview) for the available backends and isolation options:
+
+```typescript
+import { createCodingAgent } from '@mastra/core/coding-agent'
+import { LocalFilesystem, LocalSandbox, Workspace } from '@mastra/core/workspace'
+
+const agent = createCodingAgent({
+  id: 'my-coding-agent',
+  name: 'My Coding Agent',
+  model: '__GATEWAY_OPENAI_MODEL_BASE__',
+  instructions: 'You are a helpful coding assistant.',
+  workspace: new Workspace({
+    filesystem: new LocalFilesystem({ basePath: '/srv/checkouts/my-app' }),
+    sandbox: new LocalSandbox({ workingDirectory: '/srv/checkouts/my-app/packages/api' }),
+  }),
+})
+```
+
+選擇退出（例如，當Workspace注入到[`AgentController`](/reference/agent-controller/agent-controller-class) level), pass `workspace: undefined` explicitly. An omitted key builds the default, an explicit `undefined` builds nothing:
+
+```typescript
+import { createCodingAgent } from '@mastra/core/coding-agent'
+
+const agent = createCodingAgent({
+  id: 'my-coding-agent',
+  name: 'My Coding Agent',
+  model: '__GATEWAY_OPENAI_MODEL_BASE__',
+  instructions: 'You are a helpful coding assistant.',
   workspace: undefined, // opt out of the default workspace
 })
 ```
 
-### 錯誤 Processor {/* #error-processors */}
+### 訊號 {/* #signals */}
 
-預設的 [`StreamErrorRetryProcessor`](/reference/processors/stream-error-retry-processor) 會套用以下重試政策：
+[`TaskSignalProvider`](/reference/signals/task-signal-provider)添加了`task_write`, `task_update`, `task_complete`, and `task_check` [task tools](/reference/tools/task-tools) and persists the list in thread state, which gives the agent a durable plan across a multi-step request:
 
-- Provider metadata 或特定 matcher 無法配對的未知錯誤，最多重試兩次，每次延遲 `3000ms`。已知的授權失敗會立即顯示。
-- 網絡重設（`ECONNRESET` / `socket hang up`）最多重試兩次，並採用指數退避（`1000ms * 2^retryCount`，上限為 `30000ms`）。
-- 錯誤請求會在 `2000ms` 後重試一次。
+```typescript
+import { createCodingAgent } from '@mastra/core/coding-agent'
+import { Memory } from '@mastra/memory'
 
-特定的網絡重設及錯誤請求政策優先於未知錯誤政策。傳入 `errorProcessors` 會取代預設的 Processor stack。當中亦包含 `PrefillErrorHandler` 及 `ProviderHistoryCompat`，以確保與 Provider 相容。
+const agent = createCodingAgent({
+  id: 'my-coding-agent',
+  name: 'My Coding Agent',
+  model: '__GATEWAY_OPENAI_MODEL_BASE__',
+  instructions: 'Plan multi-step work with the task tools, then carry it out.',
+  memory: new Memory(),
+})
+```
 
-## 相關內容 {/* #related */}
+提供者需要一個記憶體支援的線程，因此僅在以下情況下添加：`memory` is configured. With memory configured, the provider is merged into any `signals` you pass, which keeps task tracking from being dropped by custom providers. Passing `signals: []` alongside `memory` still yields the task provider. To run a memory-backed agent with no task tracking, configure the agent with [`new Agent()`](/reference/agents/agent) instead. Before `@mastra/core@1.49.0`, the provider was always added, which failed in memoryless contexts.
 
-- [`buildBasePrompt()`](/reference/coding-agent/build-base-prompt)
-- [`Agent`](/reference/agents/agent)
-- [`AgentController`](/reference/agent-controller/agent-controller-class)
+`TaskSignalProvider`不接受建構函式參數，因此自訂此預設值意味著選擇Agent程式取得的其他提供者：
+
+```typescript
+import { createCodingAgent } from '@mastra/core/coding-agent'
+import { WebhookSignalProvider } from '@mastra/core/signals'
+import { Memory } from '@mastra/memory'
+
+const agent = createCodingAgent({
+  id: 'my-coding-agent',
+  name: 'My Coding Agent',
+  model: '__GATEWAY_OPENAI_MODEL_BASE__',
+  instructions: 'You are a helpful coding assistant.',
+  memory: new Memory(),
+  signals: [
+    new WebhookSignalProvider({
+      extractResourceId: payload => (payload as { repository: string }).repository,
+    }),
+  ],
+})
+```
+
+
+
+### 錯誤處理器 {/* #error-processors */}
+
+預設[`StreamErrorRetryProcessor`](/reference/processors/stream-error-retry-processor) applies these retry policies:
+
+* 提供者元資料或特定匹配器未匹配的未知錯誤重試最多兩次`3000ms` delay. Known authorization failures surface immediately.
+* 網路重置（`ECONNRESET` / `socket hang up`) retry up to twice with exponential backoff (`1000ms * 2^retryCount`, capped at `30000ms`).
+* 錯誤請求錯誤後重試一次`2000ms`.
+
+特定的網路重置和錯誤請求策略優先於未知錯誤策略。透過`errorProcessors` sets the base list: any of the four shared defaults your list doesn't name by `id` is still added, at the position its `id` gives it. An empty list gets all four. Setting `errorProcessorDefaults: false` keeps your list exactly as given, adding none of the shared defaults. Without a list, the agent then runs no error processors. A `StreamErrorRetryProcessor` added this way uses the shared defaults, so it retries neither unknown errors nor bad-request (HTTP 400) responses. Supply your own instance in the list to keep either policy. `PrefillErrorHandler` and `ProviderHistoryCompat` are also included for provider compatibility: both repair errors caused by the shape of the message history, such as a provider rejecting a conversation that ends with an assistant message.
+
+[`CyberRefusalHandler`](/reference/processors/cyber-refusal-handler)當 OpenAI 或 Anthropic 網路安全防護措施拒絕某個步驟時重試一次，這在普通編碼工作中經常發生。它運行在兩個`errorProcessors` (OpenAI refusals are API errors) and `outputProcessors` (Anthropic refusals finish the step). Passing either list replaces that half of the handler.
+
+重試發生在`generate()` or `stream()` call that hit the error, so a recovered failure is invisible to your code. When the retries run out, the error surfaces the way any model error does: `generate()` rejects and `stream()` emits an `error` chunk. `generate()` and `stream()` also accept `errorProcessors` per call, which replaces the agent's stack for that request. See [Processors](/docs/agents/processors#error-processor-retry-limits) for `maxProcessorRetries`, the retry budget these processors share.
+
+### 目標 {/* #goal */}
+
+預設沒有配置目標。當你通過一個`goal` without a `prompt`, `DEFAULT_GOAL_JUDGE_PROMPT` is used. The `goal` config carries the judge and the run budget, while the objective itself is per thread and set with [`setObjective()`](/docs/harness/goals#managing-the-objective):
+
+```typescript
+import { createCodingAgent } from '@mastra/core/coding-agent'
+import { Memory } from '@mastra/memory'
+
+const agent = createCodingAgent({
+  id: 'my-coding-agent',
+  name: 'My Coding Agent',
+  model: '__GATEWAY_OPENAI_MODEL_BASE__',
+  instructions: 'You are a helpful coding assistant.',
+  memory: new Memory(),
+  goal: {
+    judge: '__GATEWAY_OPENAI_MODEL_LUNA__',
+    maxRuns: 50,
+  },
+})
+
+const threadId = 'thread-1'
+const resourceId = 'user-1'
+
+await agent.setObjective('Get the test suite passing', { threadId, resourceId })
+```
+
+[目標](/docs/harness/goals)需要一個[storage](/docs/storage) backend and a memory-backed thread. Without a resolved `judge`, the goal step is a no-op.
+
+## 有關的 {/* #related */}
+
+* [`buildBasePrompt()`](/reference/coding-agent/build-base-prompt)
+* [目標](/docs/harness/goals)
+* [Sandbox](/docs/sandbox/overview)
+* [`Agent`](/reference/agents/agent)
+* [`AgentController`](/reference/agent-controller/agent-controller-class)

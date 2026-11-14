@@ -1,17 +1,17 @@
 ---
-title: "排程 Workflow | Workflows"
-description: "在 Workflow 定義中宣告 `schedule` 欄位，依 cron 排程執行 Workflow。"
+title: 'Scheduled workflows | Workflows'
+description: 'Run Mastra workflows on one or more cron schedules, inspect trigger history in Studio, and pause or resume scheduled execution at runtime.'
 packages:
-  - "@mastra/core"
+  - '@mastra/core'
 ---
 
-# 排程 Workflow
+# 預定的Workflow
 
-在 Workflow 上宣告 `schedule` 欄位，Mastra 就會依你指定的 cron 觸發它。同一個 Workflow 仍可透過 `workflow.start()` 直接呼叫，排程觸發與手動執行會共用同一條執行路徑。
+聲明一個`schedule`Workflow上的字段，Mastra 將在您指定的 cron 上觸發它。相同的Workflow仍可直接調用`workflow.start()`、規劃火災和手動運行共享單一執行路徑。
 
-## 快速開始 {/* #quickstart */}
+## 快速入門 {/* #quickstart */}
 
-以下 Workflow 會在紐約時間每天上午 9 點執行。請像註冊其他 Workflow 一樣，將它註冊到 `Mastra`，排程器就會自動取得此 Workflow。
+以下Workflow在紐約時間每天上午 9 點運行。註冊於`Mastra` as you would any other workflow, the scheduler picks it up automatically.
 
 ```typescript title="src/mastra/workflows/daily-report.ts"
 import { createWorkflow, createStep } from '@mastra/core/workflows'
@@ -41,19 +41,29 @@ export const dailyReport = createWorkflow({
   .commit()
 ```
 
-不會另外呼叫「註冊排程」。`Mastra` 啟動時，排程器會直接讀取 Workflow 上的 `schedule`。
+不會發生單獨的「註冊時間表」呼叫。調度程序讀取`schedule` straight off the workflow when `Mastra` boots.
 
-## `schedule` 會改變什麼 {/* #what-schedule-changes */}
+## 交貨保證 {/* #delivery-guarantees */}
 
-宣告 `schedule` 的 Workflow 會自動提升為**事件式執行引擎**。公開 API（`workflow.start()`、`workflow.startAsync()`、`streamLegacy()`、`resume()`）維持不變；`EventedWorkflow extends Workflow`，並以相同簽章覆寫各個方法。從程式碼來看，排程觸發與手動執行沒有差別。
+計劃的Workflow發布是盡力而為的。每個事件在其開始事件發布之前都會被聲明，最多可嘗試三次發布。耗盡嘗試或發布者崩潰可以跳過該事件。跳過的事件不會自動重播，但稍後重複發生的火災可以繼續。已標記的時間表`completed` has exhausted its cadence, which doesn't confirm execution. See [Schedule delivery guarantees](/reference/schedules/overview#delivery-guarantees) for failure reporting and manual rerun precautions.
 
-這項提升有一個實際影響：事件式執行需要支援並行更新的儲存配接器，例如 `@mastra/libsql`。若配接器不支援，`createRun()` 會擲回明確錯誤並指出 `schedule` 欄位。請更換配接器或移除排程。
+## 執行引擎 {/* #execution-engine */}
 
-## 單一排程 {/* #single-schedule */}
+聲明`schedule` doesn't change how the workflow runs. Scheduled fires run in-process on the host that runs the scheduler, the same way `workflow.start()` or an HTTP-triggered run does. A workflow that declares `schedule` needs no extra storage or worker setup to run directly.
 
-若 Workflow 只依一種週期觸發，請將物件傳給 `schedule`：
+拆分工作執行緒部署是例外。當[`MASTRA_WORKERS`](/reference/workers/overview#mastra_workers) environment variable is set to any value, including `false`, `createWorkflow` builds scheduled workflows on the **evented execution engine** so that every process in the deployment runs them the same way. Scheduled fires then run on the [orchestration worker](/docs/deployment/workers#orchestration-worker), and Mastra logs a warning to the console when the workflow is created. The public API (`workflow.start()`, `workflow.startAsync()`, `resume()`) 不變。
+
+事件運行需要一個能夠自動套用並發更新的儲存適配器，例如`@mastra/libsql` or `@mastra/pg`. With any other adapter, `createRun()` throws an error that lists the supported adapters.
+
+只有環境變數才會觸發切換，因為`createWorkflow` runs before `Mastra` reads its `workers` option. If you split workers with the `workers` option instead, import `createWorkflow` from `@mastra/core/workflows/evented` for your scheduled workflows.
+
+## 單一時間表 {/* #single-schedule */}
+
+將對象傳遞給`schedule` for a workflow that fires on one cadence:
 
 ```typescript title="src/mastra/workflows/daily-report.ts"
+import { createWorkflow } from '@mastra/core/workflows'
+
 const dailyReport = createWorkflow({
   id: 'daily-report',
   schedule: {
@@ -65,20 +75,38 @@ const dailyReport = createWorkflow({
 })
 ```
 
-欄位：
+領域：
 
-- `cron`（必填）：由 5、6 或 7 個部分組成的 cron 運算式。建立 Workflow 時會進行驗證。
-- `timezone`（選填）：IANA 時區，例如 `America/New_York`。預設為主機的當地時區。請在正式環境中明確設定，避免觸發時間依賴伺服器地區設定。
-- `inputData`（選填）：每次觸發時作為 Workflow 輸入傳入的 payload。
-- `initialState`（選填）：執行的初始狀態。
-- `requestContext`（選填）：附加至執行的請求內容。
-- `metadata`（選填）：與排程資料列一同持久保存的任意中繼資料。
+* `cron`：由 5、6 或 7 部分组成的 cron 表达式。在Workflow构建时进行验证。準確提供以下之一`cron` or `runAt`.
+* `runAt`（可選）：此時觸發一次（紀元毫秒或`Date`) instead of on a cron. After it fires, the schedule moves to `completed` and later deploys don't re-arm it unless you change `runAt`. A `runAt` that has already passed when the schedule is first registered is recorded as `completed` without firing.
+* `endAt`（可選）：僅與`cron`. Stop firing after this time. The schedule moves to `completed` once its next occurrence would fall after `endAt`.
+* `timezone`（可選）：例如 IANA 時區`America/New_York`. Defaults to the host's local timezone. Set this explicitly in production so fire times don't depend on server locale.
+* `inputData`（可選）：有效負載在每次火災時作為Workflow的輸入傳遞。
+* `initialState`（可選）：運行的初始狀態。
+* `requestContext`
+* `metadata`（可選）：任意元資料與計劃行一起保留。
 
-## 多個排程 {/* #multiple-schedules */}
+若要在固定時間運行Workflow一次，請使用`runAt`:
 
-傳入陣列，即可依多種週期觸發相同的 Workflow。每個項目都需要唯一且穩定的 `id`：
+```typescript title="src/mastra/workflows/launch-announcement.ts"
+const launchAnnouncement = createWorkflow({
+  id: 'launch-announcement',
+  schedule: {
+    // Set this to a stable future ISO timestamp in your deployment environment.
+    runAt: new Date(process.env.LAUNCH_ANNOUNCEMENT_AT!),
+    inputData: { userId: 'system' },
+  },
+  // ...
+})
+```
+
+## 多個時間表 {/* #multiple-schedules */}
+
+傳遞一個陣列以在多個節奏上觸發相同的Workflow。每個條目都需要一個獨特的馬厩`id`:
 
 ```typescript title="src/mastra/workflows/status-check.ts"
+import { createWorkflow } from '@mastra/core/workflows'
+
 const statusCheck = createWorkflow({
   id: 'status-check',
   schedule: [
@@ -89,37 +117,37 @@ const statusCheck = createWorkflow({
 })
 ```
 
-每個項目會建立獨立的排程資料列，並依各自的 cron 觸發，也會分別顯示在 Studio 的 Schedules 檢視中。
+每個條目都會建立一個獨立的計劃行並在自己的 cron 上觸發，並且單獨顯示在 Studio Schedules 視圖中。
 
-## 在 Studio 中檢視排程 {/* #viewing-schedules-in-studio */}
+## 在 Studio 中查看時間表 {/* #viewing-schedules-in-studio */}
 
-Studio 將排程顯示為頂層區域，而不是 Workflow 內的分頁：
+Studio 將計劃顯示為頂級區域，而不是Workflow中的標籤：
 
-- **所有排程**：開啟 `/workflows/schedules`，查看跨 Workflow 清單。每個資料列都會顯示 Workflow ID、cron、下次觸發時間，以及最近一次執行的狀態，讓你一眼就能判斷「是否有任何問題？」。
-- **依 Workflow 篩選**：附加 `?workflowId=<id>`，將清單範圍縮小至單一 Workflow，例如 `/workflows/schedules?workflowId=daily-report`。
-- **排程詳細資料**：選取任一資料列，開啟 `/workflows/schedules/:scheduleId`。頁面會顯示排程中繼資料及 **Pause**／**Resume** 控制項，後方則是完整的觸發歷程。
+* **所有時間表**： 打開`/workflows/schedules` for a cross-workflow list. Each row shows the workflow id, cron, next fire, and the most recent run's status. The list answers "is anything broken?" at a glance.
+* **按Workflow過濾**: 追加`?workflowId=<id>` to scope the list to a single workflow, for example `/workflows/schedules?workflowId=daily-report`.
+* **日程詳情**：選擇任意行打開`/workflows/schedules/:scheduleId`. The page shows schedule metadata and **Pause** / **Resume** controls, followed by the full trigger history.
 
-當 Workflow 至少有一個排程時，其標頭會包含 **Schedules** 動作：
+Workflow的標頭包括**Schedules** action when the workflow has at least one schedule:
 
-- 符合一個排程時，此動作會直接連結至其詳細資料頁面。
-- 多個排程：此動作會連結至 `/workflows/schedules?workflowId=<id>` 的 Workflow 篩選清單。
-- 沒有排程：隱藏此動作。
+* 當一個時間表相符時，該操作會直接連結到其詳細資訊頁面。
+* 多個計劃：操作連結到Workflow過濾列表`/workflows/schedules?workflowId=<id>`.
+* 沒有時間表：動作是隱藏的。
 
-### 觸發歷程 {/* #trigger-history */}
+### 觸發歷史記錄 {/* #trigger-history */}
 
-每次觸發都會記錄一筆觸發資料列，其中包含執行 ID、排定時間、實際觸發時間和發布狀態。排程詳細資料頁面會將每個觸發項目與對應的 Workflow 執行結合，並顯示：
+調度程序嘗試記錄帶有運行 ID、計劃時間、實際觸發時間和發布狀態的觸發器行。發布者在聲明事件發生或發布被接受後崩潰不會留下任何觸發行。計劃詳細資訊頁面將記錄的觸發器連接到對應的Workflow運行並顯示：
 
-- 以徽章顯示執行狀態（`running`、`success`、`failed`、`suspended`、`canceled`）。
-- 執行的開始時間與持續時間。
-- 指向 `/workflows/:workflowId/graph/:runId` 完整執行圖檢視的連結。
-- 若觸發項目的執行記錄因觸發發布與執行快照之間的競爭條件而尚未寫入，則顯示 `pending` 徽章。
-- 當排程器完全無法將執行排入佇列時，顯示包含發布錯誤的 `publish failed` 徽章。
+* 運轉狀態（`running`, `success`, `failed`, `suspended`, `canceled`) as a badge.
+* 跑步的開始時間和持續時間。
+* 運行完整圖表視圖的連結：`/workflows/:workflowId/graph/:runId`.
+* 一個`pending` badge for triggers whose run record hasn't been written yet, due to a race between trigger publish and run snapshot.
+* 一個`publish failed` badge with the final publish error after all three attempts fail. The outcome is unknown: the transport may have accepted the event before returning the error.
 
-處於非終止狀態的觸發項目會讓面板每五秒輪詢一次，直到它們到達終止狀態。清單使用分頁，因此長時間執行的排程不會預先載入數千筆資料列。
+非終端狀態下的觸發器會導致面板每五秒鐘輪詢一次，直到達到終端狀態。此清單分頁，因此長時間運行的計劃不會預先載入數千行。
 
-## 在執行階段暫停排程 {/* #pausing-a-schedule-at-runtime */}
+## 在運行時暫停計劃 {/* #pausing-a-schedule-at-runtime */}
 
-排程 Workflow 在正式環境中誤觸發時，不必重新部署或手動編輯資料庫。你可以從 SDK 暫停它：
+當計劃的Workflow在生產中失敗時，您無需重新部署或手動編輯資料庫。從 SDK 暫停它：
 
 ```typescript
 import { MastraClient } from '@mastra/client-js'
@@ -134,57 +162,66 @@ await client.pauseSchedule('wf_daily-report')
 await client.resumeSchedule('wf_daily-report')
 ```
 
-在 Studio 中，開啟排程詳細資料頁面，並選取標頭中的 **Pause** 或 **Resume**。
+在 Studio 中，開啟日程詳細資訊頁面並選擇**Pause** or **Resume** in the header.
 
-以下是幾項值得了解的規則：
+需要了解的一些規則：
 
-- 暫停會持久保存。狀態會寫入排程資料表，並在處理程序重新啟動及重新部署後繼續存在。即使你變更 `cron`、`timezone` 或其他欄位，宣告式設定的 upsert 也不會覆寫使用者設定的狀態。
-- 繼續時會從目前時間重新計算 `nextFireAt`。暫停一週的排程不會在繼續時立即觸發七次積壓的執行，而會在下一個正常的 cron 時點觸發。
-- 使用 `resumeSchedule` 或 Studio 中的 **Resume** 按鈕解除暫停。編輯 Workflow 的 `schedule` 設定不會解除已暫停資料列的暫停狀態。
-- 暫停與繼續具有冪等性。對已暫停的排程呼叫暫停不會產生任何作用。
-- 此操作覆寫會控制現有排程。請在程式碼中編寫宣告式排程。宣告式排程會透過 `createWorkflow` 上的 `schedule` 欄位，在程式碼中建立、刪除及編輯。若要改為在執行階段以命令式方式建立排程，請搭配 `workflowId` 使用統一的 [`mastra.schedules`](/docs/long-running-agents/schedules) 服務。
+* 暫停是持久的。狀態將寫入計劃表並在進程重新啟動和重新部署後繼續存在。即使您更改，聲明性配置 upsert 也不會覆蓋使用者設定的狀態`cron`, `timezone`, `runAt`, `endAt`, or other fields.
+* 恢復 cron 計劃重新計算`nextFireAt` from now. A schedule paused for a week doesn't fire seven backlogged runs. It fires on the next regular cron tick.
+* 恢復一次性保持其配置`runAt`. If that time passed while the schedule was paused, it fires on the next scheduler tick.
+* 取消暫停`resumeSchedule` or the **Resume** button in Studio. Editing the workflow's `schedule` config doesn't unpause a paused row.
+* 暫停和恢復是冪等的。對已經暫停的計劃呼叫暫停是無操作的。
+* 此操作覆蓋控制現有計劃。在程式碼中編寫聲明性時間表。聲明性計劃透過以下方式在程式碼中建立、刪除和編輯`schedule` field on `createWorkflow`. To create schedules imperatively at runtime instead, use the unified [`mastra.schedules`](/docs/harness/schedules) service with a `workflowId`.
 
-底層 HTTP 路由為 `POST /api/schedules/:scheduleId/pause` 和 `POST /api/schedules/:scheduleId/resume`。兩者都需要 `schedules:write` 權限。
+底層的 HTTP 路由是`POST /api/schedules/:scheduleId/pause` and `POST /api/schedules/:scheduleId/resume`. Both require the `schedules:write` permission.
 
-## 變更後重新部署 {/* #redeploying-with-changes */}
+## 重新部署並進行更改 {/* #redeploying-with-changes */}
 
-變更 `schedule` 設定並重新部署時，Mastra 會比較現有排程資料列與新設定的差異：
+當您更改`schedule` config and redeploy, Mastra diffs the existing schedule row against the new config:
 
-- 如果 `cron` 或 `timezone` 已變更，會重新計算 `nextFireAt`。
-- 如果只有 `inputData`、`initialState` 或 `metadata` 變更，則會直接修補資料列並保留下次觸發時間。
-- 使用者設定的狀態（例如透過 `client.pauseSchedule` 暫停）與觸發歷程永遠不會遭到覆寫。
+* 如果`cron`, `timezone`, or `endAt` changes on a recurring schedule, `nextFireAt` is recomputed. A cadence with no future occurrence completes the schedule. A recomputed cadence that can still fire reactivates a completed schedule.
+* 如果`runAt` changes on a one-off schedule, `nextFireAt` is updated to that time. A future `runAt` reactivates a completed one-off. A past `runAt` leaves it completed.
+* 如果主動一次性未改變`runAt` passed while the app was offline, it remains due and fires on the next scheduler tick. A one-off first registered with a past `runAt` is instead created as `completed` and doesn't fire.
+* 如果只是`inputData`, `initialState`, or `metadata` changed, the row is patched in place and the next fire time is preserved.
+* 使用者設定的狀態（例如，透過暫停`client.pauseSchedule`) and fire history are never overwritten, unless a timing change above requires a status update.
 
-從 Workflow 的 `schedule` 陣列移除排程項目後，會在下次啟動時刪除其資料列。
+這`completed` status means the schedule has no automatic fires remaining: its one-off fire was claimed, its recurring cadence was exhausted, or its configured timing was already exhausted during registration or reconciliation. It doesn't confirm that the workflow run completed successfully.
+
+從Workflow中刪除計劃條目`schedule` array deletes its row on the next boot.
 
 ## 部署拓撲 {/* #deployment-topology */}
 
-內建排程器使用 `setInterval` 計時迴圈輪詢排程資料表，並取得到期資料列。它會透過處理程序內 pubsub 分派 Workflow 執行，並假設主機處理程序會長時間運作。
+內建調度程式使用`setInterval` tick loop to poll the schedules table and claim due rows. It dispatches workflow runs through the in-process pubsub. It assumes a long-lived host process.
 
-### 長時間運作的主機（建議） {/* #long-lived-host-recommended */}
+### 長壽主機（推薦） {/* #long-lived-host-recommended */}
 
-Fly Machines、Railway、Render、AWS ECS、GKE 或你自己的伺服器等部署目標，會讓 Mastra 處理程序在 cron 時點之間保持運作。排程不需額外設定即可運作。正式環境部署可以將排程器作為[專用 worker 處理程序](/docs/deployment/workers#scheduler-worker)執行，使其與 API 層隔離。
+部署 Fly Machines、Railway、Render、AWS ECS、GKE 等目標或您自己的伺服器，使 Mastra 進程在 cron 週期之間保持活動狀態。伺服器產生的`mastra build` starts the scheduler automatically, so schedules work without extra setup.
+
+如果您運行 Mastra[server adapter](/docs/server/server-adapters), call `mastra.startWorkers()` after your server starts listening. Adapters don't start the scheduler, and schedules never fire without this call. See [Start background workers](/docs/server/server-adapters#start-background-workers).
+
+對於生產部署，您可以將調度程序作為[dedicated worker process](/docs/deployment/workers#scheduler-worker) to isolate it from the API layer.
 
 ### 無伺服器平台 {/* #serverless-platforms */}
 
-Vercel、Netlify、AWS Lambda 和 Cloudflare Workers 等函式即服務平台會在每次請求後關閉處理程序。由於計時迴圈無法進行第二次計時，目前在這些平台上，以程式碼宣告的排程不會透過內建排程器觸發。
+Vercel、Netlify、AWS Lambda 和 Cloudflare Workers 等函數即服務平台會在每次請求後關閉進程，因此滴答循環不會獲得第二次滴答，並且程式碼中聲明的計劃目前不會使用內建調度程序觸發。直接運行仍然有效：調用`run.start()` from an HTTP route runs a workflow that declares `schedule` in-process, like any other workflow.
 
-請在這些平台上改用 [`@mastra/inngest`](#inngest-workflows)。Inngest 原生支援無伺服器環境，並會代你保存 cron 狀態。
+對於這些平台上的 cron 火災，請使用[`@mastra/inngest`](#inngest-workflows) instead. Inngest is serverless-native and holds the cron state for you.
 
-## Inngest Workflow {/* #inngest-workflows */}
+## 攝取Workflow {/* #inngest-workflows */}
 
-本頁記載的 `schedule` 欄位會驅動 Mastra 內建排程器。如果使用 `@mastra/inngest`，排程 Workflow 會透過 `createFunction` 上 Inngest 自己的 `cron` 欄位進行設定，並改由 Inngest 的排程器觸發。
+這`schedule` field documented on this page drives Mastra's built-in scheduler. If you use `@mastra/inngest`, scheduled workflows are configured through Inngest's own `cron` field on `createFunction` and fire on Inngest's scheduler instead.
 
-實際影響如下：
+實際意義：
 
-- Inngest 排程不會出現在 Studio 的 `/workflows/schedules` 檢視中。
-- Inngest Workflow 不會顯示 Workflow 標頭中的 **Schedules** 動作。
-- `client.pauseSchedule` 和 `client.resumeSchedule` 無法控制 Inngest 排程。
+* Ingest 時間表不會出現在 Studio 中`/workflows/schedules` view.
+* Workflow標題**Schedules** action doesn't show for Inngest workflows.
+* `client.pauseSchedule`和`client.resumeSchedule` don't control Inngest schedules.
 
-請從 [Inngest 儀表板](https://www.inngest.com/docs/guides/scheduled-functions)管理 Inngest 排程。若希望由 Mastra 端對端負責排程，請使用 Mastra 排程。
+管理 Ingest 日程[Inngest dashboard](https://www.inngest.com/docs/guides/scheduled-functions). Use Mastra schedules when you want Mastra to own scheduling end to end.
 
-## 相關資源 {/* #related */}
+## 有關的 {/* #related */}
 
-- [Workflow 概觀](/docs/workflows/overview)
-- [暫停與繼續](/docs/workflows/suspend-and-resume)
-- [Worker](/docs/deployment/workers)：[排程器 worker](/docs/deployment/workers#scheduler-worker)會在專用處理程序中執行 cron 排程
-- [Agent 排程](/docs/long-running-agents/schedules)：依 cron 排程執行 Agent 而非 Workflow，並在執行階段透過 `mastra.schedules` 管理這兩種排程類型。
+* [Workflow概述](/docs/workflows/overview)
+* [暫停和恢復](/docs/workflows/suspend-and-resume)
+* [勞工](/docs/deployment/workers)： 這[scheduler worker](/docs/deployment/workers#scheduler-worker) runs cron schedules in a dedicated process
+* [Agent日程](/docs/harness/schedules)：在 cron 計劃上執行Agent程式而不是Workflow，並透過以下方式在執行時管理兩種計劃類型`mastra.schedules`.

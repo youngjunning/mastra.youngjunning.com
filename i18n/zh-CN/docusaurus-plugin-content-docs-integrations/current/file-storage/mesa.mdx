@@ -1,0 +1,368 @@
+---
+title: "Mesa | File Storage"
+description: "Store versioned Mastra workspace files in Mesa repositories with standard file operations, commits, branches, diffs, history, and repository status."
+packages:
+  - "@mastra/mesa"
+---
+
+# 台面
+
+将Workspace文件存储在[Mesa](https://docs.mesa.dev/content/getting-started/introduction)通过标准 Mastra 进行回购`WorkspaceFilesystem`界面。
+
+使用`MesaFilesystem` when agents need versioned file storage. For a local directory, use [`LocalFilesystem`](/reference/workspace/local-filesystem). For object storage, use [`S3Filesystem`](/integrations/file-storage/amazon-s3), [`GCSFilesystem`](/integrations/file-storage/google-cloud-storage)， 或者[`AzureBlobFilesystem`](/integrations/file-storage/azure-blob).
+
+：：：笔记
+
+`MesaFilesystem`在 Mastra 进程中运行。
+
+[Mesa 的 POSIX 安装](https://docs.mesa.dev/content/mesafs/posix-mount)（用于在Sandbox中使用 Mesa 文件系统）尚未成为`@mastra/mesa` package. Support is coming soon.
+
+:::
+
+## 安装 {/* #installation */}
+
+```bash npm2yarn
+npm install @mastra/mesa
+```
+
+## 使用示例 {/* #usage-example */}
+
+挂载一个 Mesa 存储库并将文件系统传递到Workspace：
+
+```typescript title="src/mastra/workspace.ts"
+import { Agent } from '@mastra/core/agent'
+import { Workspace } from '@mastra/core/workspace'
+import { MesaFilesystem, repo } from '@mastra/mesa'
+
+const workspace = new Workspace({
+  filesystem: new MesaFilesystem({
+    privateKey: process.env.MESA_PRIVATE_KEY,
+    authors: [{ name: 'File Agent', email: 'agent@example.com' }],
+    layout: {
+      '/docs': repo('docs', { mode: 'rw', at: { bookmark: 'main' } }),
+    },
+  }),
+})
+
+const agent = new Agent({
+  id: 'file-agent',
+  name: 'file-agent',
+  model: '__GATEWAY_ANTHROPIC_MODEL_OPUS__',
+  workspace,
+})
+```
+
+`privateKey`回落到`MESA_PRIVATE_KEY` when omitted. The layout uses `repo()`, re-exported from the [Mesa SDK](https://docs.mesa.dev/content/getting-started/introduction), to declare which repos to mount and where.
+
+## 构造函数参数 {/* #constructor-parameters */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'privateKey',
+  type: 'string',
+  description: 'Mesa private key. Falls back to `MESA_PRIVATE_KEY` when omitted.',
+  isOptional: true,
+},
+{
+  name: 'authors',
+  type: '[Author, ...Author[]]',
+  description: 'Commit authors attributed to writes made through this filesystem.',
+},
+{
+  name: 'layout',
+  type: 'Layout',
+  description: 'Mesa mount layout mapping absolute paths to repos, built with `repo()`.',
+},
+{
+  name: 'cache',
+  type: '{ diskCache?: { path: string; maxSizeBytes?: number } }',
+  description: 'Mesa filesystem cache configuration.',
+  isOptional: true,
+},
+{
+  name: 'ttl',
+  type: 'number',
+  description: 'Mesa mount token lifetime in seconds.',
+  isOptional: true,
+},
+{
+  name: 'readOnly',
+  type: 'boolean',
+  description: 'Mount every repo in the layout as read-only.',
+  isOptional: true,
+  defaultValue: 'false',
+},
+]}
+/>
+
+## 特性 {/* #properties */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'id',
+  type: 'string',
+  description: 'Filesystem instance identifier.',
+},
+{
+  name: 'name',
+  type: 'string',
+  description: "Provider name (`'MesaFilesystem'`).",
+},
+{
+  name: 'provider',
+  type: 'string',
+  description: "Provider identifier (`'mesa'`).",
+},
+{
+  name: 'readOnly',
+  type: 'boolean | undefined',
+  description: 'Whether write operations are blocked.',
+},
+{
+  name: 'client',
+  type: 'Mesa | undefined',
+  description: 'Mesa SDK client created by this provider. Undefined before initialization.',
+},
+{
+  name: 'filesystem',
+  type: 'MesaFileSystem',
+  description: 'Active Mesa filesystem. Access this after initialization when you need the raw Mesa SDK filesystem.',
+},
+{
+  name: 'change',
+  type: 'MesaFileSystem["change"]',
+  description: 'Mesa change management operations for the mounted filesystem.',
+},
+{
+  name: 'bookmark',
+  type: 'MesaFileSystem["bookmark"]',
+  description: 'Mesa bookmark management operations for the mounted filesystem.',
+},
+]}
+/>
+
+## 方法 {/* #methods */}
+
+`MesaFilesystem`实施[WorkspaceFilesystem interface](/reference/workspace/filesystem).
+
+### 文件操作 {/* #file-operations */}
+
+#### `readFile(path, options?)` {/* #readfilepath-options */}
+
+从 Mesa 读取文件。
+
+```typescript
+const content = await filesystem.readFile('/docs/README.md', {
+  encoding: 'utf-8',
+})
+```
+
+返回：`Promise<string | Buffer>`
+
+#### `writeFile(path, content, options?)` {/* #writefilepath-content-options */}
+
+将文件写入 Mesa。
+
+```typescript
+await filesystem.writeFile('/docs/report.md', '# Report')
+```
+
+返回：`Promise<void>`
+
+#### `appendFile(path, content)` {/* #appendfilepath-content */}
+
+将内容附加到文件。
+
+```typescript
+await filesystem.appendFile('/docs/log.txt', 'new line\n')
+```
+
+返回：`Promise<void>`
+
+#### `deleteFile(path, options?)` {/* #deletefilepath-options */}
+
+删除一个文件。
+
+```typescript
+await filesystem.deleteFile('/docs/old-report.md')
+```
+
+返回：`Promise<void>`
+
+#### `copyFile(src, dest, options?)` {/* #copyfilesrc-dest-options */}
+
+复制文件。
+
+```typescript
+await filesystem.copyFile('/docs/report.md', '/docs/archive/report.md')
+```
+
+返回：`Promise<void>`
+
+#### `moveFile(src, dest, options?)` {/* #movefilesrc-dest-options */}
+
+移动或重命名文件。
+
+```typescript
+await filesystem.moveFile('/docs/draft.md', '/docs/final.md')
+```
+
+返回：`Promise<void>`
+
+### 目录操作 {/* #directory-operations */}
+
+#### `mkdir(path, options?)` {/* #mkdirpath-options */}
+
+创建一个目录。
+
+```typescript
+await filesystem.mkdir('/docs/reports', { recursive: true })
+```
+
+返回：`Promise<void>`
+
+#### `rmdir(path, options?)` {/* #rmdirpath-options */}
+
+删除一个目录。
+
+```typescript
+await filesystem.rmdir('/docs/reports', { recursive: true })
+```
+
+返回：`Promise<void>`
+
+#### `readdir(path, options?)` {/* #readdirpath-options */}
+
+列出目录条目。
+
+```typescript
+const entries = await filesystem.readdir('/docs', {
+  recursive: true,
+  extension: '.md',
+})
+```
+
+返回：`Promise<FileEntry[]>`
+
+### 路径操作 {/* #path-operations */}
+
+#### `exists(path)` {/* #existspath */}
+
+检查路径是否存在。
+
+```typescript
+const exists = await filesystem.exists('/docs/README.md')
+```
+
+返回：`Promise<boolean>`
+
+#### `stat(path)` {/* #statpath */}
+
+返回文件或目录元数据。
+
+```typescript
+const stat = await filesystem.stat('/docs/README.md')
+```
+
+返回：`Promise<FileStat>`
+
+#### `realpath(path)` {/* #realpathpath */}
+
+返回从 Mesa 开始的规范路径。
+
+```typescript
+const realPath = await filesystem.realpath('/docs/README.md')
+```
+
+返回：`Promise<string>`
+
+### 梅萨行动 {/* #mesa-operations */}
+
+#### `bash(options?)` {/* #bashoptions */}
+
+为此文件系统创建 Mesa 支持的 Bash 运行时。
+
+```typescript
+const bash = await filesystem.bash({
+  cwd: '/docs',
+})
+```
+
+返回：`Promise<Bash>`
+
+## 路径语义 {/* #path-semantics */}
+
+方法需要绝对路径。为了`MesaFilesystem`, paths are rooted at the Mesa mount and start with a path from the layout:
+
+```typescript
+await filesystem.readFile('/docs/README.md')
+```
+
+不要省略前导斜杠：
+
+```typescript
+await filesystem.readFile('docs/README.md') // Incorrect
+await filesystem.readFile('/docs/README.md') // Correct
+```
+
+当您安装多个存储库时，每个存储库都在其布局路径下可用：
+
+```typescript
+const filesystem = new MesaFilesystem({
+  authors: [{ name: 'File Agent' }],
+  layout: {
+    '/docs': repo('docs', { mode: 'rw', at: { bookmark: 'main' } }),
+    '/website': repo('website', { mode: 'rw', at: { bookmark: 'main' } }),
+  },
+})
+
+await filesystem.readFile('/docs/README.md')
+await filesystem.readFile('/website/package.json')
+```
+
+## Mesa 版本控制 API {/* #mesa-versioning-apis */}
+
+访问底层 Mesa 文件系统以进行特定于 Mesa 的更改和书签操作：
+
+```typescript
+await filesystem.writeFile('/docs/draft.md', 'Draft')
+
+const current = await filesystem.change.current({
+  repo: 'docs',
+})
+
+await filesystem.bookmark.move({
+  repo: 'docs',
+  name: 'main',
+  changeId: current.changeId,
+})
+```
+
+有关版本控制语义的更多详细信息，请参阅[Mesa's docs](https://docs.mesa.dev/content/concepts/versioning).
+
+## 只读模式 {/* #read-only-mode */}
+
+放`readOnly: true` to mount every repo in the layout read-only and block write operations through Mastra:
+
+```typescript
+const filesystem = new MesaFilesystem({
+  authors: [{ name: 'File Agent' }],
+  layout: { '/docs': repo('docs', { mode: 'ro', at: { bookmark: 'main' } }) },
+  readOnly: true,
+})
+```
+
+读取操作仍然有效。写操作抛出异常`WorkspaceReadOnlyError`.
+
+## 并发性 {/* #concurrency */}
+
+`overwrite: false`和`expectedMtime` use preflight checks before writing. These checks aren't atomic unless Mesa adds native conditional writes for app mounts.
+
+## 有关的 {/* #related */}
+
+* [Workspace文件系统接口](/reference/workspace/filesystem)
+* [文件系统文档](/docs/sandbox/filesystem)
+* [沙盒](/docs/sandbox/overview)
+* [梅萨文档](https://docs.mesa.dev/content/getting-started/introduction)

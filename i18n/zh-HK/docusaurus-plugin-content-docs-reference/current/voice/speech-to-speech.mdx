@@ -1,0 +1,286 @@
+---
+title: "Speech-to-Speech capabilities in Mastra | Voice"
+description: "Speech-to-Speech (STS) in Mastra provides a standardized interface for real-time interactions across multiple providers."
+packages:
+  - "@mastra/core"
+  - "@mastra/node-audio"
+---
+
+# Mastra 中的語音轉語音功能
+
+## 介紹 {/* #introduction */}
+
+Mastra 中的語音轉語音 (STS) 為跨多個提供者的即時互動提供了標準化介面。
+STS 透過監聽即時模型的事件來實現連續的雙向音訊通訊。與單獨的 TTS 和 STT 操作不同，STS 保持開放連接，連續處理兩個方向的語音。
+
+## 配置 {/* #configuration */}
+
+* **`apiKey`**：您的 OpenAI API 金鑰。跌回到`OPENAI_API_KEY` environment variable.
+* **`model`**：用於即時語音互動的模型 ID（例如，`gpt-5.1-realtime`).
+* **`speaker`**：語音合成的預設語音ID。您可以指定用於語音輸出的語音。
+
+```typescript
+const voice = new OpenAIRealtimeVoice({
+  apiKey: 'your-openai-api-key',
+  model: 'gpt-5.1-realtime',
+  speaker: 'alloy', // Default voice
+})
+
+// If using default settings the configuration can be simplified to:
+const voice = new OpenAIRealtimeVoice()
+```
+
+## 使用STS {/* #using-sts */}
+
+```typescript
+import { Agent } from '@mastra/core/agent'
+import { OpenAIRealtimeVoice } from '@mastra/voice-openai-realtime'
+import { playAudio, getMicrophoneStream } from '@mastra/node-audio'
+
+const agent = new Agent({
+  id: 'agent',
+  name: 'OpenAI Realtime Agent',
+  instructions: `You are a helpful assistant with real-time voice capabilities.`,
+  model: '__GATEWAY_OPENAI_MODEL__',
+  voice: new OpenAIRealtimeVoice(),
+})
+
+// Connect to the voice service
+await agent.voice.connect()
+
+// Listen for agent audio responses
+agent.voice.on('speaker', ({ audio }) => {
+  playAudio(audio)
+})
+
+// Initiate the conversation
+await agent.voice.speak('How can I help you today?')
+
+// Send continuous audio from the microphone
+const micStream = getMicrophoneStream()
+await agent.voice.send(micStream)
+```
+
+有關Agent程式上的語音提供程序的更廣泛概述，請參閱[Voice in Mastra](/reference/voice/overview).
+
+## 在即時會話中使用Tool {/* #use-tools-in-realtime-sessions */}
+
+即時語音提供者可以使用Agent上配置的Tool。將Tool加入到`Agent` definition, then connect and send audio through the voice provider:
+
+```typescript
+import { Agent } from '@mastra/core/agent'
+import { OpenAIRealtimeVoice } from '@mastra/voice-openai-realtime'
+import { calculate, search } from '../tools'
+
+export const agent = new Agent({
+  id: 'speech-to-speech-agent',
+  name: 'Speech-to-Speech Agent',
+  instructions: 'You are a helpful assistant with speech-to-speech capabilities.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  tools: {
+    search,
+    calculate,
+  },
+  voice: new OpenAIRealtimeVoice(),
+})
+```
+
+## 監聽即時事件 {/* #listen-for-realtime-events */}
+
+即時語音提供者會發出可用於更新 UI 和播放助理音訊的事件，同時記錄轉錄和處理錯誤：
+
+```typescript
+agent.voice.on('speaking', ({ audio }) => {
+  playAudio(audio)
+})
+
+agent.voice.on('writing', ({ text, role }) => {
+  console.log(`${role}: ${text}`)
+})
+
+agent.voice.on('error', error => {
+  console.error('Voice error:', error)
+})
+```
+
+事件名稱和負載因提供者而異。請查看下面的提供者部分或提供者參考以取得完整的事件清單。
+
+## 每會話語音實例 {/* #per-session-voice-instances */}
+
+靜態的`voice` instance is shared across every request. This works for one-shot text-to-speech, but real-time and speech-to-speech providers store session state such as the WebSocket connection, tools, instructions, and request context. If one agent handles several live sessions at once, a shared instance can let one session overwrite another session's state.
+
+提供`voice` as a resolver when each live session needs its own voice instance. Mastra runs the resolver on each `getVoice()` call and returns a fresh instance for that request context:
+
+```typescript
+import { Agent } from '@mastra/core/agent'
+import { RequestContext } from '@mastra/core/request-context'
+import { OpenAIRealtimeVoice } from '@mastra/voice-openai-realtime'
+
+export const agent = new Agent({
+  id: 'support-line',
+  name: 'Support Line',
+  instructions: ({ requestContext }) => `Help user ${requestContext.get('user')}.`,
+  model: '__GATEWAY_OPENAI_MODEL__',
+  voice: ({ requestContext }) =>
+    new OpenAIRealtimeVoice({
+      apiKey: requestContext.get('apiKey'),
+    }),
+})
+
+const requestContext = new RequestContext()
+requestContext.set('user', 'user-123')
+requestContext.set('apiKey', process.env.OPENAI_API_KEY)
+
+const voice = await agent.getVoice({ requestContext })
+await voice.connect()
+```
+
+當您使用解析器時：
+
+* 每次來電`getVoice()` returns a new instance, so concurrent sessions don't share state.
+* Mastra 不會在解析器實例中新增Tool或指令。在解析器內部或提供者上配置它們。
+* 您擁有傳回的實例生命週期，因此調用`disconnect()` or `close()` when the session ends.
+
+這`agent.voice` getter has no request context, so it throws when `voice` is a resolver. Use `agent.getVoice({ requestContext })` instead.
+
+## Google Gemini 直播（即時） {/* #google-gemini-live-realtime */}
+
+```typescript
+import { Agent } from '@mastra/core/agent'
+import { GeminiLiveVoice } from '@mastra/voice-google-gemini-live'
+import { playAudio, getMicrophoneStream } from '@mastra/node-audio'
+
+const agent = new Agent({
+  id: 'agent',
+  name: 'Gemini Live Agent',
+  instructions: 'You are a helpful assistant with real-time voice capabilities.',
+  // Model used for text generation; voice provider handles realtime audio
+  model: '__GATEWAY_OPENAI_MODEL__',
+  voice: new GeminiLiveVoice({
+    apiKey: process.env.GOOGLE_API_KEY,
+    model: 'gemini-2.0-flash-exp',
+    speaker: 'Puck',
+    debug: true,
+    // Vertex AI option:
+    // vertexAI: true,
+    // project: 'your-gcp-project',
+    // location: 'us-central1',
+    // serviceAccountKeyFile: '/path/to/service-account.json',
+  }),
+})
+
+await agent.voice.connect()
+
+agent.voice.on('speaker', ({ audio }) => {
+  playAudio(audio)
+})
+
+agent.voice.on('writing', ({ role, text }) => {
+  console.log(`${role}: ${text}`)
+})
+
+await agent.voice.speak('How can I help you today?')
+
+const micStream = getMicrophoneStream()
+await agent.voice.send(micStream)
+```
+
+筆記：
+
+* 即時 API 需要`GOOGLE_API_KEY`. Vertex AI requires project/location and service account credentials.
+* 活動：`speaker` (audio stream), `writing` (text), `turnComplete`, `usage`, and `error`.
+
+## AWS Nova Sonic（即時） {/* #aws-nova-sonic-realtime */}
+
+```typescript
+import { Agent } from '@mastra/core/agent'
+import { NovaSonicVoice } from '@mastra/voice-aws-nova-sonic'
+import { playAudio, getMicrophoneStream } from '@mastra/node-audio'
+
+const agent = new Agent({
+  id: 'agent',
+  name: 'Nova Sonic Agent',
+  instructions: 'You are a helpful assistant with real-time voice capabilities.',
+  // Model used for text generation; voice provider handles realtime audio
+  model: '__GATEWAY_OPENAI_MODEL__',
+  voice: new NovaSonicVoice({
+    region: 'us-east-1',
+    speaker: 'matthew',
+    // Static credentials are optional. The default AWS credential provider
+    // chain is used when none are passed.
+  }),
+})
+
+await agent.voice.connect()
+
+// Assistant audio is emitted as 16-bit PCM on the `speaking` event
+agent.voice.on('speaking', ({ audioData }) => {
+  if (audioData) playAudio(audioData)
+})
+
+agent.voice.on('writing', ({ role, text }) => {
+  console.log(`${role}: ${text}`)
+})
+
+await agent.voice.speak('How can I help you today?')
+
+const micStream = getMicrophoneStream()
+await agent.voice.send(micStream)
+```
+
+筆記：
+
+* 可用地區：`us-east-1`, `us-west-2`, and `ap-northeast-1`.
+* 透過標準 AWS 憑證提供者鏈進行身份驗證。經過`credentials` to override.
+* 活動：`speaking` (Int16Array audio), `writing` (text with `generationStage`), `toolCall`, `interrupt`, `turnComplete`, `usage`, `session`, and `error`.
+
+## 即時世界 {/* #inworld-realtime */}
+
+```typescript
+import { Agent } from '@mastra/core/agent'
+import { InworldRealtimeVoice } from '@mastra/voice-inworld'
+import { playAudio, getMicrophoneStream } from '@mastra/node-audio'
+
+const agent = new Agent({
+  id: 'agent',
+  name: 'Inworld Realtime Agent',
+  instructions: 'You are a helpful assistant with real-time voice capabilities.',
+  // Model used for text generation; voice provider handles realtime audio
+  model: '__GATEWAY_OPENAI_MODEL__',
+  voice: new InworldRealtimeVoice({
+    apiKey: process.env.INWORLD_API_KEY,
+    model: 'inworld/models/gemma-4-26b-a4b-it',
+    speaker: 'Sarah',
+    // Typed Inworld realtime knobs (semantic VAD, playback speed, etc.)
+    // session: {
+    //   audio: {
+    //     output: { speed: 1.1 },
+    //     input: { turn_detection: { type: 'semantic_vad', eagerness: 'high' } },
+    //   },
+    // },
+  }),
+})
+
+await agent.voice.connect()
+
+agent.voice.on('speaker', stream => {
+  playAudio(stream)
+})
+
+agent.voice.on('writing', ({ role, text }) => {
+  console.log(`${role}: ${text}`)
+})
+
+await agent.voice.speak('How can I help you today?')
+
+const micStream = getMicrophoneStream()
+await agent.voice.send(micStream)
+```
+
+筆記：
+
+* 需要`INWORLD_API_KEY`. Inworld API keys are pre-Basic-encoded: paste them verbatim.
+* WebSocket URL 附加客戶端產生的`?key=...&protocol=realtime`. The model is configured via the initial `session.update`, not in the URL.
+* Inworld 的線路協定是 OpenAI Realtime GA 規範，因此事件名稱匹配`@mastra/voice-openai-realtime`.
+* 類型化的 Inworld 即時旋鈕（MCP Tool路由、語意 VAD 渴望、播放速度、轉錄模型、輸出模式等）透過`session` constructor field. An untyped `providerData` escape hatch is also deep-merged for forward compatibility with new Inworld features.
+* 活動：`speaker` (PCM audio stream), `speaking` (audio Buffer per delta), `writing` (text), `conversation.item.added`, `conversation.item.done`, `function_call.arguments`, `tool-call-start`, `tool-call-result`, and `error`.

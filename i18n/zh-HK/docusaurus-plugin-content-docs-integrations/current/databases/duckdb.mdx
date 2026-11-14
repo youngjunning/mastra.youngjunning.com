@@ -1,0 +1,170 @@
+---
+title: "DuckDB | Database"
+description: "Store Mastra observability data and metrics in embedded DuckDB for local analytics, either standalone or as a specialized composite storage domain."
+packages:
+  - "@mastra/duckdb"
+---
+
+# 鴨資料庫
+
+[鴨資料庫](https://duckdb.org/)是一個嵌入式、進程內分析資料庫。這`@mastra/duckdb`套件為本地開發提供了 OLAP 支援的可觀察性存儲，適用於追蹤、日誌、指標、分數和回饋，而無需運行外部服務。
+
+對於向量搜索，請參閱[DuckDB vector store reference](/integrations/vectors/duckdb), which is a separate API in the same package.
+
+## 何時使用 DuckDB {/* #when-to-use-duckdb */}
+
+Observability特徵的本地開發。 DuckDB 是嵌入式的、基於檔案的，因此它不需要伺服器並且可以立即啟動。它支援與 ClickHouse 相同的可觀察性訊號，這使得它對於在部署到生產後端之前測試儀表板和追蹤探索非常有用。
+
+DuckDB 目前僅實現了`observability` domain. Pair it with another storage adapter (such as [LibSQL](/integrations/databases/libsql)) for `memory` and `workflows`在一個[複合儲存](/reference/storage/composite)設定.
+
+:::警告
+DuckDB 用於開發，不建議用於生產。它在進程內運行，持久保存到單一本地文件，並且不適用於具有臨時檔案系統的平台（例如 Railway、Fly.io、Render、Heroku 或無伺服器容器）。對於生產可觀察性，使用[ClickHouse](/integrations/databases/clickhouse).
+:::
+
+## 安裝 {/* #installation */}
+
+```bash npm2yarn
+npm install @mastra/duckdb@latest
+```
+
+## 用法 {/* #usage */}
+
+### 作為複合存儲中的可觀察域 {/* #as-the-observability-domain-in-a-composite-store */}
+
+這是標準的本地開發設定。 LibSQL 處理其他領域，DuckDB 處理可觀察性。
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { MastraCompositeStore } from '@mastra/core/storage'
+import { LibSQLStore } from '@mastra/libsql'
+import { DuckDBStore } from '@mastra/duckdb'
+import { Observability, MastraStorageExporter } from '@mastra/observability'
+
+export const mastra = new Mastra({
+  storage: new MastraCompositeStore({
+    id: 'composite-storage',
+    default: new LibSQLStore({
+      id: 'mastra-storage',
+      url: 'file:./mastra.db',
+    }),
+    domains: {
+      observability: new DuckDBStore().observability,
+    },
+  }),
+  observability: new Observability({
+    configs: {
+      default: {
+        serviceName: 'mastra',
+        exporters: [new MastraStorageExporter()],
+      },
+    },
+  }),
+})
+```
+
+這`.observability` accessor returns the observability domain store directly. The equivalent generic form uses `getStore()`, which works for any composite-style storage adapter:
+
+```typescript
+const observability = await new DuckDBStore().getStore('observability')
+```
+
+### 獨立式 {/* #standalone */}
+
+當您只需要外部可觀察性儲存時`Mastra` composite, instantiate `DuckDBStore` directly and access the observability domain:
+
+```typescript
+import { DuckDBStore } from '@mastra/duckdb'
+
+const duckdb = new DuckDBStore({ path: './traces.duckdb' })
+const observability = duckdb.observability
+
+await observability.init()
+```
+
+### 記憶體資料庫 {/* #in-memory-database */}
+
+經過`:memory:` to use an ephemeral DuckDB instance. Data is lost when the process exits, which is appropriate for unit tests and short-lived scripts.
+
+```typescript
+const duckdb = new DuckDBStore({ path: ':memory:' })
+```
+
+## 配置 {/* #configuration */}
+
+### `DuckDBStore`選項 {/* #duckdbstore-options */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'id',
+  type: 'string',
+  description: 'Unique identifier for this storage instance.',
+  isOptional: true,
+  defaultValue: "'duckdb'",
+},
+{
+  name: 'path',
+  type: 'string',
+  description: 'Path to the DuckDB database file. Use `:memory:` for an ephemeral in-memory database.',
+  isOptional: true,
+  defaultValue: "'mastra.duckdb'",
+},
+{
+  name: 'memoryLimit',
+  type: 'string',
+  description:
+    "Maximum memory DuckDB may use, such as '2GB' or '512MB'. Larger-than-memory operations spill to disk for file-backed databases. Raise this for dedicated analytical workloads.",
+  isOptional: true,
+  defaultValue: "'2GB'",
+},
+{
+  name: 'threads',
+  type: 'number',
+  description:
+    'Number of threads DuckDB may use. Lower this to keep queries from monopolizing all cores of a shared application server.',
+  isOptional: true,
+  defaultValue: 'one per CPU core',
+},
+]}
+/>
+
+### 較低等級類型 {/* #lower-level-types */}
+
+`@mastra/duckdb`還出口`DuckDBConnection` for sharing a single underlying database across multiple Mastra storage instances, and the corresponding `DuckDBStorageConfig` type. Most applications won't need these directly.
+
+## 支援的域 {/* #supported-domains */}
+
+DuckDB目前實作了一種儲存域：
+
+|域名 |支援 |
+| - | - |
+|`observability` | Yes |
+| `memory` | No |
+| `workflows` | No |
+| `scores` | No |
+| `agents` | No |
+
+對於完整的儲存解決方案，請組成`DuckDBStore` with an adapter that covers the missing domains (most commonly [LibSQL](/integrations/databases/libsql) for local development).
+
+## 初始化 {/* #initialization */}
+
+當傳遞到`Mastra` through `MastraCompositeStore`, the observability domain initializes itself on first use. To run initialization explicitly outside of `Mastra`, call `init()` on the observability store:
+
+```typescript
+import { DuckDBStore } from '@mastra/duckdb'
+
+const duckdb = new DuckDBStore({ path: './traces.duckdb' })
+await duckdb.observability.init()
+```
+
+## 可觀察性策略 {/* #observability-strategy */}
+
+DuckDB 支持`event-sourced` strategy used by `MastraStorageExporter`, which buffers spans in memory and writes completed events in batches. This is appropriate for development-scale traffic. For high-volume production workloads, see [`MastraStorageExporter` storage provider support](/docs/observability/integrations/exporters/mastra-storage#storage-provider-support).
+
+## 有關的 {/* #related */}
+
+* [儲存概覽](/reference/storage/overview)
+* [複合儲存](/reference/storage/composite)
+* [ClickHouse存儲](/integrations/databases/clickhouse)：生產Observability後端
+* [DuckDB向量存儲](/integrations/vectors/duckdb)：使用相同的套件進行向量搜索
+* [Observability概述](/docs/observability/overview)

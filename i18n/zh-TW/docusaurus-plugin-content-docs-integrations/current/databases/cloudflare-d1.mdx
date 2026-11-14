@@ -1,0 +1,241 @@
+---
+title: "Cloudflare D1 | Database"
+description: "Persist Mastra data in Cloudflare D1 with serverless SQL storage, Worker bindings or REST access, schema initialization, and Cloudflare deployment."
+packages:
+  - "@mastra/cloudflare-d1"
+  - "@mastra/deployer-cloudflare"
+---
+
+# Cloudflare D1
+
+Cloudflare D1 儲存實作使用 Cloudflare D1 提供無伺服器 SQL 資料庫解決方案，支援關聯操作和交易一致性。
+
+:::警告\[不支援可觀察性]
+
+Cloudflare D1 存儲**doesn't support the observability domain**. Traces from the `MastraStorageExporter`無法持久化到 D1，且[工作室的](/docs/studio/overview)Observability功能不適用於 D1 作為您唯一的儲存Provider。若要啟用可觀察性，請使用[複合儲存](/reference/storage/composite#specialized-storage-for-observability)將Observability資料路由到受支援的Provider（例如 ClickHouse）。
+
+:::
+
+:::警告\[行大小限制]
+Cloudflare D1 強制執行**1 MiB maximum row size**. This limit can be exceeded when storing messages with base64-encoded attachments such as images. See [Handling large attachments](/docs/memory/memory-processors#handling-large-attachments) for workarounds including uploading attachments to external storage.
+:::
+
+## 安裝 {/* #installation */}
+
+```bash npm2yarn
+npm install @mastra/cloudflare-d1@latest
+```
+
+## 用法 {/* #usage */}
+
+### 與 Mastra CloudflareDeployer 一起使用 {/* #using-with-mastra-cloudflaredeployer */}
+
+在 Cloudflare 上將 D1Store 與 Mastra 結合使用的標準方法是`CloudflareDeployer`. Import `env` from `cloudflare:workers` and initialize `D1Store` inline inside `new Mastra({...})`.
+
+```typescript title="src/mastra/index.ts"
+import { env } from 'cloudflare:workers'
+import { D1Store } from '@mastra/cloudflare-d1'
+import { Mastra } from '@mastra/core'
+import { CloudflareDeployer } from '@mastra/deployer-cloudflare'
+
+export const mastra = new Mastra({
+  storage: new D1Store({ binding: env.DB }),
+  deployer: new CloudflareDeployer({
+    name: 'my-worker',
+    d1_databases: [
+      {
+        binding: 'DB',
+        database_name: 'your-database-name',
+        database_id: 'your-database-id',
+      },
+    ],
+  }),
+})
+```
+
+:::注意
+使用時`import { env } from 'cloudflare:workers'`, `D1Store` must be initialized inline inside `new Mastra({...})`: not extracted to a module-level variable. Alternatively, initialize `D1Store` inside the `fetch` handler after `env` is available. See [CloudflareDeployer reference](/reference/deployer/cloudflare#cloudflare-bindings) for details.
+:::
+
+### 在沒有 HTTP 路由的 Cloudflare Worker 中使用 {/* #using-in-a-cloudflare-worker-without-http-routes */}
+
+如果您想要直接在 Worker 中呼叫 Mastra（例如，執行Agent程式或觸發Workflow）而不提供 HTTP 路由，則不需要`CloudflareDeployer`. Access the D1 binding from the worker's `env` parameter and call Mastra programmatically.
+
+```typescript
+import { D1Store } from '@mastra/cloudflare-d1'
+import { Mastra } from '@mastra/core'
+
+type Env = {
+  DB: D1Database
+}
+
+export default {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext) {
+    const mastra = new Mastra({
+      storage: new D1Store({ binding: env.DB }),
+    })
+
+    const agent = mastra.getAgent('my-agent')
+    const result = await agent.generate('Hello')
+
+    return Response.json({ text: result.text })
+  },
+}
+```
+
+### 與 REST API 一起使用 {/* #using-with-rest-api */}
+
+對於非 Workers 環境（Node.js、無伺服器函數等），請使用 REST API 方法：
+
+```typescript
+import { D1Store } from '@mastra/cloudflare-d1'
+
+const storage = new D1Store({
+  accountId: process.env.CLOUDFLARE_ACCOUNT_ID!, // Cloudflare Account ID
+  databaseId: process.env.CLOUDFLARE_D1_DATABASE_ID!, // D1 Database ID
+  apiToken: process.env.CLOUDFLARE_API_TOKEN!, // Cloudflare API Token
+  tablePrefix: 'dev_', // Optional: isolate tables per environment
+})
+```
+
+### 牧馬人配置 {/* #wrangler-configuration */}
+
+將 D1 資料庫綁定新增至您的`wrangler.toml`:
+
+```toml
+[[d1_databases]]
+binding = "DB"
+database_name = "your-database-name"
+database_id = "your-database-id"
+```
+
+或者在`wrangler.jsonc`:
+
+```jsonc
+{
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "your-database-name",
+      "database_id": "your-database-id",
+    },
+  ],
+}
+```
+
+## 參數 {/* #parameters */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'binding',
+  type: 'D1Database',
+  description: 'Cloudflare D1 Workers binding (for Workers runtime)',
+  isOptional: true,
+},
+{
+  name: 'accountId',
+  type: 'string',
+  description: 'Cloudflare Account ID (for REST API)',
+  isOptional: true,
+},
+{
+  name: 'databaseId',
+  type: 'string',
+  description: 'Cloudflare D1 Database ID (for REST API)',
+  isOptional: true,
+},
+{
+  name: 'apiToken',
+  type: 'string',
+  description: 'Cloudflare API Token (for REST API)',
+  isOptional: true,
+},
+{
+  name: 'tablePrefix',
+  type: 'string',
+  description: 'Optional prefix for all table names (useful for environment isolation)',
+  isOptional: true,
+},
+]}
+/>
+
+## 附加說明 {/* #additional-notes */}
+
+### 模式管理 {/* #schema-management */}
+
+儲存實作自動處理模式建立和更新。它會建立以下表：
+
+* `threads`：儲存對話線程
+* `messages`：儲存單獨的訊息
+* `metadata`：儲存線程和訊息的附加元數據
+
+### 初始化 {/* #initialization */}
+
+當您將儲存空間傳遞給 Mastra 類別時，`init()` is called automatically before any storage operation:
+
+```typescript
+import { Mastra } from '@mastra/core'
+import { D1Store } from '@mastra/cloudflare-d1'
+
+type Env = {
+  DB: D1Database
+}
+
+// In a Cloudflare Worker
+export default {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext) {
+    const storage = new D1Store({
+      binding: env.DB,
+    })
+
+    const mastra = new Mastra({
+      storage, // init() is called automatically
+    })
+
+    // Your handler logic here
+    return new Response('Success')
+  },
+}
+```
+
+如果您直接使用儲存空間而不使用 Mastra，則必須致電`init()` explicitly to create the tables:
+
+```typescript
+import { D1Store } from '@mastra/cloudflare-d1'
+
+type Env = {
+  DB: D1Database
+}
+
+// In a Cloudflare Worker
+export default {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext) {
+    const storage = new D1Store({
+      id: 'd1-storage',
+      binding: env.DB,
+    })
+
+    // Required when using storage directly
+    await storage.init()
+
+    // Access domain-specific stores via getStore()
+    const memoryStore = await storage.getStore('memory')
+    const thread = await memoryStore?.getThreadById({ threadId: '...' })
+
+    return new Response('Success')
+  },
+}
+```
+
+:::警告
+如果`init()` isn't called, tables won't be created and storage operations will fail silently or throw errors.
+:::
+
+### 交易與一致性 {/* #transactions--consistency */}
+
+Cloudflare D1 為單行作業提供事務保證。多個操作可以作為單一全有或全無的工作單元來執行。
+
+### 表格建立和遷移 {/* #table-creation--migrations */}
+
+表是在儲存初始化時自動建立的（並且可以使用`tablePrefix` option), but advanced schema changes require manual migration and careful planning. Examples include adding columns or changing data types and indexes to avoid data loss.

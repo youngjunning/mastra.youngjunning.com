@@ -1,0 +1,484 @@
+---
+title: 'Reference: Classifier | Classifier'
+description: 'API reference for classifying JSON-compatible state with typed choice, score, and boolean questions.'
+slug: '/classifier/classifier'
+packages:
+  - '@mastra/core'
+---
+
+# 分類器
+
+`Classifier`向決策模型提出一個或多個有關共享狀態的固定領域問題。當您的應用程式需要輸入選擇、數字分數或布林機率而不解析生成的文字時，請使用它。
+
+分類器僅傳回評估結果。您的應用程式決定如何使用它們，例如透過選擇路線或將機率與安全閾值進行比較。
+
+`Classifier`需要一個決策模型（`DecisionModelV4`, or the deprecated `EvaluationModelV4`，可選地包裹在`MastraDecisionModel`）。它不接受`'provider/model'`字串、裸模型 ID 或語言模型。
+
+## 基本用法 {/* #basic-usage */}
+
+此範例使用[TypeSafe AI provider](https://ai-sdk.dev/providers/ai-sdk-providers/typesafe-ai). Make sure to set the `TYPESAFE_AI_API_KEY` environment variable. To use another provider, see [Decision models](#decision-models).
+
+安裝提供者套件：
+
+```bash npm2yarn
+npm install @ai-sdk/typesafe-ai
+```
+
+當每次評估都使用相同的問題集時，在建構函數中定義問題。保留問題物件字面量，以便 TypeScript 可以推斷答案鍵和選擇值。
+
+```typescript
+import { Classifier } from '@mastra/core/classifier'
+import { typeSafeAi } from '@ai-sdk/typesafe-ai'
+
+const classifier = new Classifier({
+  id: 'request-classifier',
+  model: typeSafeAi.decisionModel('__AI_SDK_TYPESAFE_DECISION_MODEL__'),
+  questions: {
+    route: {
+      type: 'choice',
+      instructions: 'Choose the team that should handle this request.',
+      criteria: {
+        billing: 'Questions about invoices, charges, or refunds',
+        support: 'Questions about using or troubleshooting the product',
+      },
+    },
+    urgent: {
+      type: 'boolean',
+      instructions: 'Does this request require an immediate response?',
+    },
+  },
+})
+
+const result = await classifier.decide({
+  state: {
+    subject: 'Duplicate charge',
+    message: 'I was charged twice for the same subscription.',
+  },
+})
+
+result.answers.route.choice // 'billing' | 'support' | undefined
+result.answers.urgent.probability // P(true), from 0 to 1, or undefined
+```
+
+一個字段是`undefined` only when the decision model refused the question. See [refused questions](#refused-questions).
+
+決策模型以相同的方式接收每個問題`state`. When a question omits `instructions`, its question name is used instead.
+
+## 決策模型 {/* #decision-models */}
+
+本頁上的範例遵循[TypeSafe AI provider setup](https://ai-sdk.dev/providers/ai-sdk-providers/typesafe-ai#setup) in the AI SDK documentation. Other AI SDK providers, including OpenAI, Anthropic, and Google, also expose a `decisionModel()` factory (previously `evaluationModel()`, still available as a deprecated alias). Mastra calls `doDecide()` and falls back to `doEvaluate()` for older providers. See [provider models](https://ai-sdk.dev/docs/ai-sdk-core/decisions#provider-models) for the full list, supported model IDs, and how each provider answers questions.
+
+每個提供者都會匯出一個現成的實例，這就是本頁上的範例所使用的。看[AI SDK providers](https://ai-sdk.dev/providers/ai-sdk-providers) for the others.
+
+透過調用工廠來明確傳遞密鑰：
+
+```typescript
+import { createTypeSafeAi } from '@ai-sdk/typesafe-ai'
+
+const model = createTypeSafeAi({ apiKey: process.env.TYPESAFE_AI_API_KEY }).decisionModel(
+  '__AI_SDK_TYPESAFE_DECISION_MODEL__',
+)
+```
+
+## 建構函數 {/* #constructor */}
+
+```typescript
+new Classifier(options)
+```
+
+<PropertiesTable
+  content={[
+{
+  name: 'id',
+  type: 'string',
+  description: 'A non-empty identifier used in tracing and error context.',
+  isOptional: false,
+},
+{
+  name: 'model',
+  type: 'DecisionModelV4 | EvaluationModelV4 | MastraDecisionModel',
+  description:
+    'An AI SDK decision model or a Mastra decision model wrapper. The model declares which question types it supports.',
+  isOptional: false,
+},
+{
+  name: 'questions',
+  type: 'ClassifierQuestions',
+  description:
+    'A non-empty record of named questions. Omit this field to supply the questions to each decide() call instead.',
+  isOptional: true,
+},
+]}
+/>
+
+構造函數問題和每次呼叫問題是互斥的。如果建構函式包含`questions`, `decide()` rejects a `questions` option at compile time. If the constructor omits them, every `decide()` call must provide them. A processor, workflow step, or scorer classifies through a configured classifier, which requires constructor questions.
+
+## 問題類型 {/* #question-types */}
+
+問題名稱成為關鍵`result.answers`. Each question supports an optional `instructions` field containing a JSON-compatible value. Criteria values can also contain JSON-compatible data, not only strings.
+
+### 選擇題 {/* #choice-questions */}
+
+選擇題從非空中選擇一個鍵`criteria` record.
+
+```typescript
+const questions = {
+  sentiment: {
+    type: 'choice',
+    instructions: 'Classify the customer sentiment.',
+    criteria: {
+      positive: 'The customer is satisfied or complimentary.',
+      neutral: 'The customer has no clear positive or negative sentiment.',
+      negative: 'The customer is dissatisfied or frustrated.',
+    },
+  },
+} as const
+```
+
+答案包含所選的`choice`. When the provider includes `probabilities`, the record must contain every choice key and sum to `1` within the provider's declared rounding precision.
+
+```typescript
+const answer = {
+  type: 'choice',
+  choice: 'negative',
+  probabilities: {
+    positive: 0.05,
+    neutral: 0.15,
+    negative: 0.8,
+  },
+}
+```
+
+### 分數問題 {/* #score-questions */}
+
+分數問題使用至少有兩個等級的有序數組。數組索引定義分數範圍。對於三個標準，有效分數範圍為`0` through `2`, including fractional values.
+
+```typescript
+const questions = {
+  quality: {
+    type: 'score',
+    instructions: 'Score the response quality.',
+    criteria: ['Incorrect or unhelpful', 'Partially correct', 'Correct and complete'],
+  },
+} as const
+```
+
+提供者可以傳回每個等級的分數和可選機率：
+
+```typescript
+const answer = {
+  type: 'score',
+  score: 1.7,
+  probabilities: {
+    '0': 0.05,
+    '1': 0.2,
+    '2': 0.75,
+  },
+}
+```
+
+### 布爾問題 {/* #boolean-questions */}
+
+布爾問題回傳答案的估計機率`true`. The value is always between `0` and `1`. It isn't the confidence of whichever outcome is more likely.
+
+```typescript
+const questions = {
+  unsafe: {
+    type: 'boolean',
+    instructions: 'Does the message contain unsafe content?',
+    criteria: {
+      true: 'The message contains unsafe content.',
+      false: 'The message is safe.',
+    },
+  },
+} as const
+```
+
+這`criteria` field is optional for boolean questions. When present, its `true` and `false` descriptions are also optional.
+
+```typescript
+const answer = {
+  type: 'boolean',
+  probability: 0.92,
+}
+```
+
+### 拒絕提問 {/* #refused-questions */}
+
+決策模型可以拒絕任何問題，例如當安全性策略阻止它回答時。被拒絕的問題會返回`RefusalAnswer` instead of a choice, score, or boolean answer. The other questions in the same call keep their answers.
+
+```typescript
+const answer = {
+  type: 'refusal',
+}
+```
+
+拒絕就沒有`choice`, `score`, or `probability`. Equality checks such as `answers.route.choice === 'billing'` evaluate to `false`. Check `type` before you read a numeric field, and decide how your application handles the refusal:
+
+```typescript
+const urgent = result.answers.urgent
+
+if (urgent.type === 'refusal') {
+  // Route to a human, block the input, or apply a default.
+} else if (urgent.probability > 0.8) {
+  // Escalate.
+}
+```
+
+## 設計問題 {/* #designing-questions */}
+
+這些規則使國家可以回答問題：
+
+* 求一判斷。當兩個欄位中的任何一個發生變更時移動的問題無法進行路由。
+* 保持標準排他性。`strong: 'A good fit'` and `partial: 'Maybe a fit'` leak probability between them.
+* 給予足夠的分數來代表中間值。
+* 當清單未關閉時新增轉義等級。沒有`other` level, the classifier must assign every input to one of the listed teams.
+* 將欄位放入`state`, not in `instructions`. One changed field then moves one answer.
+
+若要檢查問題，請變更狀態的一個欄位並確認一個答案移動。
+
+## `decide(options)` {/* #decideoptions */}
+
+回答針對所提供狀態的所有問題。
+
+`evaluate(options)`是已棄用的別名`decide(options)` and will be removed in a future release.
+
+<PropertiesTable
+  content={[
+{
+  name: 'state',
+  type: 'ClassifierState',
+  description: 'The JSON-compatible state evaluated by every question.',
+  isOptional: false,
+},
+{
+  name: 'questions',
+  type: 'ClassifierQuestions',
+  description: 'The questions to evaluate. Required when the constructor omitted questions.',
+  isOptional: true,
+},
+{
+  name: 'abortSignal',
+  type: 'AbortSignal',
+  description: 'Cancels the active provider request and any wait between retry attempts.',
+  isOptional: true,
+},
+{
+  name: 'providerOptions',
+  type: 'SharedV4ProviderOptions',
+  description: 'Provider-specific options forwarded unchanged to the decision model.',
+  isOptional: true,
+},
+{
+  name: 'maxRetries',
+  type: 'number',
+  description: 'The number of retries allowed after retryable provider API errors. Must be a non-negative integer.',
+  isOptional: true,
+  defaultValue: '2',
+},
+]}
+/>
+
+### 每次通話的問題 {/* #per-call-questions */}
+
+忽略`questions` from the constructor when the question set changes between evaluations. The answer type is inferred from the questions supplied to that call.
+
+```typescript
+import { Classifier } from '@mastra/core/classifier'
+import { typeSafeAi } from '@ai-sdk/typesafe-ai'
+
+const classifier = new Classifier({
+  id: 'dynamic-classifier',
+  model: typeSafeAi.decisionModel('__AI_SDK_TYPESAFE_DECISION_MODEL__'),
+})
+
+const result = await classifier.decide({
+  state: { response: 'Your refund has been processed.' },
+  questions: {
+    tone: {
+      type: 'choice',
+      criteria: {
+        empathetic: 'Acknowledges the customer and responds with care',
+        neutral: 'States the outcome without emotional language',
+      },
+    },
+  },
+})
+
+result.answers.tone.choice // 'empathetic' | 'neutral' | undefined
+```
+
+## 傳回值 {/* #return-value */}
+
+`decide()`回報`Promise<ClassifierResult<QUESTIONS>>`.
+
+<PropertiesTable
+  content={[
+{
+  name: 'answers',
+  type: 'ClassifierAnswers<QUESTIONS>',
+  description: 'One typed answer for each configured question.',
+  isOptional: false,
+},
+{
+  name: 'usage',
+  type: 'ClassifierUsage',
+  description:
+    'Token usage reported by the provider. totalTokens is the sum of inputTokens and outputTokens, with missing values counted as zero.',
+  isOptional: false,
+},
+{
+  name: 'warnings',
+  type: 'SharedV4Warning[]',
+  description: 'Warnings returned by the decision model.',
+  isOptional: false,
+},
+{
+  name: 'rounding',
+  type: '{ probabilityDecimals?: number; scoreDecimals?: number }',
+  description: 'The precision the provider used for probabilities and scores.',
+  isOptional: true,
+},
+{
+  name: 'providerMetadata',
+  type: 'SharedV4ProviderMetadata',
+  description: 'Provider-specific metadata returned by the decision model.',
+  isOptional: true,
+},
+{
+  name: 'response',
+  type: 'ClassifierResult["response"]',
+  description:
+    'Provider response metadata. Mastra supplies the current time and configured model ID when the provider omits them.',
+  isOptional: false,
+},
+]}
+/>
+
+```typescript
+interface ClassifierUsage {
+  inputTokens?: number
+  outputTokens?: number
+  totalTokens: number
+}
+
+interface ClassifierResponse {
+  id?: string
+  timestamp: Date
+  modelId: string
+  headers?: Record<string, string | undefined>
+  body?: unknown
+}
+```
+
+## 驗證和錯誤 {/* #validation-and-errors */}
+
+`Classifier`在提供者輸入/輸出之前驗證輸入，並在返回提供者輸出之前驗證它。
+
+輸入驗證包括：
+
+* `id`必須是非空字串。
+* `state`、指令和條件必須與 JSON 相容。
+* 問題記錄和選擇標準不得為空。
+* 評分標準必須至少包含兩個定義的等級。
+* 每個問題類型都必須得到決策模型的支援。
+* `maxRetries`必須是非負整數。
+
+提供者的回覆必須準確包含每個問題的一個答案。每個答案必須與問題類型匹配，否則將被拒絕。分類器也拒絕無效選擇、超出範圍的分數或機率、不完整的機率分佈、非有限標記計數、格式錯誤的警告和無效的回應時間戳。
+
+唯一可重試的AI SDK`APICallError` failures are retried, two times by default. Set `maxRetries` to change the count. Other errors reject immediately. When all retries fail, `decide()` rethrows the last provider error. Aborting the supplied signal rejects with the signal's abort reason, including when cancellation occurs during retry backoff.
+
+## 可觀察性 {/* #observability */}
+
+當存在活動的 Mastra 跨度時，`decide()` creates a `CLASSIFIER_EVALUATION` child span. The span input holds the evaluated `state` and the questions. The span output holds the answers, including probabilities. Span attributes record the classifier and model identifiers, provider, question count and types, attempts, duration, and token usage. The token usage also produces [token and cost metrics](/reference/observability/metrics/automatic-metrics#token-usage-metrics).
+
+要使狀態和答案遠離導出的跟踪，請設置`hideInput` and `hideOutput` in the `tracingOptions` of the agent or workflow run that calls the classifier. See [hiding sensitive input/output](/docs/observability/tracing/overview#hiding-sensitive-inputoutput).
+
+在[Studio](/docs/studio/overview), filter traces by the Classifier entity type to see classifier calls on their own. Workflow classifier steps appear as classifier nodes in the workflow graph.
+
+## 客製化提供者回應 {/* #customize-provider-responses */}
+
+`Classifier`自動將原始 AI SDK 決策模型包裝在`MastraDecisionModel`. Pass your own wrapper when provider output needs normalization before validation.
+
+```typescript
+import { Classifier, MastraDecisionModel, type DecisionModelResult } from '@mastra/core/classifier'
+import { typeSafeAi } from '@ai-sdk/typesafe-ai'
+
+class NormalizedDecisionModel extends MastraDecisionModel {
+  protected override transformResult(result: DecisionModelResult): DecisionModelResult {
+    return {
+      ...result,
+      answers: normalizeAnswers(result.answers),
+    }
+  }
+}
+
+const classifier = new Classifier({
+  id: 'normalized-classifier',
+  model: new NormalizedDecisionModel(
+    typeSafeAi.decisionModel('__AI_SDK_TYPESAFE_DECISION_MODEL__'),
+  ),
+})
+```
+
+`transformResult()`在提供者呼叫之後和之前運行`Classifier` validates the response.
+
+`MastraEvaluationModel`和`EvaluationModelResult` are deprecated aliases for `MastraDecisionModel` and `DecisionModelResult` and will be removed in a future release.
+
+## 註冊分類器 {/* #registering-classifiers */}
+
+註冊分類器`Mastra` instance to share them across your application and retrieve them by key or ID. When a registered classifier is evaluated without an active trace, it starts a root `CLASSIFIER_EVALUATION` span through the `Mastra` instance's configured observability provider.
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { Classifier } from '@mastra/core/classifier'
+import { typeSafeAi } from '@ai-sdk/typesafe-ai'
+
+export const safety = new Classifier({
+  id: 'safety',
+  model: typeSafeAi.decisionModel('__AI_SDK_TYPESAFE_DECISION_MODEL__'),
+  questions: {
+    unsafe: { type: 'boolean' },
+  },
+})
+
+export const mastra = new Mastra({
+  classifiers: { safety },
+})
+
+mastra.getClassifier('safety')
+mastra.getClassifierById('safety')
+mastra.listClassifiers()
+```
+
+## 在Workflow中使用分類器 {/* #using-classifiers-in-workflows */}
+
+可以將具有建構函數配置的問題的分類器新增到Workflow中[`createStep(classifier)`](/reference/workflows/step) or [`.classifier()`](/reference/workflows/workflow-methods/classifier). Workflow output contains complete typed `answers` and normalized `usage`.
+
+```typescript
+import { safety } from '../index'
+
+const workflow = createWorkflow({
+  id: 'ticket-triage',
+  inputSchema: z.object({ message: z.string() }),
+  outputSchema: z.any(),
+})
+  .map({ message: { initData: true, path: 'message' } })
+  .classifier<typeof safety.questions>('safety')
+  .commit()
+```
+
+字串引用透過以下方式解析`Mastra` instance at execution time. The ID doesn't carry the question types, so supply them with a type argument to keep the answers typed. In Studio, the workflow graph shows the step as a classifier node.
+
+Workflow適配器在步驟輸出中不包含警告、原始提供者回應、標頭或提供程式元資料。直接使用`decide()` calls or classifier observability when you need that provider-level detail.
+
+## 有關的 {/* #related */}
+
+* [分類器處理器](/reference/processors/classifier-processor)
+* [模型選擇處理器](/reference/processors/model-selection-processor)
+* [建立分類器評分器()](/reference/evals/create-classifier-scorer)
+* [Workflow.分類器()](/reference/workflows/workflow-methods/classifier)
+* [階梯班](/reference/workflows/step)
+* [取得分類器()](/reference/core/getClassifier)
+* [getClassifierById()](/reference/core/getClassifierById)
+* [列表分類器()](/reference/core/listClassifiers)

@@ -1,25 +1,35 @@
 ---
-title: "身份验证 | Studio"
-description: 使用登录页面、基于角色的访问控制和基于权限的 UI 渲染来保护 Studio 部署。
+title: "Auth | Studio"
+description: "Secure Mastra Studio and API routes with login flows, token forwarding, role-based access control, default roles, and permission-aware UI rendering."
 packages:
   - "@mastra/core"
 ---
 
-# Studio 身份验证
+# 工作室授权
 
-在 Mastra Server 上配置[身份验证](/docs/server/auth/)后，Studio 会自动显示登录页面并强制执行访问控制。一项配置即可同时保护 Studio UI 和 API 路由。
+当您配置时[authentication](/docs/auth/overview)在您的 Mastra 服务器上，Studio 会自动显示登录屏幕并强制执行访问控制。一种配置可以保护 Studio UI 和 API 路由的安全。
 
-如果未配置身份验证，Studio 和所有 API 路由都可公开访问。
+无需身份验证，Studio 和所有 API 路由均可公开访问。
+
+：：：笔记
+
+在生产中，带有第三方Provider的 Studio 登录屏幕、基于角色的访问控制 (RBAC) 和细粒度授权 (FGA) 需要 Mastra 企业版 (EE) 许可证。简单身份验证、JWT 和 API 路由上的身份验证则不然。每个功能都无需开发许可即可使用。看[what requires an EE license](/docs/license#what-requires-an-ee-license). [Contact sales](https://mastra.ai/contact) for more information.
+
+:::
+
+:::注意
+部署在 Mastra 平台上的 Studio 的工作方式有所不同。默认情况下，平台会注入自己的身份验证，因此只有您的组织成员可以登录，并且您的`server.auth` applies to API routes only. Set `MASTRA_PLATFORM_STUDIO_AUTH=disabled` to opt out. See [Authentication on Mastra platform](/docs/mastra-platform/studio#authentication).
+:::
 
 ## 何时使用 Studio Auth {/* #when-to-use-studio-auth */}
 
-- 多名团队成员需要通过共享的 Studio 部署与 Agent、Workflow 和 Tool 交互。
-- 需要通过权限限制谁能执行 Agent、编辑 Workflow 或删除数据集。
-- 应通过登录页面（SSO、邮箱/密码或二者兼有）限制对 Studio 部署的访问。
+* 多个团队成员需要通过共享 Studio 部署与Agent、Workflow和Tool进行交互。
+* 权限必须限制谁可以执行Agent或编辑Workflow，或者删除数据集。
+* 登录屏幕（SSO、电子邮件/密码或两者）应控制对 Studio 部署的访问。
 
 ## 快速入门 {/* #quickstart */}
 
-向 Mastra Server 配置添加 Auth Provider。以下示例使用 [Simple Auth](/docs/server/auth/simple-auth) 完成最小设置：
+将身份验证提供程序添加到您的 Mastra 服务器配置中。本示例使用[Simple Auth](/docs/auth/simple-auth) for a minimal setup:
 
 ```typescript title="src/mastra/index.ts"
 import { Mastra } from '@mastra/core'
@@ -28,7 +38,7 @@ import { SimpleAuth } from '@mastra/core/server'
 export const mastra = new Mastra({
   server: {
     auth: new SimpleAuth({
-      users: {
+      tokens: {
         'my-api-key': {
           id: 'user-1',
           name: 'Alice',
@@ -40,55 +50,55 @@ export const mastra = new Mastra({
 })
 ```
 
-配置后，Studio 会显示登录页面，并要求所有 API 请求完成身份验证。有关支持的 Provider 完整列表，请参阅 [Auth 文档](/docs/server/auth)。
+配置完成后，Studio 将显示登录屏幕并要求对所有 API 请求进行身份验证。参观[Auth docs](/docs/auth/overview) for a full list of supported providers.
 
-## 工作原理 {/* #how-it-works */}
+## 它是如何运作的 {/* #how-it-works */}
 
-设置 [`server.auth`](/reference/configuration#serverauth) 会同时执行两项操作：
+环境[`server.auth`](/reference/configuration#serverauth) does two things at once:
 
-- **Studio UI**：显示登录页面。根据 Provider 的不同，用户可通过 SSO、邮箱/密码或两者登录。
-- **API 路由**：要求所有内置路由（`/api/agents/*`、`/api/workflows/*` 等）和自定义路由完成身份验证。无论请求来自 Studio 还是直接 API 调用，此规则都适用。
+* **工作室用户界面**：显示登录屏幕。用户通过 SSO、电子邮件/密码或两者登录，具体取决于Provider。
+* **API路线**：需要对所有内置路由进行身份验证（`/api/agents/*`, `/api/workflows/*`, etc.) and custom routes. This applies whether requests come from Studio or direct API calls.
 
-Studio 通过调用 `GET /api/auth/capabilities` endpoint 检测可用能力。响应会告知 Studio 应渲染哪些登录方式；如果用户已通过身份验证，还会包含其用户信息和权限。
+Studio 通过调用来检测可用功能`GET /api/auth/capabilities` endpoint. The response tells Studio which login methods to render and, if the user is already authenticated, includes their user info and permissions.
 
-## 通过 URL 传递 token {/* #pass-a-token-through-the-url */}
+## 通过 URL 传递令牌 {/* #pass-a-token-through-the-url */}
 
-当另一个应用嵌入或链接到 Studio 时，可以通过 `auth_header` URL 参数传递授权 token。当外部 Host 已持有 token，并希望直接打开已通过身份验证的 Studio 会话而不显示登录页面时，这种方式很有用。
+当另一个应用程序嵌入或链接到 Studio 时，它可以通过`auth_header` URL parameter. This is useful when an external host already holds a token and wants to open an authenticated Studio session without showing the login screen.
 
-`auth_header` 值始终用于填充 `Authorization` 请求 header。该参数只设置这一个 header，因此值中需要包含 Server 预期的任何 scheme 前缀，例如 `Bearer`。
+这`auth_header` value always populates the `Authorization` request header. The parameter sets that one header only, so include any scheme prefix the server expects in the value, such as `Bearer`.
 
-使用查询字符串中的 token 打开 Studio：
+使用查询字符串中的令牌打开 Studio：
 
-```
+```text
 https://your-studio-host/?auth_header=Bearer%20your-token
 ```
 
-Studio 会按以下方式处理 token：
+Studio 按如下方式处理令牌：
 
-- 加载时读取一次 `auth_header`，并在该会话的每个 API 请求中将其值作为 `Authorization` header 发送。
-- 从地址栏中移除 `auth_header`，同时保留其他查询参数和 hash。
-- 仅在内存中保存 token，绝不会将其写入本地存储，因此 token 保持临时状态，不会跨页面重新加载而持久存在。
+* 上面写着`auth_header` once on load and sends the value as the `Authorization` header on every API request in that session.
+* 它删除了`auth_header` from the address bar while preserving other query parameters and the hash.
+* 它将令牌仅保留在内存中，并且从不将其写入本地存储，因此它不会在页面重新加载时持续存在。
 
-Token 通过 URL 参数传递，因此 Host 应用负责该 URL 的生成和传输方式。URL 参数可能通过浏览器历史记录、referrer header 和 Server 访问日志暴露。
+令牌包含在 URL 参数中，因此主机应用程序负责如何生成和传输该 URL。 URL 参数可以通过浏览器历史记录和引用标头以及服务器访问日志公开。
 
 ## 基于角色的访问控制 {/* #role-based-access-control */}
 
-RBAC 用于控制每个用户在 Studio 中可以看到和执行的操作。它与身份验证分离：`server.auth` 处理用户身份，而 `server.rbac` 处理用户可以执行的操作。
+RBAC 可让您控制每个用户在 Studio 中可以看到的内容和可以执行的操作。它与身份验证分开：`server.auth` handles who the user is, while `server.rbac` handles what they can do.
 
 ### 默认角色 {/* #default-roles */}
 
-Mastra 包含四种默认角色。请从 `@mastra/core/auth/ee` 导入：
+Mastra 包括四个默认角色。从以下位置导入它们`@mastra/core/auth/ee`:
 
-| 角色 | 权限 |
+|角色 |权限 |
 | - | - |
-| `owner` | 完全访问权限（`*`） |
-| `admin` | 读取、写入和执行 |
-| `member` | 读取和执行 |
-| `viewer` | 只读 |
+|`owner` | Full access (`*`) |
+| `admin` | Read, write, execute, publish, and share (no delete) |
+| `member` | Read and execute |
+| `viewer` | Read-only |
 
-### 启用 RBAC {/* #enable-rbac */}
+### 启用角色控制 {/* #enable-rbac */}
 
-将 `StaticRBACProvider` 与默认角色配合使用，或定义自己的角色：
+使用`StaticRBACProvider` with the default roles or define your own:
 
 ```typescript title="src/mastra/index.ts"
 import { Mastra } from '@mastra/core'
@@ -98,7 +108,7 @@ import { StaticRBACProvider, DEFAULT_ROLES } from '@mastra/core/auth/ee'
 export const mastra = new Mastra({
   server: {
     auth: new SimpleAuth({
-      users: {
+      tokens: {
         'admin-key': { id: 'user-1', name: 'Alice', role: 'admin' },
         'viewer-key': { id: 'user-2', name: 'Bob', role: 'viewer' },
       },
@@ -111,25 +121,29 @@ export const mastra = new Mastra({
 })
 ```
 
-启用 RBAC 后，Studio 会隐藏用户无权执行的操作。Viewer 看不到删除按钮，member 无法修改 Agent 配置。
+当 RBAC 处于活动状态时，Studio 会隐藏用户无权执行的操作。查看者看不到删除按钮。成员无法修改Agent配置。
 
 ### 权限格式 {/* #permission-format */}
 
-权限遵循 `{resource}:{action}` 模式，并可选择限定到资源级别：
+权限遵循模式`{resource}:{action}`, with optional resource-level scoping:
 
-| 模式 | 含义 |
+|图案|意义|
 | - | - |
-| `*` | 对所有内容拥有完全访问权限 |
-| `*:read` | 读取所有资源 |
-| `agents:*` | 对 Agent 执行所有操作 |
-| `agents:execute` | 仅执行 Agent |
-| `agents:read:my-id` | 按 ID 读取特定 Agent |
+|`*` | Full access to everything |
+| `*:read` | Read all resources |
+| `agents:*` | All actions on agents |
+| `agents:execute` | Execute agents only |
+| `agents:read:my-id` | Read a specific agent by ID |
 
-资源包括 `agents`、`workflows`、`tools`、`datasets`、`memory`、`scores`、`observability` 等。操作包括 `read`、`write`、`execute` 和 `delete`。
+资源包括`agents`, `workflows`, `tools`, `datasets`, `memory`, `scores`, `observability`, `stored-agents`, `mcp`, and others. Actions are `read`, `write`, `create`, `delete`, `execute`, `publish`, and `share`.
 
-### 映射外部 Provider 角色 {/* #map-external-provider-roles */}
+`mcp:read`和`mcp:execute` gate the [built-in MCP server](/docs/server/mcp#authentication-and-permissions) and the routes of `MCPServer` instances you register. The default `viewer` role has `mcp:read` only, so a viewer can connect but gets an empty tool list. Each MCP tool call also needs the permission of the route it runs, such as `agents:execute`.
 
-如果身份 Provider 已定义角色（例如 Clerk organization 或 WorkOS group），请使用 `roleMapping` 将其映射到 Mastra 权限：
+默认情况下，存储的Agent对其所有者是私有的。`stored-agents:*` lets a user see and edit every stored agent. `stored-agents:admin` lifts the owner check, but the user still needs each route's own permission, such as `stored-agents:read` or `stored-agents:write`. The default `admin` role doesn't include either. See [stored agent visibility](/docs/studio/editor#visibility).
+
+### 映射外部Provider角色 {/* #map-external-provider-roles */}
+
+如果您的身份Provider已定义角色（例如，文员组织或 WorkOS 组），请将它们映射到 Mastra 权限`roleMapping`:
 
 ```typescript title="src/mastra/index.ts"
 import { StaticRBACProvider } from '@mastra/core/auth/ee'
@@ -146,22 +160,18 @@ const rbac = new StaticRBACProvider({
 
 ## 登录方式 {/* #login-methods */}
 
-Studio 会根据 Auth Provider 调整登录页面：
+Studio 根据身份验证提供程序调整其登录屏幕：
 
-| Provider 类型 | 登录 UI |
+|Provider类型 |登录界面 |
 | - | - |
-| 仅 SSO | SSO 按钮（例如“Sign in with WorkOS”） |
-| 仅凭据 | 邮箱和密码表单 |
-| 两者兼有 | SSO 按钮和邮箱/密码表单 |
+|仅限单点登录 | SSO 按钮（例如“使用 WorkOS 登录”）|
+|仅凭证 |电子邮件和密码表格 |
+|两者 | SSO 按钮和电子邮件/密码表单 |
 
-可以按 Provider 启用或禁用注册。禁用后，Studio 会隐藏注册链接，并强制显示登录表单。
+每个Provider都可以启用或禁用注册。禁用后，Studio 会隐藏注册链接并强制使用登录表单。
 
-## EE 许可 {/* #ee-licensing */}
+## 有关的 {/* #related */}
 
-Studio Auth 功能（SSO 登录、RBAC、基于权限的 UI）属于 Mastra Enterprise Edition。在使用 Simple Auth 或本地运行时，license 为可选项。使用第三方 Provider 的生产部署需要从 [Mastra 销售团队](https://mastra.ai/contact)获取有效的 EE license。
-
-## 相关内容 {/* #related */}
-
-- [Auth 概述](/docs/server/auth)：支持的 Auth Provider 完整列表。
-- [Studio 部署](/docs/studio/deployment)：将 Studio 部署到生产环境。
-- [自定义 API 路由](/docs/server/custom-api-routes#authentication)：控制各个 endpoint 的身份验证。
+* [身份验证概述](/docs/auth/overview)：支持的身份验证提供程序的完整列表。
+* [工作室部署](/docs/studio/deployment)：将 Studio 部署到生产环境。
+* [自定义API路由](/docs/server/custom-api-routes#authentication)：控制各个端点上的身份验证。

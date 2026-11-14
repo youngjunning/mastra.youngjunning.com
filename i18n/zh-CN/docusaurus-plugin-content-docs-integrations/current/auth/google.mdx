@@ -1,0 +1,289 @@
+---
+title: "Google | Auth"
+description: "Secure Mastra APIs and Studio with Google Workspace OAuth, encrypted sessions, hosted-domain checks, group-based RBAC, and client authentication."
+packages:
+  - "@mastra/auth-google"
+---
+
+import Tabs from "@theme/Tabs";
+import TabItem from "@theme/TabItem";
+
+# 谷歌
+
+这`@mastra/auth-google`软件包使用 Google Workspace 为 Mastra 提供身份验证和基于角色的访问控制。它支持带有加密会话 Cookie 的 OAuth 2.0/OIDC 登录流程、验证 Google ID 令牌，并将 Google Workspace 组映射到 Mastra 权限。
+
+当您的 Studio 用户通过 Google 登录时使用它，并且访问权限应仅限于一个或多个 Google Workspace 网域。
+
+## 先决条件 {/* #prerequisites */}
+
+本指南使用 Google Workspace 身份验证。确保：
+
+1. 创建或选择 Google Cloud 项目
+2. 为 Web 应用程序设置 OAuth 客户端
+3. 将您的 Mastra SSO 回调 URL 添加到授权的重定向 URI
+4. 如果您打算使用 RBAC，请配置 Google Workspace 群组
+
+对于 Google 网上论坛 RBAC，还需配置具有全域委派的 Google Workspace 服务帐号，并授予其 Directory API 只读群组范围：
+
+```text
+https://www.googleapis.com/auth/admin.directory.group.readonly
+```
+
+确保您的环境变量已设置。
+
+```env title=".env"
+GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=your-client-secret
+GOOGLE_REDIRECT_URI=http://localhost:4111/api/auth/sso/callback
+GOOGLE_COOKIE_PASSWORD=a-random-string-at-least-32-characters-long
+GOOGLE_ALLOWED_DOMAINS=example.com
+
+GOOGLE_SERVICE_ACCOUNT_EMAIL=service-account@project.iam.gserviceaccount.com
+GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+GOOGLE_WORKSPACE_ADMIN_EMAIL=admin@example.com
+```
+
+：：：笔记
+
+`GOOGLE_COOKIE_PASSWORD`加密会话cookie。如果省略，则使用自动生成的值，该值在服务器重新启动后不会保留。为生产明确设置它。
+
+`MastraAuthGoogle`读到`GOOGLE_*` auth variables automatically. The service-account variables shown above are read by the configuration code you pass to `MastraRBACGoogle`.
+
+:::
+
+## 安装 {/* #installation */}
+
+在您可以使用之前`MastraAuthGoogle` class, install the `@mastra/auth-google` package.
+
+```bash npm2yarn
+npm install @mastra/auth-google
+```
+
+## 使用示例 {/* #usage-examples */}
+
+### 环境变量的基本用法 {/* #basic-usage-with-environment-variables */}
+
+设置上面的环境变量后，所有构造函数参数都是可选的：
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { MastraAuthGoogle } from '@mastra/auth-google'
+
+export const mastra = new Mastra({
+  server: {
+    auth: new MastraAuthGoogle(),
+  },
+})
+```
+
+：：：警告
+
+使用`allowedDomains` or `GOOGLE_ALLOWED_DOMAINS` to enforce Workspace access. Mastra checks Google's verified `hd` claim, not the email address suffix.
+
+:::
+
+### 自定义配置 {/* #custom-configuration */}
+
+如果您不想依赖环境变量，请直接传递构造函数选项：
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { MastraAuthGoogle } from '@mastra/auth-google'
+
+export const mastra = new Mastra({
+  server: {
+    auth: new MastraAuthGoogle({
+      clientId: process.env.GOOGLE_CLIENT_ID,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+      redirectUri: process.env.GOOGLE_REDIRECT_URI,
+      allowedDomains: ['example.com'],
+    }),
+  },
+})
+```
+
+### 使用 Google 网上论坛 RBAC 进行身份验证 {/* #auth-with-google-groups-rbac */}
+
+：：：笔记
+
+RBAC 在生产中需要 Mastra Enterprise Edition (EE) 许可证。它在开发过程中无需许可证即可运行。看[what requires an EE license](/docs/license#what-requires-an-ee-license). [Contact sales](https://mastra.ai/contact) for more information.
+
+:::
+
+添加`MastraRBACGoogle` to map Google Workspace groups to Mastra permissions:
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { MastraAuthGoogle, MastraRBACGoogle } from '@mastra/auth-google'
+
+export const mastra = new Mastra({
+  server: {
+    auth: new MastraAuthGoogle(),
+    rbac: new MastraRBACGoogle({
+      serviceAccount: {
+        clientEmail: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL!,
+        privateKey: process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY!,
+        subject: process.env.GOOGLE_WORKSPACE_ADMIN_EMAIL!,
+      },
+      roleMapping: {
+        'admins@example.com': ['*'],
+        'engineering@example.com': ['agents:*', 'workflows:*', 'tools:*'],
+        'viewers@example.com': ['agents:read', 'workflows:read'],
+        _default: [], // users with unmapped groups get no permissions
+      },
+    }),
+  },
+})
+```
+
+### 跨Provider使用 {/* #cross-provider-usage */}
+
+使用不同的身份验证Provider（Auth0、Clerk 等）进行登录，使用 Google Workspace 群组进行 RBAC。通过一个`getUserKey` function to resolve the Google Directory API user key from the other provider's user object:
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { MastraAuthAuth0 } from '@mastra/auth-auth0'
+import { MastraRBACGoogle } from '@mastra/auth-google'
+
+export const mastra = new Mastra({
+  server: {
+    auth: new MastraAuthAuth0(),
+    rbac: new MastraRBACGoogle({
+      getUserKey: user => {
+        if (!user || typeof user !== 'object') return undefined
+
+        const { email } = user as { email?: unknown }
+        return typeof email === 'string' ? email : undefined
+      },
+      serviceAccount: {
+        clientEmail: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL!,
+        privateKey: process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY!,
+        subject: process.env.GOOGLE_WORKSPACE_ADMIN_EMAIL!,
+      },
+      roleMapping: {
+        'engineering@example.com': ['agents:*', 'workflows:*'],
+        'admins@example.com': ['*'],
+        _default: [],
+      },
+    }),
+  },
+})
+```
+
+访问[MastraAuthGoogle](/reference/auth/google) for all available configuration options.
+
+## 角色映射 {/* #role-mapping */}
+
+这`roleMapping` option maps Google Workspace group email addresses to arrays of Mastra permission strings. Permissions follow a `resource:action` pattern and support wildcards:
+
+```typescript
+const rbac = new MastraRBACGoogle({
+  roleMapping: {
+    // full access to everything
+    'admins@example.com': ['*'],
+
+    // full access to agents and workflows
+    'engineering@example.com': ['agents:*', 'workflows:*'],
+
+    // read-only access
+    'viewers@example.com': ['agents:read', 'workflows:read'],
+
+    // users whose groups don't match any key above
+    _default: [],
+  },
+})
+```
+
+默认情况下，组电子邮件地址用作角色 ID。使用`mapGroupToRoles` if you want to map by group name or another property. The `_default` key assigns permissions to users whose Google Workspace groups don't match any other key.
+
+## 客户端设置 {/* #client-side-setup */}
+
+启用身份验证后，对 Mastra 路由的请求需要身份验证。当启用 SSO 时`GOOGLE_CLIENT_SECRET`, `MastraAuthGoogle` uses Google sign-in and sets an encrypted session cookie after login.
+
+### Cookie 会话（推荐） {/* #cookie-session-recommended */}
+
+对于跨源请求（例如，前端`:3000` calling Mastra on `:4111`), enable CORS credentials on the Mastra server:
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+
+export const mastra = new Mastra({
+  server: {
+    auth: new MastraAuthGoogle(),
+    cors: {
+      origin: 'http://localhost:3000',
+      credentials: true,
+    },
+  },
+})
+```
+
+配置客户端以包含凭据：
+
+```typescript title="lib/mastra-client.ts"
+import { MastraClient } from '@mastra/client-js'
+
+export const mastraClient = new MastraClient({
+  baseUrl: 'http://localhost:4111',
+  credentials: 'include',
+})
+```
+
+### 不记名令牌 {/* #bearer-token */}
+
+您还可以将 Google ID 令牌作为 Bearer 令牌传递。 Mastra 根据 Google 的 JSON Web 密钥集 (JWKS) 端点验证令牌：
+
+```typescript title="lib/mastra-client.ts"
+import { MastraClient } from '@mastra/client-js'
+
+export const createMastraClient = (idToken: string) => {
+  return new MastraClient({
+    baseUrl: 'http://localhost:4111',
+    headers: {
+      Authorization: `Bearer ${idToken}`,
+    },
+  })
+}
+```
+
+访问[Mastra Client SDK](/docs/server/mastra-client) for more configuration options.
+
+### 发出经过身份验证的请求 {/* #making-authenticated-requests */}
+
+<Tabs>
+  <TabItem value="client" label="MastraClient">
+    ```typescript title="src/api/agents.ts"
+    import { mastraClient } from '../lib/mastra-client'
+
+    const agent = mastraClient.getAgent('weatherAgent')
+    const response = await agent.generate('Weather in London')
+    console.log(response)
+    ```
+  </TabItem>
+
+  <TabItem value="curl" label="cURL">
+    ```bash
+    curl -X POST http://localhost:4111/api/agents/weatherAgent/generate \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer <your-google-id-token>" \
+      -d '{
+        "messages": "Weather in London"
+      }'
+    ```
+  </TabItem>
+</Tabs>
+
+## 故障排除 {/* #troubleshooting */}
+
+* **登录后401**：检查一下`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `GOOGLE_REDIRECT_URI` match the Google Cloud OAuth client.
+* **Workspace用户被拒绝**： 核实`GOOGLE_ALLOWED_DOMAINS` matches the Google ID token `hd` claim.
+* ****：这是预期的情况`allowedDomains` is configured because Gmail accounts don't have a Workspace `hd` claim.
+* **RBAC 返回默认权限**：没有为用户解析角色。验证用户电子邮件或自定义`getUserKey`, Google group membership, and `roleMapping`. If the Directory API lookup fails, the provider throws an error instead of returning `_default`.
+* **Cookie 不会跨源发送**： 放`credentials: "include"` in `MastraClient` and configure `server.cors` with your frontend origin and `credentials: true`.
+* **重新启动时会话丢失**： 放`GOOGLE_COOKIE_PASSWORD` to a stable value of at least 32 characters. Without it, an auto-generated key is used in development and changes on each restart.
+
+## 有关的 {/* #related */}
+
+* [身份验证概述](/docs/auth/overview)
+* [复合认证](/docs/auth/composite-auth)
+* [MastraAuthGoogle 参考](/reference/auth/google)

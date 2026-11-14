@@ -1,0 +1,811 @@
+---
+title: "Storing embeddings in a vector database | RAG"
+description: "After generating embeddings, you need to store them in a database that supports vector similarity search."
+packages:
+  - "@mastra/core"
+---
+
+import Tabs from "@theme/Tabs";
+import TabItem from "@theme/TabItem";
+
+# 将嵌入存储在向量数据库中
+
+生成嵌入后，您需要将它们存储在支持向量相似性搜索的数据库中。 Mastra 提供了一个一致的接口，用于跨矢量数据库存储和查询嵌入。
+
+## 支持的数据库 {/* #supported-databases */}
+
+<Tabs>
+  <TabItem value="mongodb" label="MongoDB">
+    ```ts title="vector-store.ts"
+    import { MongoDBVector } from '@mastra/mongodb'
+
+    const store = new MongoDBVector({
+      id: 'mongodb-vector',
+      uri: process.env.MONGODB_URI,
+      dbName: process.env.MONGODB_DB_NAME,
+    })
+    await store.createIndex({
+      indexName: 'myCollection',
+      dimension: 1536,
+    })
+    await store.upsert({
+      indexName: 'myCollection',
+      vectors: embeddings,
+      metadata: chunks.map(chunk => ({ text: chunk.text })),
+    })
+    ```
+
+    <h3>使用 MongoDB 矢量搜索</h3>
+
+    对于希望将矢量搜索、全文搜索和操作数据整合到单个数据库中以最大限度地降低基础设施复杂性并保持生产级性能的团队来说，MongoDB 矢量搜索是一个很好的解决方案。
+    有关详细的设置说明和最佳实践，请参阅[official MongoDB Vector Search documentation](https://www.mongodb.com/docs/atlas/atlas-vector-search/vector-search-overview/?utm_campaign=devrel\&utm_source=third-party-content\&utm_medium=cta\&utm_content=mastra-docs).
+
+    <h3>将 VoyageAI 与 MongoDB 结合使用</h3>
+
+    MongoDB 直接与 VoyageAI 的嵌入模型配合使用，该模型针对检索任务进行了优化。有关完整示例和专门模型，请参阅[VoyageAI embeddings documentation](/models/embeddings#voyageai) and [MongoDB vector reference](/integrations/vectors/mongodb).
+
+    <h3>混合搜索（矢量+全文）</h3>
+
+    MongoDB支持混合搜索，通过服务器端将向量相似度与BM25全文搜索相结合`$rankFusion`. It requires MongoDB 8.0 or later, is generally available from 8.1, and is enabled on MongoDB Atlas 8.0.x. Use it to combine semantic retrieval with keyword-based results:
+
+    ```ts
+    await store.createSearchIndex({ indexName: 'myCollection', fields: ['text'] })
+    const results = await store.hybridQuery({
+      indexName: 'myCollection',
+      queryVector: embedding,
+      query: 'search terms',
+      paths: ['text'],
+      topK: 10,
+    })
+    ```
+
+    请参阅[MongoDB vector reference](/integrations/vectors/mongodb) for details on `createSearchIndex()`, `textQuery()`, and `hybridQuery()`.
+
+    <h3>自动嵌入</h3>
+
+    MongoDB 可以自行生成嵌入，因此您的应用程序中不需要嵌入提供程序。创建索引`autoEmbed` and a Voyage AI model, write plain text, and search with a query string:
+
+    ```ts
+    await store.createIndex({
+      indexName: 'myCollection',
+      autoEmbed: { model: 'voyage-4' },
+    })
+    await store.upsert({
+      indexName: 'myCollection',
+      documents: chunks.map(chunk => chunk.text),
+      metadata: chunks.map(chunk => ({ text: chunk.text })),
+    })
+    const results = await store.query({
+      indexName: 'myCollection',
+      queryText: 'search terms',
+      topK: 10,
+    })
+    ```
+
+    自动嵌入是 MongoDB 预览版功能，需要在可用的地方进行部署。请参阅[MongoDB vector reference](/integrations/vectors/mongodb#automated-embedding) for the supported options and requirements.
+  </TabItem>
+
+  <TabItem value="pg-vector" label="PgVector">
+    ```ts title="vector-store.ts"
+    import { PgVector } from '@mastra/pg'
+
+    const store = new PgVector({
+      id: 'pg-vector',
+      connectionString: process.env.POSTGRES_CONNECTION_STRING,
+    })
+
+    await store.createIndex({
+      indexName: 'myCollection',
+      dimension: 1536,
+    })
+
+    await store.upsert({
+      indexName: 'myCollection',
+      vectors: embeddings,
+      metadata: chunks.map(chunk => ({ text: chunk.text })),
+    })
+    ```
+
+    <h3>将 PostgreSQL 与 pgvector 结合使用</h3>
+
+    对于已经使用 PostgreSQL 并希望最大限度地降低基础设施复杂性的团队来说，带有 pgvector 扩展的 PostgreSQL 是一个很好的解决方案。
+    有关详细的设置说明和最佳实践，请参阅[official pgvector repository](https://github.com/pgvector/pgvector).
+  </TabItem>
+
+  <TabItem value="oracledb" label="OracleDB">
+    ```ts title="vector-store.ts"
+    import { OracleVector } from '@mastra/oracledb'
+
+    const store = new OracleVector({
+      id: 'oracle-vector',
+      user: process.env.ORACLE_DATABASE_USER,
+      password: process.env.ORACLE_DATABASE_PASSWORD,
+      connectString: process.env.ORACLE_DATABASE_CONNECT_STRING,
+    })
+
+    await store.createIndex({
+      indexName: 'myCollection',
+      dimension: 1536,
+      indexConfig: { type: 'none' },
+    })
+
+    await store.upsert({
+      indexName: 'myCollection',
+      vectors: embeddings,
+      metadata: chunks.map(chunk => ({ text: chunk.text })),
+    })
+    ```
+
+    <h3>使用 Oracle 数据库矢量搜索</h3>
+
+    OracleDB 将嵌入存储在本机中`VECTOR` columns and metadata in Oracle JSON. Exact search is the default. HNSW and IVF indexes can be configured for tuned deployments.
+  </TabItem>
+
+  <TabItem value="pinecone" label="Pinecone">
+    ```ts title="vector-store.ts"
+    import { PineconeVector } from '@mastra/pinecone'
+
+    const store = new PineconeVector({
+      id: 'pinecone-vector',
+      apiKey: process.env.PINECONE_API_KEY,
+    })
+    await store.createIndex({
+      indexName: 'myCollection',
+      dimension: 1536,
+    })
+    await store.upsert({
+      indexName: 'myCollection',
+      vectors: embeddings,
+      metadata: chunks.map(chunk => ({ text: chunk.text })),
+    })
+    ```
+  </TabItem>
+
+  <TabItem value="qdrant" label="Qdrant">
+    ```ts title="vector-store.ts"
+    import { QdrantVector } from '@mastra/qdrant'
+
+    const store = new QdrantVector({
+      id: 'qdrant-vector',
+      url: process.env.QDRANT_URL,
+      apiKey: process.env.QDRANT_API_KEY,
+    })
+
+    await store.createIndex({
+      indexName: 'myCollection',
+      dimension: 1536,
+    })
+
+    await store.upsert({
+      indexName: 'myCollection',
+      vectors: embeddings,
+      metadata: chunks.map(chunk => ({ text: chunk.text })),
+    })
+    ```
+  </TabItem>
+
+  <TabItem value="chroma" label="Chroma">
+    ```ts title="vector-store.ts"
+    import { ChromaVector } from '@mastra/chroma'
+
+    // Running Chroma locally
+    // const store = new ChromaVector()
+
+    // Running on Chroma Cloud
+    const store = new ChromaVector({
+      id: 'chroma-vector',
+      apiKey: process.env.CHROMA_API_KEY,
+      tenant: process.env.CHROMA_TENANT,
+      database: process.env.CHROMA_DATABASE,
+    })
+
+    await store.createIndex({
+      indexName: 'myCollection',
+      dimension: 1536,
+    })
+
+    await store.upsert({
+      indexName: 'myCollection',
+      vectors: embeddings,
+      metadata: chunks.map(chunk => ({ text: chunk.text })),
+    })
+    ```
+  </TabItem>
+
+  <TabItem value="astra" label="Astra">
+    ```ts title="vector-store.ts"
+    import { AstraVector } from '@mastra/astra'
+
+    const store = new AstraVector({
+      id: 'astra-vector',
+      token: process.env.ASTRA_DB_TOKEN,
+      endpoint: process.env.ASTRA_DB_ENDPOINT,
+      keyspace: process.env.ASTRA_DB_KEYSPACE,
+    })
+
+    await store.createIndex({
+      indexName: 'myCollection',
+      dimension: 1536,
+    })
+
+    await store.upsert({
+      indexName: 'myCollection',
+      vectors: embeddings,
+      metadata: chunks.map(chunk => ({ text: chunk.text })),
+    })
+    ```
+  </TabItem>
+
+  <TabItem value="libsql" label="libSQL">
+    ```ts title="vector-store.ts"
+    import { LibSQLVector } from '@mastra/libsql'
+
+    const store = new LibSQLVector({
+      id: 'libsql-vector',
+      url: process.env.DATABASE_URL,
+      authToken: process.env.DATABASE_AUTH_TOKEN, // Optional: for Turso cloud databases
+    })
+
+    await store.createIndex({
+      indexName: 'myCollection',
+      dimension: 1536,
+    })
+
+    await store.upsert({
+      indexName: 'myCollection',
+      vectors: embeddings,
+      metadata: chunks.map(chunk => ({ text: chunk.text })),
+    })
+    ```
+  </TabItem>
+
+  <TabItem value="upstash" label="Upstash">
+    ```ts title="vector-store.ts"
+    import { UpstashVector } from '@mastra/upstash'
+
+    // In upstash they refer to the store as an index
+    const store = new UpstashVector({
+      id: 'upstash-vector',
+      url: process.env.UPSTASH_URL,
+      token: process.env.UPSTASH_TOKEN,
+    })
+
+    // Upstash creates indexes (known as namespaces) automatically, so no store.createIndex call is needed here
+    // when you upsert if that namespace doesn't exist yet.
+    await store.upsert({
+      indexName: 'myCollection', // the namespace name in Upstash
+      vectors: embeddings,
+      metadata: chunks.map(chunk => ({ text: chunk.text })),
+    })
+    ```
+  </TabItem>
+
+  <TabItem value="weaviate" label="Weaviate">
+    ```ts title="vector-store.ts"
+    import { WeaviateVector } from '@mastra/weaviate'
+
+    const store = new WeaviateVector({
+      id: 'weaviate-vector',
+      httpHost: process.env.WEAVIATE_HOST,
+      httpPort: 443,
+      httpSecure: true,
+      grpcHost: process.env.WEAVIATE_GRPC_HOST,
+      grpcPort: 443,
+      grpcSecure: true,
+      apiKey: process.env.WEAVIATE_API_KEY,
+    })
+
+    await store.createIndex({
+      indexName: 'myCollection',
+      dimension: 1536,
+    })
+
+    await store.upsert({
+      indexName: 'myCollection',
+      vectors: embeddings,
+      metadata: chunks.map(chunk => ({ text: chunk.text })),
+    })
+    ```
+  </TabItem>
+
+  <TabItem value="cloudflare" label="Cloudflare">
+    ```ts title="vector-store.ts"
+    import { CloudflareVector } from '@mastra/vectorize'
+
+    const store = new CloudflareVector({
+      id: 'cloudflare-vector',
+      accountId: process.env.CF_ACCOUNT_ID,
+      apiToken: process.env.CF_API_TOKEN,
+    })
+    await store.createIndex({
+      indexName: 'myCollection',
+      dimension: 1536,
+    })
+    await store.upsert({
+      indexName: 'myCollection',
+      vectors: embeddings,
+      metadata: chunks.map(chunk => ({ text: chunk.text })),
+    })
+    ```
+  </TabItem>
+
+  <TabItem value="opensearch" label="OpenSearch">
+    ```ts title="vector-store.ts"
+    import { OpenSearchVector } from '@mastra/opensearch'
+
+    const store = new OpenSearchVector({ id: 'opensearch', node: process.env.OPENSEARCH_URL })
+
+    await store.createIndex({
+      indexName: 'my-collection',
+      dimension: 1536,
+    })
+
+    await store.upsert({
+      indexName: 'my-collection',
+      vectors: embeddings,
+      metadata: chunks.map(chunk => ({ text: chunk.text })),
+    })
+    ```
+  </TabItem>
+
+  <TabItem value="elasticsearch" label="Elasticsearch">
+    ```ts title="vector-store.ts"
+    import { ElasticSearchVector } from '@mastra/elasticsearch'
+
+    const store = new ElasticSearchVector({
+      id: 'elasticsearch-vector',
+      url: process.env.ELASTICSEARCH_URL,
+      auth: {
+        apiKey: process.env.ELASTICSEARCH_API_KEY,
+      },
+    })
+
+    await store.createIndex({
+      indexName: 'my-collection',
+      dimension: 1536,
+    })
+
+    await store.upsert({
+      indexName: 'my-collection',
+      vectors: embeddings,
+      metadata: chunks.map(chunk => ({ text: chunk.text })),
+    })
+    ```
+
+    <h3>使用弹性搜索</h3>
+
+    有关详细的设置说明和最佳实践，请参阅[official Elasticsearch documentation](https://www.elastic.co/docs/solutions/search/get-started).
+  </TabItem>
+
+  <TabItem value="azure-ai-search" label="Azure AI Search">
+    ```ts title="vector-store.ts"
+    import { AzureAISearchVector } from '@mastra/azure-ai-search'
+
+    const store = new AzureAISearchVector({
+      id: 'azure-search-vectors',
+      endpoint: process.env.AZURE_AI_SEARCH_ENDPOINT!,
+      credential: process.env.AZURE_AI_SEARCH_CREDENTIAL!,
+    })
+
+    await store.createIndex({
+      indexName: 'my-collection',
+      dimension: 1536,
+    })
+
+    await store.upsert({
+      indexName: 'my-collection',
+      vectors: embeddings,
+      metadata: chunks.map(chunk => ({ text: chunk.text })),
+    })
+    ```
+  </TabItem>
+
+  <TabItem value="couchbase" label="Couchbase">
+    ```ts title="vector-store.ts"
+    import { CouchbaseVector } from '@mastra/couchbase'
+
+    const store = new CouchbaseVector({
+      id: 'couchbase-vector',
+      connectionString: process.env.COUCHBASE_CONNECTION_STRING,
+      username: process.env.COUCHBASE_USERNAME,
+      password: process.env.COUCHBASE_PASSWORD,
+      bucketName: process.env.COUCHBASE_BUCKET,
+      scopeName: process.env.COUCHBASE_SCOPE,
+      collectionName: process.env.COUCHBASE_COLLECTION,
+    })
+    await store.createIndex({
+      indexName: 'myCollection',
+      dimension: 1536,
+    })
+    await store.upsert({
+      indexName: 'myCollection',
+      vectors: embeddings,
+      metadata: chunks.map(chunk => ({ text: chunk.text })),
+    })
+    ```
+  </TabItem>
+
+  <TabItem value="lancedb" label="Lance">
+    ```ts title="vector-store.ts"
+    import { LanceVectorStore } from '@mastra/lance'
+
+    const store = await LanceVectorStore.create('/path/to/db')
+
+    await store.createIndex({
+      tableName: 'myVectors',
+      indexName: 'myCollection',
+      dimension: 1536,
+    })
+
+    await store.upsert({
+      tableName: 'myVectors',
+      vectors: embeddings,
+      metadata: chunks.map(chunk => ({ text: chunk.text })),
+    })
+    ```
+
+    <h3>使用LanceDB</h3>
+
+    LanceDB是一个基于Lance柱状格式构建的嵌入式矢量数据库，适合本地开发或云端部署。
+    有关详细的设置说明和最佳实践，请参阅[official LanceDB documentation](https://lancedb.github.io/lancedb/).
+  </TabItem>
+
+  <TabItem value="s3vectors" label="S3 Vectors">
+    ```ts title="vector-store.ts"
+    import { S3Vectors } from '@mastra/s3vectors'
+
+    const store = new S3Vectors({
+      id: 's3-vectors',
+      vectorBucketName: 'my-vector-bucket',
+      clientConfig: {
+        region: 'us-east-1',
+      },
+      nonFilterableMetadataKeys: ['content'],
+    })
+
+    await store.createIndex({
+      indexName: 'my-index',
+      dimension: 1536,
+    })
+    await store.upsert({
+      indexName: 'my-index',
+      vectors: embeddings,
+      metadata: chunks.map(chunk => ({ text: chunk.text })),
+    })
+    ```
+  </TabItem>
+</Tabs>
+
+## 使用矢量存储 {/* #using-vector-storage */}
+
+初始化后，所有向量存储共享相同的接口来创建索引、更新插入嵌入和查询。
+
+### 创建索引 {/* #creating-indexes */}
+
+在存储嵌入之前，您需要为嵌入模型创建一个具有适当维度大小的索引：
+
+```ts title="store-embeddings.ts"
+// Create an index with dimension 1536 (for __AI_SDK_OPENAI_EMBEDDING_MODEL__)
+await store.createIndex({
+  indexName: 'myCollection',
+  dimension: 1536,
+})
+```
+
+尺寸大小必须与您选择的嵌入模型的输出尺寸相匹配。常见的尺寸有：
+
+* 开放人工智能`__AI_SDK_OPENAI_EMBEDDING_MODEL__`: 1536 dimensions (or custom, e.g., 256)
+* `Cohere embed-multilingual-v3`： 1024 维
+* `VoyageAI voyage-3.5`：1024 个尺寸（或自定义：256、512、1024、2048）
+* `Google gemini-embedding-001`：768 尺寸（或自定义）
+
+:::警告
+索引维度创建后无法更改。要使用不同的模型，请删除索引并使用新的维度大小重新创建索引。
+:::
+
+### 数据库命名规则 {/* #naming-rules-for-databases */}
+
+每个矢量数据库都对索引和集合强制执行特定的命名约定，以确保兼容性并防止冲突。
+
+<Tabs>
+  <TabItem value="mongodb" label="MongoDB">
+    集合和索引名称必须：
+
+    * 以字母或下划线开头
+    * 长度最多 120 字节
+    * 仅包含字母、数字、下划线字符或点
+    * 不能包含`$` or the null character
+    * 例子：`my_collection.123` is valid
+    * 例子：`my-index` isn't valid (contains hyphen)
+    * 例子：`My$Collection` isn't valid (contains `$`)
+  </TabItem>
+
+  <TabItem value="pgVector" label="PgVector">
+    索引名称必须：
+
+    * 以字母或下划线开头
+    * 仅包含字母、数字和下划线字符
+    * 例子：`my_index_123` is valid
+    * 例子：`my-index` isn't valid (contains hyphen)
+  </TabItem>
+
+  <TabItem value="oracledb" label="OracleDB">
+    索引名称是逻辑 Mastra 名称。 OracleDB 在内部将每个逻辑索引映射到物理 Oracle 表。
+
+    逻辑索引名称必须：
+
+    * 非空
+    * 不超过 512 个字符
+    * 在向量索引的生命周期内保持稳定
+    * 例子：`my_collection_123` is valid
+    * 例子：`customer-support/docs:v1` is valid and is mapped to a safe Oracle table name
+  </TabItem>
+
+  <TabItem value="pinecone" label="Pinecone">
+    索引名称必须：
+
+    * 仅使用小写字母、数字和破折号
+    * 不包含点（用于 DNS 路由）
+    * 不使用非拉丁字符或表情符号
+    * 总长度（含项目 ID）少于 52 个字符
+      * 例子：`my-index-123` is valid
+      * 例子：`my.index` isn't valid (contains dot)
+  </TabItem>
+
+  <TabItem value="qdrant" label="Qdrant">
+    集合名称必须：
+
+    * 长度为 1-255 个字符
+    * 不包含任何以下特殊字符：
+      * `< > : " / \ | ? *`
+      * 空字符 (`\0`)
+      * 单位分隔符 (`\u{1F}`)
+    * 例子：`my_collection_123` is valid
+    * 例子：`my/collection` isn't valid (contains slash)
+  </TabItem>
+
+  <TabItem value="chroma" label="Chroma">
+    集合名称必须：
+
+    * 长度为 3-63 个字符
+    * 以字母或数字开头和结尾
+    * 仅包含字母、数字、下划线字符或连字符
+    * 不包含连续句点 (..)
+    * 不是有效的 IPv4 地址
+    * 例子：`my-collection-123` is valid
+    * 例子：`my..collection` isn't valid (consecutive periods)
+  </TabItem>
+
+  <TabItem value="astra" label="Astra">
+    集合名称必须：
+
+    * 不能为空
+    * 不超过 48 个字符
+    * 仅包含字母、数字和`_` characters
+    * 例子：`my_collection_123` is valid
+    * 例子：`my-collection` isn't valid (contains hyphen)
+  </TabItem>
+
+  <TabItem value="libsql" label="libSQL">
+    索引名称必须：
+
+    * 以字母或下划线开头
+    * 仅包含字母、数字和`_` characters
+    * 例子：`my_index_123` is valid
+    * 例子：`my-index` isn't valid (contains hyphen)
+  </TabItem>
+
+  <TabItem value="upstash" label="Upstash">
+    命名空间名称必须：
+
+    * 长度为 2-100 个字符
+    * 仅包含：
+      * 字母数字字符（a-z、A-Z、0-9）
+      * 下划线、连字符、点
+    * 不以特殊字符（\_、-、.）开头或结尾
+    * 可以区分大小写
+    * 例子：`MyNamespace123` is valid
+    * 例子：`_namespace` isn't valid (starts with underscore)
+  </TabItem>
+
+  <TabItem value="weaviate" label="Weaviate">
+    索引名称映射到 Weaviate 集合，其中：
+
+    * Weaviate 大写（第一个字母大写）
+    * 应仅包含字母、数字和`_` character
+    * 必须以字母开头，因为只有第一个字符是大写的（前导数字或符号仍然无效）
+    * 在集合描述中保留原始 Mastra 索引名称，因此`listIndexes()` and `describeIndex()` return the name you supplied
+    * 例子：`my_collection` is stored as `My_collection` and returned as `my_collection`
+    * 例子：`123_collection` isn't valid (starts with a digit)
+  </TabItem>
+
+  <TabItem value="cloudflare" label="Cloudflare">
+    索引名称必须：
+
+    * 以字母开头
+    * 少于 32 个字符
+    * 仅包含小写 ASCII 字母、数字和破折号
+    * 使用破折号代替空格
+    * 例子：`my-index-123` is valid
+    * 例子：`My_Index` isn't valid (uppercase and underscore)
+  </TabItem>
+
+  <TabItem value="opensearch" label="OpenSearch">
+    索引名称必须：
+
+    * 仅使用小写字母
+    * 不以下划线字符或连字符开头
+    * 不包含空格、逗号
+    * 不包含特殊字符（例如`:`, `"`, `*`, `+`, `/`, `\`, `|`, `?`, `#`, `>`, `<`)
+    * 例子：`my-index-123` is valid
+    * 例子：`My_Index` isn't valid (contains uppercase letters)
+    * 例子：`_myindex` isn't valid (begins with underscore)
+  </TabItem>
+
+  <TabItem value="elasticsearch" label="Elasticsearch">
+    索引名称必须：
+
+    * 仅使用小写字母
+    * 不超过255字节（算多字节字符）
+    * 不以下划线字符、连字符或加号开头
+    * 不包含空格、逗号
+    * 不包含特殊字符（例如`:`, `"`, `*`, `+`, `/`, `\`, `|`, `?`, `#`, `>`, `<`)
+    * 不是“。”或者 ”..”
+    * 不以“.”开头（已弃用，系统/隐藏索引除外）
+    * 例子：`my-index-123` is valid
+    * 例子：`My_Index` isn't valid (contains uppercase letters)
+    * 例子：`_myindex` isn't valid (begins with underscore)
+    * 例子：`.myindex` isn't valid (begins with dot, deprecated)
+  </TabItem>
+
+  <TabItem value="s3vectors" label="S3 Vectors">
+    索引名称必须：
+
+    * 在同一个向量桶中保持唯一
+    * 长度介于 3 到 63 个字符之间
+    * 仅使用小写字母 (`a–z`), numbers (`0–9`), hyphens (`-`), and dots (`.`)
+    * 以字母或数字开头和结尾
+    * 例子：`my-index.123` is valid
+    * 例子：`my_index` isn't valid (contains underscore)
+    * 例子：`-myindex` isn't valid (begins with hyphen)
+    * 例子：`myindex-` isn't valid (ends with hyphen)
+    * 例子：`MyIndex` isn't valid (contains uppercase letters)
+  </TabItem>
+
+  <TabItem value="azure-ai-search" label="Azure AI Search">
+    索引名称必须：
+
+    * 仅使用小写字母、数字、破折号 (`-`), and underscore (`_`) characters
+    * 不以破折号开始或结束
+    * 长度介于 2 到 128 个字符之间
+    * 例子：`my-index-123` and `my_index` are valid
+    * 例子：`MyIndex` isn't valid (contains uppercase letters)
+    * 例子：`my-index-` isn't valid (ends with a dash)
+  </TabItem>
+</Tabs>
+
+### 更新插入嵌入 {/* #upserting-embeddings */}
+
+创建索引后，您可以存储嵌入及其基本元数据：
+
+```ts title="store-embeddings.ts"
+// Store embeddings with their corresponding metadata
+await store.upsert({
+  indexName: 'myCollection', // index name
+  vectors: embeddings, // array of embedding vectors
+  metadata: chunks.map(chunk => ({
+    text: chunk.text, // The original text content
+    id: chunk.id, // Optional unique identifier
+  })),
+})
+```
+
+更新插入操作：
+
+* 获取嵌入向量及其相应元数据的数组
+* 如果现有向量共享相同的 ID，则更新它们
+* 如果向量不存在则创建新向量
+* 自动处理大型数据集的批处理
+
+## 添加元数据 {/* #adding-metadata */}
+
+矢量存储支持丰富的元数据（任何 JSON 可序列化字段）以进行过滤和组织。由于元数据的存储没有固定的模式，因此请使用一致的字段命名以避免意外的查询结果。
+
+:::警告
+元数据对于矢量存储很重要。如果没有它，您将只有数字嵌入，无法返回原始文本或过滤结果。始终至少将源文本存储为元数据。
+:::
+
+```ts
+// Store embeddings with rich metadata for better organization and filtering
+await store.upsert({
+  indexName: 'myCollection',
+  vectors: embeddings,
+  metadata: chunks.map(chunk => ({
+    // Basic content
+    text: chunk.text,
+    id: chunk.id,
+
+    // Document organization
+    source: chunk.source,
+    category: chunk.category,
+
+    // Temporal metadata
+    createdAt: new Date().toISOString(),
+    version: '1.0',
+
+    // Custom fields
+    language: chunk.language,
+    author: chunk.author,
+    confidenceScore: chunk.score,
+  })),
+})
+```
+
+关键元数据注意事项：
+
+* 严格字段命名 - “类别”与“类别”等不一致会影响查询
+* 仅包含您计划过滤或排序的字段 - 额外的字段会增加开销
+* 添加时间戳（例如“createdAt”、“lastUpdated”）以跟踪内容新鲜度
+
+## 删除向量 {/* #deleting-vectors */}
+
+使用`deleteVectors` with a metadata filter to remove embeddings associated with a document. This is useful for cleaning up stale vectors after a document is deleted or updated.
+
+### 通过元数据过滤器删除 {/* #delete-by-metadata-filter */}
+
+最常见的用例是当用户删除特定文档时删除该文档的所有向量：
+
+```ts title="delete-vectors.ts"
+// Delete all vectors for a specific document
+await store.deleteVectors({
+  indexName: 'myCollection',
+  filter: { docId: 'document-123' },
+})
+```
+
+这在以下情况下特别有用：
+
+* 用户删除文档，您需要删除其所有块
+* 您正在重新索引文档并希望首先删除旧向量
+* 您需要清理特定用户或租户的向量
+
+### 删除多个文档 {/* #delete-multiple-documents */}
+
+您还可以使用复杂的过滤器来删除匹配多个条件的向量：
+
+```ts title="delete-vectors-advanced.ts"
+// Delete all vectors for multiple documents
+await store.deleteVectors({
+  indexName: 'myCollection',
+  filter: {
+    docId: { $in: ['doc-1', 'doc-2', 'doc-3'] },
+  },
+})
+
+// Delete vectors for a specific user's documents
+await store.deleteVectors({
+  indexName: 'myCollection',
+  filter: {
+    $and: [{ userId: 'user-123' }, { status: 'archived' }],
+  },
+})
+```
+
+### 按向量 ID 删除 {/* #delete-by-vector-ids */}
+
+如果您有特定的向量ID要删除，您可以直接传递它们：
+
+```ts title="delete-by-ids.ts"
+// Delete specific vectors by their IDs
+await store.deleteVectors({
+  indexName: 'myCollection',
+  ids: ['vec-1', 'vec-2', 'vec-3'],
+})
+```
+
+## 最佳实践 {/* #best-practices */}
+
+* 在批量插入之前创建索引
+* 使用批处理操作进行大量插入（upsert 方法自动处理批处理）
+* 仅存储您要查询的元数据
+* 将嵌入尺寸与您的模型相匹配（例如，1536 表示`__AI_SDK_OPENAI_EMBEDDING_MODEL__`)

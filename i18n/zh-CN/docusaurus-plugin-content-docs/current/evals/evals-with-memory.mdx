@@ -1,34 +1,35 @@
 ---
-title: "结合 Memory 使用 Evals | Evals"
-description: "使用 runEvals 和 Dataset 实验，对启用了 Memory 的 Agent 运行 Scorer，包括 thread 作用域中的 Observational Memory。"
+title: "Evals with memory | Evals"
+description: "Run Mastra evals against memory-enabled agents using shared or per-item threads, observational memory, runEvals, and dataset experiments."
 packages:
   - "@mastra/core"
   - "@mastra/memory"
 ---
 
-# 结合 Memory 使用 Evals
+# 记忆评估
 
-使用 `thread` 作用域 Memory（包括 Observational Memory）的 Agent 在运行时需要 thread ID。当 Evals 调用 Agent 时未提供该 ID，你会看到：
+使用内存的Agent`thread`范围（包括观察内存）在运行时需要线程 ID。当 eval 调用没有 eval 的Agent时，您将看到：
 
-```
+```text
 ObservationalMemory (scope: 'thread') requires a threadId, but none was found in RequestContext or MessageList.
 ```
 
-本页介绍针对启用了 Memory 的 Agent 运行 Mastra Evals 的三种可用模式、每种路径支持的功能，以及如何选择。三种方式的完整可运行复现均位于 [`examples/evals-with-memory`](https://github.com/mastra-ai/mastra/tree/main/examples/evals-with-memory)。
+根据您希望如何在评估项之间共享内存来选择一种方法。有关可运行的示例，请参见[`examples/evals-with-memory`](https://github.com/mastra-ai/mastra/tree/main/examples/evals-with-memory).
 
-## 如何选择使用方式 {/* #when-to-use-which-approach */}
+## 何时使用哪种方法 {/* #when-to-use-which-approach */}
 
-| 目标 | 方式 |
+|目标|方法|
 | - | - |
-| 所有项目共享一次对话 | [使用 `runEvals` 和全局 `targetOptions.memory`](#shared-thread-with-runevals) |
-| 每个项目使用独立 thread，专注于 CI 循环 | [对每个项目运行 `runEvals`](#per-item-threads-with-runevals) |
-| 由已存储 `Dataset` 驱动的逐项目 thread | [使用内联任务的 `dataset.startExperiment`](#dataset-experiments-with-an-inline-task) |
+|每个项目都有一个共享对话 |[`runEvals` with global `targetOptions.memory`](#shared-thread-with-runevals) |
+| One independent thread per item, focused CI loop | [`runEvals` per item](#per-item-threads-with-runevals) |
+| Fresh thread per item in a stored `Dataset` | [`dataset.startExperiment`与注册Agent](/docs/evals/experiments#memory-enabled-agents)|
+|存储中每个项目的显式线程选择`Dataset` | [`dataset.startExperiment`带有内联任务](#dataset-experiments-with-an-inline-task) |
 
-预先填充 `RequestContext` 并设置 `MastraMemory` **并不是**将 Memory 传入 Agent 的受支持方式。解析 thread 时会读取 `args.memory.thread`；而 `RequestContext.MastraMemory` 是在 Agent 已经解析完 thread 后，由 `prepare-memory-step` 填充的。
+预播种`RequestContext` with `MastraMemory` **isn't** a supported way to drive memory into an agent. Thread resolution reads `args.memory.thread`, `RequestContext.MastraMemory` is populated by `prepare-memory-step` after the agent has already resolved its thread.
 
-## 使用 `runEvals` 共享 thread {/* #shared-thread-with-runevals */}
+## 与以下人员共享线程`runEvals` {/* #shared-thread-with-runevals */}
 
-`runEvals` 接受 `targetOptions`，并将其转发给 `agent.generate()`。传入 `memory: { thread, resource }` 会让所有数据项目针对同一个 thread 运行，适用于测试多轮对话中的召回能力。
+`runEvals`接受`targetOptions`, which is forwarded to `agent.generate()`. Passing `memory: { thread, resource }` runs every data item against the same thread, useful for testing recall across a multi-turn conversation.
 
 ```typescript title="src/mastra/agents/support-agent.test.ts"
 import { runEvals } from '@mastra/core/evals'
@@ -51,11 +52,11 @@ const result = await runEvals({
 })
 ```
 
-`targetOptions` 对每次调用而言是**全局的**。目前 `RunEvalsDataItem` 不支持逐项目覆盖。
+`targetOptions`是**global per call**. No per-item override on `RunEvalsDataItem` is available today.
 
-## 使用 `runEvals` 为每个项目创建 thread {/* #per-item-threads-with-runevals */}
+## 每个项目的线程`runEvals` {/* #per-item-threads-with-runevals */}
 
-当每个数据项目都需要自己的 thread 时（常见 CI 形式），请针对每个项目调用一次 `runEvals`，使用唯一的 `targetOptions.memory`，并自行聚合分数。
+当每个数据项需要自己的线程（常见的 CI 形状）时，调用`runEvals` once per item with a unique `targetOptions.memory` and aggregate the scores yourself.
 
 ```typescript title="src/mastra/agents/support-agent.test.ts"
 import { randomUUID } from 'node:crypto'
@@ -90,13 +91,15 @@ for (const item of items) {
 const average = scores.reduce((a, b) => a + b, 0) / scores.length
 ```
 
-:::note
-请在运行 Evals 前创建 thread。`thread` 作用域中的 Observational Memory 会从必须已存在的记录中读取数据。
+:::注意
+在运行 eval 之前创建线程。观察记忆在`thread` scope reads from a record that must already exist.
 :::
 
-## 使用内联任务运行 Dataset 实验 {/* #dataset-experiments-with-an-inline-task */}
+## 使用内联任务进行数据集实验 {/* #dataset-experiments-with-an-inline-task */}
 
-`dataset.startExperiment({ target: agent })` **不会**将 `memory` 选项转发给 Agent，只会转发 `requestContext`。要针对启用了 Memory 的 Agent 运行已存储的 Dataset，请使用内联 `task` 函数，并将 `{ threadId, resourceId }` 存入每个项目的 `metadata`。Scorer Pipeline 仍会照常运行。
+`dataset.startExperiment()`接受`targetType` and `targetId` for a registered target, or an inline `task` function. For a registered memory-enabled agent, the runner creates a fresh thread per item by default. See [memory-enabled experiment targets](/docs/evals/experiments#memory-enabled-agents) for resource isolation and request context options.
+
+通过显式选择每个项目的线程`agent.generate()`, use an inline `task` and store `{ threadId, resourceId }` in each item's `metadata`. The scorer pipeline still runs as normal.
 
 ```typescript title="src/mastra/evals/dataset-experiment.ts"
 import { randomUUID } from 'node:crypto'
@@ -144,11 +147,11 @@ const summary = await dataset.startExperiment({
 })
 ```
 
-内联 `task` 会接收项目的 `metadata`，因此每一行都能驱动自己的 thread，而不必更改 Agent 或任何 Scorer。完整配置请访问 [runEvals Reference](/reference/evals/run-evals) 和 [Dataset Reference](/reference/datasets/dataset)。
+内联`task` receives the item's `metadata`, so each row can drive its own thread without changing the agent or any scorer. Visit [runEvals reference](/reference/evals/run-evals) and [Dataset reference](/reference/datasets/dataset) for full configuration.
 
-## 相关内容 {/* #related */}
+## 有关的 {/* #related */}
 
-- [在 CI 中运行 Scorer](/docs/evals/running-in-ci)
-- [运行实验](/docs/datasets/running-experiments)
-- [Observational Memory](/docs/memory/observational-memory)
-- [runEvals API Reference](/reference/evals/run-evals)
+* [CI 跑动得分手](/docs/evals/running-in-ci)
+* [运行实验](/docs/evals/experiments)
+* [观察记忆](/docs/memory/observational-memory)
+* [runEvals API 参考](/reference/evals/run-evals)

@@ -1,0 +1,307 @@
+---
+title: "Memory | v1 Migration Guide"
+description: "Memory configuration now requires explicit parameters, and default settings have been updated for better performance and predictability."
+---
+
+# 記憶
+
+記憶體配置現在需要顯式參數，並且預設設定已更新以獲得更好的效能和可預測性。
+
+## 改變了 {/* #changed */}
+
+### 語義回憶和最後訊息的預設設置 {/* #default-settings-for-semantic-recall-and-last-messages */}
+
+預設設定已根據使用模式變更為更合理的值。這`lastMessages` default decreased from 40 to 10, `semanticRecall` is now disabled by default, and thread title generation is disabled by default. These changes improve performance and reduce unexpected LLM API calls.
+
+若要進行遷移，如果您依賴舊的預設設置，請明確配置這些設定。
+
+```diff
+  const memory = new Memory({
+    storage,
+    vector,
+    embedder,
++   options: {
++     lastMessages: 40, // Was default before
++     semanticRecall: {
++       topK: 2,
++       messageRange: 2,
++       scope: 'thread',
++     }, // Was enabled by default before
++     generateTitle: true, // Was enabled by default before
++   },
+  });
+```
+
+### 預設記憶體範圍從`thread` to `resource` {/* #default-memory-scope-from-thread-to-resource */}
+
+工作記憶和語義回憶的預設範圍已從`'thread'` to `'resource'`. This change aligns with common use cases where applications want to remember user information across conversations. When semantic recall is enabled, it now defaults to searching across all user conversations rather than the current thread.
+
+`scope: 'thread'`.
+
+```diff
+  const memory = new Memory({
+    storage,
+    vector,
+    embedder,
+    options: {
+      workingMemory: {
+        enabled: true,
++       scope: 'thread', // Explicitly set to thread-scoped
+        template: `# User Profile...`,
+      },
+      semanticRecall: {
+        topK: 3,
++       scope: 'thread', // Explicitly set to thread-scoped
+      },
+    },
+  });
+```
+
+### 主題標題生成位置 {/* #thread-title-generation-location */}
+
+這`generateTitle` option has been moved from `threads.generateTitle` to the top-level of memory options. This change simplifies the API by moving the option to where it logically belongs.
+
+要遷移，請移動`generateTitle` from the `threads` config to the top level of options.
+
+```diff
+  const memory = new Memory({
+    storage,
+    vector,
+    embedder,
+    options: {
+-     threads: {
+-       generateTitle: true,
+-     },
++     generateTitle: true,
+    },
+  });
+```
+
+### 語義召回預設設定優化 {/* #semantic-recall-default-settings-optimization */}
+
+語義召回的預設設定已根據 RAG 研究進行了最佳化。這`topK` increased from 2 to 4, and `messageRange` changed from `{ before: 2, after: 2 }` to `{ before: 1, after: 1 }`. These changes provide better accuracy while only slightly increasing message count.
+
+若要進行遷移，如果您依賴先前的預設值，請明確設定這些值。
+
+```diff
+  const memory = new Memory({
+    storage,
+    vector,
+    embedder,
+    options: {
+      semanticRecall: {
++       topK: 2, // Was default before
++       messageRange: { before: 2, after: 2 }, // Was default before
+      },
+    },
+  });
+```
+
+### `memory.readOnly`搬到`memory.options.readOnly` {/* #memoryreadonly-moved-to-memoryoptionsreadonly */}
+
+這`readOnly` property has been moved from the top-level of the memory option to inside `options`. This change aligns `readOnly` with other memory configuration options like `lastMessages` and `semanticRecall`.
+
+要遷移，請移動`readOnly` from the top level to inside `options`.
+
+```diff
+  agent.stream('Hello', {
+    memory: {
+      thread: threadId,
+      resource: resourceId,
+-     readOnly: true,
++     options: {
++       readOnly: true,
++     },
+    },
+  });
+```
+
+:::提示\[程式碼修改]
+
+您可以使用 Mastra 的 codemod CLI 自動更新您的程式碼：
+
+```bash
+npx @mastra/codemod@latest v1/memory-readonly-to-options .
+```
+
+:::
+
+### `Memory.query()`重新命名為`Memory.recall()` {/* #memoryquery-renamed-to-memoryrecall */}
+
+這`Memory.query()` method has been renamed to `Memory.recall()`. The new method returns a simpler format with `{ messages: MastraDBMessage[] }` instead of multiple format variations. This change better describes the action of retrieving messages from memory and simplifies the API.
+
+若要遷移，請重新命名`query()` to `recall()` and update code that expects the old return format.
+
+```diff
+- const result = await memory.query({ threadId: 'thread-123' });
++ const result = await memory.recall({ threadId: 'thread-123' });
+- // result: { messages: CoreMessage[], uiMessages: UIMessageWithMetadata[], messagesV2: MastraMessageV2[] }
++ // result: { messages: MastraDBMessage[] }
++ const messages = result.messages;
+```
+
+:::提示\[程式碼修改]
+
+您可以使用 Mastra 的 codemod CLI 自動更新您的程式碼：
+
+```bash
+npx @mastra/codemod@latest v1/memory-query-to-recall .
+```
+
+:::
+
+### `Memory.recall()`參數變化 {/* #memoryrecall-parameter-changes */}
+
+這`Memory.recall()` method now uses `StorageListMessagesInput` format with pagination, and the `vectorMessageSearch` parameter has been renamed to `vectorSearchString`. These changes align the memory API with the storage pagination API and provide more consistent naming.
+
+若要遷移，請更新方法名稱、查詢參數和向量搜尋參數。
+
+```diff
+- memory.query({
++ memory.recall({
+    threadId: 'thread-123',
+-   vectorMessageSearch: 'What did we discuss?',
+-   selectBy: { ... },
++   vectorSearchString: 'What did we discuss?',
++   page: 0,
++   perPage: 20,
++   orderBy: 'createdAt',
++   filter: { ... },
++   threadConfig: { semanticRecall: true },
+  });
+```
+
+:::提示\[程式碼修改]
+
+您可以使用 Mastra 的 codemod CLI 自動更新您的程式碼：
+
+```bash
+npx @mastra/codemod@latest v1/memory-vector-search-param .
+```
+
+:::
+
+### `MastraMessageV2`類型重命名為`MastraDBMessage` {/* #mastramessagev2-type-renamed-to-mastradbmessage */}
+
+這`MastraMessageV2` type has been renamed to `MastraDBMessage` for clarity. This change better describes the purpose of this type as the database message format.
+
+若要遷移，請取代所有實例`MastraMessageV2` with `MastraDBMessage`.
+
+```diff
+- import { MastraMessageV2 } from '@mastra/core';
+- function yourCustomFunction(input: MastraMessageV2) {}
++ import type { MastraDBMessage } from '@mastra/core/agent';
++ function yourCustomFunction(input: MastraDBMessage) {}
+```
+
+:::提示\[程式碼修改]
+
+您可以使用 Mastra 的 codemod CLI 自動更新您的程式碼：
+
+```bash
+npx @mastra/codemod@latest v1/memory-message-v2-type .
+```
+
+:::
+
+## 已刪除 {/* #removed */}
+
+### 工作記憶`text-stream` mode {/* #working-memory-text-stream-mode */}
+
+工作記憶`use: "text-stream"` option has been removed. Only `tool-call` mode is supported. This change simplifies the working memory API by removing the less reliable streaming mode.
+
+若要遷移，請刪除`use: "text-stream"` option. Working memory will default to tool-call mode.
+
+```diff
+  const memory = new Memory({
+    storage,
+    vector,
+    embedder,
+    options: {
+      workingMemory: {
+        enabled: true,
+-       use: 'text-stream',
+        template: '...',
+      },
+    },
+  });
+```
+
+### `Memory.rememberMessages()`方法 {/* #memoryremembermessages-method */}
+
+這`Memory.rememberMessages()` method has been removed. This method performed the same function as `query()` (now `recall()`), and consolidating to one method simplifies the API.
+
+若要遷移，請替換`rememberMessages()` calls with `recall()`.
+
+```diff
+- const { messages } = await memory.rememberMessages({
++ const { messages } = await memory.recall({
+    threadId,
+    resourceId,
+  });
+```
+
+### `format`記憶體方法中的參數 {/* #format-parameter-from-memory-methods */}
+
+這`format` parameter has been removed from all memory get methods. `MastraDBMessage` is now the default return format everywhere. AI SDK format conversion has moved to dedicated utility functions in `@mastra/ai-sdk/ui`. This change improves tree-shaking by moving UI-specific conversion code to a separate package.
+
+若要遷移，請刪除`format` parameter and use conversion functions for AI SDK formats.
+
+```diff
+- const messages = await memory.getMessages({ threadId, format: 'v2' });
+- const uiMessages = await memory.getMessages({ threadId, format: 'ui' });
+
++ const result = await memory.recall({ threadId });
++ const messages = result.messages; // Always MastraDBMessage[]
++
++ // Use conversion functions for AI SDK formats
++ import { toAISdkV5Messages } from '@mastra/ai-sdk/ui';
++ const uiMessages = toAISdkV5Messages(messages);
+```
+
+### `MastraMessageV3`類型 {/* #mastramessagev3-type */}
+
+這`MastraMessageV3` type and related conversion methods have been removed. Messages now convert directly between `MastraMessageV2` (now `MastraDBMessage`) and AI SDK v5 formats. This change simplifies the architecture by removing an intermediary format.
+
+要遷移，請使用`MastraDBMessage` for storage or AI SDK v5 message formats directly.
+
+```diff
+- import type { MastraMessageV3 } from '@mastra/core/agent';
+- const v3Messages = messageList.get.all.v3();
+
++ // For storage
++ const v2Messages = messageList.get.all.v2();
++
++ // For AI SDK v5
++ const uiMessages = messageList.get.all.aiV5.ui();
++ const modelMessages = messageList.get.all.aiV5.model();
+```
+
+### `processors`來自記憶體構造函數的配置 {/* #processors-config-from-memory-constructor */}
+
+這`processors` config option in the Memory constructor is no longer supported and throws an error. Configure processors at the Agent level, where processor behavior is scoped to agent execution.
+
+若要遷移，請使用以下命令將處理器配置從記憶體移至Agent`inputProcessors` and/or `outputProcessors`.
+
+```diff
++ import { TokenLimiter } from '@mastra/core/processors';
++
+  const memory = new Memory({
+    storage,
+    vector,
+    embedder,
+-   processors: [/* ... */],
+  });
+
+  const agent = new Agent({
+    id: 'agent',
+    memory,
++   inputProcessors: [
++     new TokenLimiter({ limit: 4000 }), // Limits historical messages to fit context window
++   ],
+  });
+```
+
+此外，`@mastra/memory/processors` import path has been removed. Import processors from `@mastra/core/processors` instead. See the [processors migration guide](/reference/migrations/upgrade-to-v1/processors#memory-processor-exports-moved-to-core) for details.
+
+有關將處理器與Agent一起使用的更多信息，請參閱[Processors docs](/docs/agents/processors). For a complete example with memory, see the [TokenLimiter reference](/reference/processors/token-limiter-processor#extended-usage-example).

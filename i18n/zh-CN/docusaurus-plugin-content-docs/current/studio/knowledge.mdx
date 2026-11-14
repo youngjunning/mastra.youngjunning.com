@@ -1,0 +1,144 @@
+---
+title: 'Knowledge'
+description: 'Browse the Knowledge instances registered on your Mastra server from Studio, as a page tree and a graph.'
+packages:
+  - '@mastra/core'
+  - '@mastra/server'
+---
+
+# 知识
+
+Studio 的知识页面显示您的Agent所了解的内容：每个范围和页面、它们如何链接以及谁写了什么。使用它来检查您加载的内容并观察Agent的编辑情况。它是只读的。
+
+：：：阿尔法
+
+知识处于阿尔法阶段。其 API 可能会在不同版本之间发生变化。
+
+:::
+
+## 启用路由 {/* #enable-the-routes */}
+
+知识路线是**off by default**. Until you enable them, Studio's Knowledge page says browsing isn't enabled. Register the Knowledge instance on `Mastra` and add the routes:
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core/mastra'
+import { KNOWLEDGE_ROUTES } from '@mastra/server/server-adapter'
+import { knowledge } from './knowledge'
+import { supportAgent } from './agents/support-agent'
+
+export const mastra = new Mastra({
+  agents: { supportAgent },
+  knowledge: { company: knowledge },
+  server: { apiRoutes: [...KNOWLEDGE_ROUTES] },
+})
+```
+
+路由挂载在服务器的 API 前缀下，`/api/knowledge` by default, and need `@mastra/core` 1.81.0 or later. With 1.81.0, Studio counts links only among the pages it has loaded. [Server routes](/reference/server/routes#knowledge) lists each route, its parameters and its errors.
+
+## 你所看到的 {/* #what-you-see */}
+
+* **树**：每个范围及其内部的页面，都按照您的Agent组织它们的方式嵌套。
+* **图形**：相同的页面以及它们的连接方式。行显示每个页面的父页面、其注释提到的页面、其正文中写入的链接以及哪些范围授予对哪些页面的访问权限。每种线都有一个图例命名。在任一视图中选择一个页面将其打开。
+* **页**：正文、版本和最后更新者、其作者注释、其子页面、其他页面上提及它的注释以及它的固定对象。
+* **活动**：每个页面的创建、编辑、移动、合并、注释和固定的历史记录，以及每个页面的作者和时间。
+* **搜索**：页面名称、描述、正文和注释文本。
+
+在窄屏幕上，树和图表共享一个面板，并在它们之间进行切换以保留所选页面。
+
+当Agent写入时，树、图和打开的页面会立即更新，而无需重新加载。 Studio 跟踪通过向 Mastra 注册的 Knowledge 实例进行的写入。来自同一存储上的另一个进程或另一个实例的写入会在重新加载后显示。
+
+![Studio's Knowledge page: the page tree of a website scope on the left, and the graph of the same pages on the right, grouped around the scope with each branch in its own color.](/img/knowledge/studio-tree-and-graph.png)
+
+将鼠标悬停在图表中或选择一个页面以绘制其链接：绿色实线表示其链接到的页面，橙色虚线表示链接到它的页面。
+
+![A page selected in the graph, with a tooltip reading "2 links in, 2 links out", and its links drawn to the pages they connect.](/img/knowledge/studio-graph-links.png)
+
+聚焦页面以仅查看该页面、其父页面和子页面。
+
+![The graph focused on a Research page: its parent scope above it, four child pages below it, and one incoming link from another branch.](/img/knowledge/studio-graph-focus.png)
+
+在客服人员的聊天中，知识Tool调用显示他们读取或写入的页面，固定页面显示运行收到的内容。两者都链接到此视图中的页面。
+
+## 控制谁看到什么 {/* #control-who-sees-what */}
+
+路由返回的内容取决于您的应用程序是否配置了身份验证（`server.auth` or `studio.auth`):
+
+* **无授权：**&#x8DEF;由以实例所有者的身份读取，并将每个范围、页面和注释返回给可以访问服务器的任何人。仅将其用于本地或测试项目，并在部署之前添加身份验证。
+* **授权：**&#x8DEF;由仅返回登录用户可以读取的内容。在`authorize`, set the request context key `MASTRA_KNOWLEDGE_PRINCIPALS_KEY` to the user's Knowledge scopes. Knowledge applies the same access rules agents use. In the alpha, these rules aren't an [isolation boundary](/docs/knowledge/scopes-and-access), so don't store content that must never reach another user.
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core/mastra'
+import { KNOWLEDGE_ROUTES, MASTRA_KNOWLEDGE_PRINCIPALS_KEY } from '@mastra/server/server-adapter'
+import { appAuthorize } from './auth' // your existing authorization
+
+export const mastra = new Mastra({
+  server: {
+    apiRoutes: [...KNOWLEDGE_ROUTES],
+    auth: {
+      // authenticateToken, ...
+      authorize: async (path, method, user, context) => {
+        if (path.startsWith('/api/knowledge')) {
+          context
+            .get('requestContext')
+            .set(
+              MASTRA_KNOWLEDGE_PRINCIPALS_KEY,
+              user.isAdmin ? 'all' : [`org:${user.orgId}`, `team:${user.orgId}:${user.teamId}`],
+            )
+          return true
+        }
+        return appAuthorize(path, method, user, context)
+      },
+    },
+  },
+})
+```
+
+如果您设置了不同的前缀，请更改`/api/knowledge` check in `authorize` to match. Otherwise the key isn't set and the routes return `403`.
+
+一个`authorize` function replaces the server's rules and role checks for every route, so keep your app's existing decision for the other paths, as above. Returning `true` for everything would let any signed-in user call any route.
+
+将值设置为范围数组，或者`'all'` for someone who should see the whole instance. An empty array reads nothing. See [Knowledge access and errors](/reference/server/routes#knowledge-access-and-errors) for what other values return. If you configure `studio.auth`, Studio requests use it instead of `server.auth`, so set the key in that `authorize`.
+
+### 提供者`authorizeUser` {/* #providers-with-authorizeuser */}
+
+服务器从不调用`authorize` when the auth provider defines `authorizeUser`. This includes any `MastraAuthProvider` subclass that implements it, and every `CompositeAuth`. For these providers, set the key in a [server middleware](/docs/server/middleware) instead:
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core/mastra'
+import { KNOWLEDGE_ROUTES, MASTRA_KNOWLEDGE_PRINCIPALS_KEY } from '@mastra/server/server-adapter'
+import { auth, getSessionUser } from './auth' // your provider and session lookup
+
+export const mastra = new Mastra({
+  server: {
+    apiRoutes: [...KNOWLEDGE_ROUTES],
+    auth,
+    middleware: [
+      {
+        path: '/api/knowledge/*',
+        handler: async (c, next) => {
+          const user = await getSessionUser(c.req.raw)
+          if (user) {
+            c.get('requestContext').set(
+              MASTRA_KNOWLEDGE_PRINCIPALS_KEY,
+              user.isAdmin ? 'all' : [`org:${user.orgId}`, `team:${user.orgId}:${user.teamId}`],
+            )
+          }
+          await next()
+        },
+      },
+    ],
+  },
+})
+```
+
+服务器中间件在路由的身份验证检查之前运行，因此登录用户尚未位于请求上下文中。使用应用程序自己的会话检查从请求中查找用户，如上所述。此后，路由的身份验证仍会运行，并拒绝您的Provider不接受的呼叫者。更改中间件`path` if you set a different prefix.
+
+### 部署说明 {/* #deployment-notes */}
+
+* **无 RBAC 提供者：**&#x8FD9;`knowledge:read` check is skipped, so any authenticated user with a principal mapping can read the pages those principals cover, in every instance.
+* **通过 FGA Provider：**&#x6BCF;个知识实例都单独检查`knowledge:read`. A user sees only the instances you grant. See [Knowledge access and errors](/reference/server/routes#knowledge-access-and-errors).
+* **巢JS：**&#x4E;estJS 适配器尚不支持知识路由。
+
+## 建立你自己的观点 {/* #build-your-own-view */}
+
+要在您自己的应用程序中显示知识更改，请订阅[`knowledge.onChange()`](/reference/knowledge/knowledge-class#onchange). Events carry IDs, not content. Read the page again under the user's scopes before you show it to them. A `page` `delete` event can't be read again, so remove the page from your view. A `page` `merge` event's `pageId` is the target, so also remove the merged-away page in `sourceId`. A `scope` event is sent for a new scope only, not for its child scopes or template pages, so list the scope again to find them.

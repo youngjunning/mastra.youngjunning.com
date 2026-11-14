@@ -1,0 +1,68 @@
+---
+title: "Reference: withSseHeartbeat() | AI SDK"
+description: "Wraps a server-sent events Response so it emits periodic : heartbeat comments while the underlying stream is idle."
+packages:
+  - "@mastra/ai-sdk"
+---
+
+import PropertiesTable from "@site/src/components/PropertiesTable";
+
+# withSseHeartbeat()
+
+包装服务器发送的事件`Response`所以它发出周期性的`: heartbeat`当底层流空闲时发表评论。Agent和负载均衡器通常会关闭一段时间内不发送任何字节的连接，这会在长时间推理突发或缓慢的Tool调用期间丢弃响应。
+
+当您自己构建响应时使用此选项[`handleChatStream()`](/reference/ai-sdk/handle-chat-stream), [`handleWorkflowStream()`](/reference/ai-sdk/handle-workflow-stream), or [`handleNetworkStream()`](/reference/ai-sdk/handle-network-stream). [`chatRoute()`](/reference/ai-sdk/chat-route)通过其内部应用相同的包装器`heartbeatMs`选项。
+
+## 使用示例 {/* #usage-example */}
+
+Next.js 应用程序路由器示例：
+
+```typescript title="app/api/chat/route.ts"
+import { handleChatStream, withSseHeartbeat } from '@mastra/ai-sdk'
+import { createUIMessageStreamResponse } from 'ai'
+import { mastra } from '@/src/mastra'
+
+export async function POST(req: Request) {
+  const params = await req.json()
+  const stream = await handleChatStream({
+    mastra,
+    agentId: 'weatherAgent',
+    version: 'v7',
+    params,
+  })
+  return withSseHeartbeat(createUIMessageStreamResponse({ stream }), 15000)
+}
+```
+
+编码后包装响应。`handleChatStream()` returns a stream of UI message chunks, and heartbeats are raw SSE comments that only exist once those chunks are serialized to the wire format.
+
+## 参数 {/* #parameters */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'response',
+  type: 'Response',
+  description: 'The server-sent events response to wrap. Status, status text, and headers are preserved.',
+  isOptional: false,
+},
+{
+  name: 'heartbeatMs',
+  type: 'number',
+  description:
+    'Interval in milliseconds between heartbeats. Omit it or pass a value of `0` or less to disable heartbeats.',
+  isOptional: true,
+},
+]}
+/>
+
+## 退货 {/* #returns */}
+
+一个`Response` that streams the source body with heartbeat comments inserted during idle periods. The input response is returned unchanged when `heartbeatMs` is omitted, is `0` or less, or the response has no body.
+
+## 行为 {/* #behavior */}
+
+* 心跳仅插入完整的 SSE 帧之间，因此部分交付的帧永远不会被分割。
+* 源数据、流完成和流错误始终优先于到期的心跳。
+* 取消包装的响应将取消源流并清除待处理的心跳计时器。
+* 一个`RangeError` is thrown when heartbeats are enabled with a value that can't be scheduled with a timer, meaning a non-finite number or a value greater than `2147483647`. Use `assertValidHeartbeatMs()` to apply the same check to user-supplied configuration before you start streaming.

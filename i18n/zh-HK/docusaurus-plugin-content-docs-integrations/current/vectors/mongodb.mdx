@@ -1,0 +1,1020 @@
+---
+title: "MongoDB | Vector Stores"
+description: "Run MongoDB Vector Search from Mastra with automatic or manual embedding, metadata filtering, hybrid search, and indexing of existing collections."
+packages:
+  - "@mastra/mongodb"
+  - "@mastra/voyageai"
+---
+
+# MongoDB向量存儲
+
+這`MongoDBVector`類別提供向量搜尋使用[MongoDB 向量搜尋](https://www.mongodb.com/docs/atlas/atlas-vector-search/)。它可以在 MongoDB 集合中實現高效的相似性搜尋和元資料過濾。
+
+## 安裝 {/* #installation */}
+
+```bash npm2yarn
+npm install @mastra/mongodb@latest
+```
+
+## 使用範例 {/* #usage-example */}
+
+```typescript
+import { MongoDBVector } from '@mastra/mongodb'
+
+const store = new MongoDBVector({
+  id: 'mongodb-vector',
+  uri: process.env.MONGODB_URI,
+  dbName: process.env.MONGODB_DB_NAME,
+})
+```
+
+### 自訂嵌入欄位路徑 {/* #custom-embedding-field-path */}
+
+如果您需要將嵌入儲存在嵌套欄位結構中（例如，與現有的 MongoDB 集合整合），請使用`embeddingFieldPath` option:
+
+```typescript
+import { MongoDBVector } from '@mastra/mongodb'
+
+const store = new MongoDBVector({
+  id: 'mongodb-vector',
+  uri: process.env.MONGODB_URI,
+  dbName: process.env.MONGODB_DB_NAME,
+  embeddingFieldPath: 'text.contentEmbedding', // Store embeddings at text.contentEmbedding
+})
+```
+
+## 建構函數選項 {/* #constructor-options */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'id',
+  type: 'string',
+  description: 'Unique identifier for this vector store instance',
+},
+{
+  name: 'uri',
+  type: 'string',
+  description: 'MongoDB connection string',
+},
+{
+  name: 'dbName',
+  type: 'string',
+  description: 'Name of the MongoDB database to use',
+},
+{
+  name: 'options',
+  type: 'MongoClientOptions',
+  isOptional: true,
+  description: 'Optional MongoDB client options',
+},
+{
+  name: 'embeddingFieldPath',
+  type: 'string',
+  isOptional: true,
+  defaultValue: 'embedding',
+  description:
+    "Path to the field that stores vector embeddings. Supports nested paths using dot notation (e.g., 'text.contentEmbedding').",
+},
+{
+  name: 'autoEmbed',
+  type: 'MongoDBAutoEmbedConfig',
+  isOptional: true,
+  description:
+    "Automated Embedding defaults for indexes this store creates, such as `{ model: 'voyage-4' }`. An index created without its own `autoEmbed` or `dimension` uses these settings, which makes the store embed text server-side instead of receiving vectors.",
+},
+]}
+/>
+
+## 方法 {/* #methods */}
+
+### `connect()` {/* #connect */}
+
+建立與 MongoDB 伺服器的連線。這會在第一次使用時自動調用，但如果需要也可以明確調用。
+
+```typescript
+await store.connect()
+```
+
+### `createIndex()` {/* #createindex */}
+
+
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the collection to create',
+},
+{
+  name: 'dimension',
+  type: 'number',
+  isOptional: true,
+  description:
+    'Vector dimension (must match your embedding model). Required unless `autoEmbed` is set, where the embedding model determines the dimension. Passing both is an error.',
+},
+{
+  name: 'autoEmbed',
+  type: 'MongoDBAutoEmbedConfig',
+  isOptional: true,
+  description:
+    'Generate the embeddings in MongoDB instead of supplying vectors. See [Automated Embedding](#automated-embedding) for the supported fields.',
+},
+{
+  name: 'metric',
+  type: "'cosine' | 'euclidean' | 'dotproduct'",
+  isOptional: true,
+  defaultValue: 'cosine',
+  description: 'Distance metric for similarity search',
+},
+{
+  name: 'filterFields',
+  type: 'string[]',
+  isOptional: true,
+  description:
+    'Metadata field names to declare as filter fields in the MongoDB vectorSearch index (registered as `metadata.<field>`). Queries that filter only on declared fields are pushed directly into `$vectorSearch` instead of pre-filtering candidate `_id`s, avoiding the 16 MB BSON limit on large result sets. Filters that reference an undeclared field, or use an operator `$vectorSearch` does not support, fall back to the pre-filter automatically.',
+},
+{
+  name: 'collectionName',
+  type: 'string',
+  isOptional: true,
+  description:
+    'Store the vectors on an existing (operational) collection instead of a managed collection named after the index. The collection is never created or dropped by this store when set. Defaults to `indexName`.',
+},
+{
+  name: 'searchIndexName',
+  type: 'string',
+  isOptional: true,
+  description:
+    'Name for the MongoDB vectorSearch index created on the collection. Defaults to `${indexName}_vector_index`.',
+},
+{
+  name: 'allowWrites',
+  type: 'boolean',
+  isOptional: true,
+  defaultValue: 'false',
+  description:
+    'Opt-in to write operations (`upsert`, `updateVector`, `deleteVector`, `deleteVectors`) on a bring-your-own collection. By default a BYO index is read-only: the store never modifies or deletes caller-owned operational documents. Ignored for managed collections, which are always writable. The policy is persisted with the index registration and survives restarts.',
+},
+]}
+/>
+
+### `waitForIndexReady()` {/* #waitforindexready */}
+
+建立後等待索引準備就緒。當您需要確保索引在執行操作之前準備好時很有用。
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index to wait for',
+},
+{
+  name: 'timeoutMs',
+  type: 'number',
+  isOptional: true,
+  defaultValue: '60000',
+  description: 'Maximum time to wait in milliseconds',
+},
+{
+  name: 'checkIntervalMs',
+  type: 'number',
+  isOptional: true,
+  defaultValue: '2000',
+  description: 'Interval between status checks in milliseconds',
+},
+]}
+/>
+
+### `upsert()` {/* #upsert */}
+
+新增或更新集合中的向量及其元資料。在自帶索引上，這需要`allowWrites: true` at `createIndex()` time because BYO collections are read-only by default.
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the collection to insert into',
+},
+{
+  name: 'vectors',
+  type: 'number[][]',
+  isOptional: true,
+  description:
+    'Array of embedding vectors. Required unless the index was created with `autoEmbed`, where MongoDB generates them from `documents` and supplying vectors is an error.',
+},
+{
+  name: 'metadata',
+  type: 'Record<string, any>[]',
+  isOptional: true,
+  description: 'Metadata for each vector',
+},
+{
+  name: 'ids',
+  type: 'string[]',
+  isOptional: true,
+  description: 'Optional vector IDs (auto-generated if not provided)',
+},
+{
+  name: 'documents',
+  type: 'string[]',
+  isOptional: true,
+  description:
+    'Document text content to store alongside vectors. On an `autoEmbed` index this is the text MongoDB embeds, and it is required.',
+},
+]}
+/>
+
+### `query()` {/* #query */}
+
+使用可選的元資料過濾搜尋相似的向量。
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the collection to search in',
+},
+{
+  name: 'queryVector',
+  type: 'number[]',
+  isOptional: true,
+  description: 'Query vector to find similar vectors for. Supply this or `queryText`, not both.',
+},
+{
+  name: 'queryText',
+  type: 'string',
+  isOptional: true,
+  description:
+    'Text for MongoDB to embed at query time. `autoEmbed` indexes only, and mutually exclusive with `queryVector`. For full-text matching use `textQuery()` instead.',
+},
+{
+  name: 'model',
+  type: 'string',
+  isOptional: true,
+  description:
+    "Embedding model for this query, overriding the index's. Requires `queryText`, and must be compatible with the index's model.",
+},
+{
+  name: 'topK',
+  type: 'number',
+  isOptional: true,
+  defaultValue: '10',
+  description: 'Number of results to return',
+},
+{
+  name: 'filter',
+  type: 'Record<string, any>',
+  isOptional: true,
+  description: 'Metadata filters (applies to the `metadata` field)',
+},
+{
+  name: 'documentFilter',
+  type: 'Record<string, any>',
+  isOptional: true,
+  description: 'Filters on original document fields (not just metadata)',
+},
+{
+  name: 'includeVector',
+  type: 'boolean',
+  isOptional: true,
+  defaultValue: 'false',
+  description: 'Whether to include vector data in results',
+},
+{
+  name: 'numCandidates',
+  type: 'number',
+  isOptional: true,
+  defaultValue: '20 * topK (capped at 10000)',
+  description:
+    'Number of candidates the HNSW graph considers before selecting top-K results. Higher values improve recall at the cost of latency. See: https://www.mongodb.com/docs/atlas/atlas-vector-search/vector-search-stage/',
+},
+{
+  name: 'metadataMode',
+  type: "'field' | 'document'",
+  isOptional: true,
+  defaultValue: 'field',
+  description:
+    "`'field'` (default) projects the managed `metadata`/`document` fields, and `filter` fields are matched against the `metadata` subdocument. `'document'` returns the full source document as `metadata` — use for bring-your-own operational collections whose documents have their own shape — and `filter` fields are matched against the **root** document (no `metadata.` prefix). The embedding field is omitted from `metadata` by default (to avoid payload bloat); set `includeVector: true` to retain it in `metadata` and also expose it as a top-level `vector`.",
+},
+]}
+/>
+
+### `createSearchIndex()` {/* #createsearchindex */}
+
+在支援索引的集合上配置 MongoDB 搜尋（BM25/全文）索引，並將其記錄為文字搜尋索引`textQuery()` and `hybridQuery()` will target.
+
+**託管館藏與自帶館藏：**
+
+* 對於一個**managed** index (created without `collectionName`), `createIndex()` already provisions a *dynamic* full-text index named `${collectionName}_search_index` (covering all string fields). `createSearchIndex()` is therefore only needed when you want a **field-restricted** mapping or a **custom index name**.
+* 對於一個**bring-your-own** index (created with `collectionName`), `createIndex()` doesn't auto-create any full-text index. Enabling `textQuery()`/`hybridQuery()` on a caller-owned operational collection is opt-in. Call `createSearchIndex()` explicitly to provision the (billable) text index. Until you do, `textQuery()`/`hybridQuery()` throw a clear error rather than querying a non-existent index.
+
+命名：
+
+* 什麼時候`fields` is provided **without** an explicit `searchIndexName`, the field-mapped index is created under a **distinct** default name (`${collectionName}_${indexName}_search_fields_index`, unique per logical index) so it doesn't collide with a managed collection's auto-created dynamic index and get silently ignored. This distinct index is persisted as the text-search index, so `textQuery()`/`hybridQuery()` use the restricted mapping automatically.
+* 什麼時候`searchIndexName` is provided, that exact name is used and persisted. `textQuery()`/`hybridQuery()` resolve the persisted name automatically. You can also override the name per call via their `searchIndexName` / `textSearchIndexName` parameters.
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the Mastra index whose collection will have the search index',
+},
+{
+  name: 'fields',
+  type: 'string[]',
+  isOptional: true,
+  description: 'Field names to index for full-text search. Omit for dynamic mapping (all string fields).',
+},
+{
+  name: 'searchIndexName',
+  type: 'string',
+  isOptional: true,
+  defaultValue:
+    '${collectionName}_search_index (or ${collectionName}_${indexName}_search_fields_index when `fields` is given)',
+  description:
+    'Name for the MongoDB Search index. When `fields` is provided and this is omitted, a distinct default name that is unique per logical index is used, so the field mapping is not shadowed by the auto-created dynamic index and two logical indexes on the same collection do not collide.',
+},
+{
+  name: 'waitUntilReady',
+  type: 'boolean',
+  isOptional: true,
+  defaultValue: 'false',
+  description:
+    'When true, block until the provisioned full-text index reports READY before resolving. Defaults to false to avoid surprising latency; call `waitForSearchIndexReady()` explicitly if you prefer to await separately.',
+},
+]}
+/>
+
+```typescript
+await store.createSearchIndex({
+  indexName: 'precedents',
+  fields: ['note', 'description'],
+})
+```
+
+欄位對應索引名稱包括邏輯`indexName`, so two logical indexes on the same collection get distinct text indexes. Calling `createSearchIndex()` again for the *same* logical index with different `fields` updates the existing text index definition in place. You don't need to drop it first.
+
+### `waitForSearchIndexReady()` {/* #waitforsearchindexready */}
+
+等待索引的全文 (BM25) 搜尋索引變成 READY。`waitForIndexReady()` polls only the vectorSearch index; `createSearchIndex()` returns while the MongoDB Search full-text index is still building, so an immediate `textQuery()`/`hybridQuery()` can intermittently fail. Call this (or pass `waitUntilReady: true` to `createSearchIndex()`) to block until the resolved text index reports READY.
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Logical name of the index whose text index to wait for',
+},
+{
+  name: 'searchIndexName',
+  type: 'string',
+  isOptional: true,
+  description: 'Override the resolved text-search index name',
+},
+{
+  name: 'timeoutMs',
+  type: 'number',
+  isOptional: true,
+  defaultValue: '60000',
+  description: 'Maximum time to wait in milliseconds',
+},
+{
+  name: 'checkIntervalMs',
+  type: 'number',
+  isOptional: true,
+  defaultValue: '2000',
+  description: 'Interval between status checks in milliseconds',
+},
+]}
+/>
+
+```typescript
+await store.createSearchIndex({ indexName: 'precedents', fields: ['note'] })
+await store.waitForSearchIndexReady({ indexName: 'precedents' })
+```
+
+### `textQuery()` {/* #textquery */}
+
+針對 MongoDB 搜尋索引執行全文 (BM25) 搜尋。預設情況下，它的目標是為此索引記錄的文字搜尋索引（由`createSearchIndex()`, or the dynamic `${collectionName}_search_index` auto-created by `createIndex()`). Pass `searchIndexName` to target a specific index for this call.
+
+此處的元資料過濾器（例如`hybridQuery()`) are applied via a `$match` stage. For the vector branch of `hybridQuery()`, filters on fields not declared via `filterFields` at index creation are transparently materialised as candidate `_id`s (the same fallback `query()` uses), so undeclared-field filters don't error.
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the Mastra index to search',
+},
+{
+  name: 'query',
+  type: 'string',
+  description: 'Full-text search query string',
+},
+{
+  name: 'paths',
+  type: 'string[]',
+  description: 'Field paths to search in (e.g., ["note", "description"])',
+},
+{
+  name: 'topK',
+  type: 'number',
+  isOptional: true,
+  defaultValue: '10',
+  description: 'Number of results to return',
+},
+{
+  name: 'filter',
+  type: 'Record<string, any>',
+  isOptional: true,
+  description: 'Metadata filters (applies to the `metadata` field)',
+},
+{
+  name: 'metadataMode',
+  type: "'field' | 'document'",
+  isOptional: true,
+  defaultValue: 'field',
+  description:
+    "`'field'` (default) projects the managed `metadata`/`document` fields. `'document'` returns the full source document as `metadata`.",
+},
+{
+  name: 'searchIndexName',
+  type: 'string',
+  isOptional: true,
+  description:
+    'Override the resolved full-text search index name for this call. Defaults to the index persisted by `createSearchIndex()` / `createIndex()`.',
+},
+]}
+/>
+
+```typescript
+const results = await store.textQuery({
+  indexName: 'precedents',
+  query: 'shell company offshore',
+  paths: ['note'],
+  topK: 10,
+})
+```
+
+### `hybridQuery()` {/* #hybridquery */}
+
+運行混合搜索，透過 MongoDB 的伺服器端將向量相似性與全文結果融合在一起`$rankFusion`. The feature requires MongoDB 8.0 or later and is generally available from 8.1. MongoDB Atlas 8.0.x supports it where enabled, although enablement may require a support case. A full-text search index must exist. Managed indexes create one automatically, while bring-your-own collections require an explicit `createSearchIndex()` call.
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the Mastra index to search',
+},
+{
+  name: 'queryVector',
+  type: 'number[]',
+  isOptional: true,
+  description: 'Query vector for the vector branch. Supply this or `queryText`, not both.',
+},
+{
+  name: 'queryText',
+  type: 'string',
+  isOptional: true,
+  description:
+    'Text for MongoDB to embed for the vector branch. `autoEmbed` indexes only. Independent of `query`, so each branch can search for something different.',
+},
+{
+  name: 'model',
+  type: 'string',
+  isOptional: true,
+  description: "Embedding model for the vector branch, overriding the index's. Requires `queryText`.",
+},
+{
+  name: 'query',
+  type: 'string',
+  description: 'Full-text search query string',
+},
+{
+  name: 'paths',
+  type: 'string[]',
+  description: 'Field paths to search in for full-text (e.g., ["note", "description"])',
+},
+{
+  name: 'topK',
+  type: 'number',
+  isOptional: true,
+  defaultValue: '10',
+  description: 'Number of results to return',
+},
+{
+  name: 'filter',
+  type: 'Record<string, any>',
+  isOptional: true,
+  description: 'Metadata filters (applies to both vector and text branches)',
+},
+{
+  name: 'weights',
+  type: '{ vector?: number; text?: number }',
+  isOptional: true,
+  description: 'Relative weights for vector vs. text results in fusion (default: 1:1)',
+},
+{
+  name: 'numCandidates',
+  type: 'number',
+  isOptional: true,
+  defaultValue: '20 * topK (capped at 10000)',
+  description: 'Number of candidates for the vector search branch',
+},
+{
+  name: 'metadataMode',
+  type: "'field' | 'document'",
+  isOptional: true,
+  defaultValue: 'field',
+  description:
+    "`'field'` (default) projects the managed `metadata`/`document` fields. `'document'` returns the full source document as `metadata`.",
+},
+{
+  name: 'textSearchIndexName',
+  type: 'string',
+  isOptional: true,
+  description:
+    'Override the resolved full-text search index name for this call. Defaults to the index persisted by `createSearchIndex()` / `createIndex()`.',
+},
+]}
+/>
+
+```typescript
+const results = await store.hybridQuery({
+  indexName: 'precedents',
+  queryVector: embedding,
+  query: 'shell company offshore',
+  paths: ['note'],
+  topK: 10,
+  weights: { vector: 1, text: 1.5 }, // Favor text matches
+})
+```
+
+`hybridQuery()`需要 MongoDB 8.0 或更高版本`$rankFusion` stage, which is generally available from 8.1. On 8.0.x, the stage runs where enabled, including MongoDB Atlas, but enablement may require a support case. If your deployment is older or lacks `$rankFusion`, run `query()` and `textQuery()` separately before merging the results client-side.
+
+### `describeIndex()` {/* #describeindex */}
+
+
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the collection to describe',
+},
+]}
+/>
+
+返回：
+
+```typescript
+interface IndexStats {
+  dimension: number
+  count: number
+  metric?: 'cosine' | 'euclidean' | 'dotproduct'
+}
+```
+
+在一個`autoEmbed` index, `dimension` is read from the index definition and reports MongoDB's default of `1024` when the index doesn't pin one. `metric` is omitted when the `autoEmbed` index doesn't specify a similarity. `count` counts documents that carry the embedded text field, since the generated vectors aren't stored on your documents.
+
+### `deleteIndex()` {/* #deleteindex */}
+
+刪除向量索引。行為取決於索引的創建方式：
+
+* **管理索引**（創建時沒有`collectionName`): drops the entire collection and all its data.
+* **自帶索引**（創建於`collectionName`): drops the MongoDB vectorSearch index. If `createSearchIndex()` provisioned a companion full-text search index, it drops that index too. A vectorSearch or full-text index that another logical index on the same collection still references is kept for that index. The caller's operational collection and its documents are preserved. This store never drops a collection it didn't create.
+
+BYO 分類在建立索引時會持久記錄，因此即使透過不同的程序也能正確應用它（例如，由安裝作業建立的索引，後來由長期服務刪除）。始終透過**logical index name** (the `indexName` used at `createIndex`), not the physical collection name.
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Logical name of the index to delete',
+},
+]}
+/>
+
+### `listIndexes()` {/* #listindexes */}
+
+列出了**logical** Mastra index names (the `indexName` values passed to `createIndex`), not physical collection names. For a bring-your-own index whose data lives in an operational collection, the logical index name is returned instead of the physical collection name. The value can be passed straight back into `deleteIndex()` / `describeIndex()`. Managed indexes created before durable metadata was introduced are still discovered via their `${name}_vector_index` search index. The internal registry collection is never listed.
+
+返回：`Promise<string[]>`
+
+### `updateVector()` {/* #updatevector */}
+
+透過 ID 或元資料過濾器更新單一向量。任何一個`id` or `filter` must be provided, but not both.
+
+> **預設情況下，自備收藏是唯讀的。** `upsert()`, `updateVector()`, `deleteVector()`, and `deleteVectors()` throw a USER-category error on a BYO index unless it was created with `allowWrites: true`. See [Indexing an existing collection](#indexing-an-existing-collection).
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the collection containing the vector',
+},
+{
+  name: 'id',
+  type: 'string',
+  isOptional: true,
+  description: 'ID of the vector entry to update (mutually exclusive with filter)',
+},
+{
+  name: 'filter',
+  type: 'Record<string, any>',
+  isOptional: true,
+  description: 'Metadata filter to identify vector(s) to update (mutually exclusive with id)',
+},
+{
+  name: 'update',
+  type: 'object',
+  description: 'Update data containing vector and/or metadata',
+},
+{
+  name: 'update.vector',
+  type: 'number[]',
+  isOptional: true,
+  description: 'New vector data to update',
+},
+{
+  name: 'update.metadata',
+  type: 'Record<string, any>',
+  isOptional: true,
+  description: 'New metadata to update',
+},
+]}
+/>
+
+### `deleteVector()` {/* #deletevector */}
+
+按 ID 從索引中刪除特定向量條目。
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the collection containing the vector',
+},
+{
+  name: 'id',
+  type: 'string',
+  description: 'ID of the vector entry to delete',
+},
+]}
+/>
+
+### `deleteVectors()` {/* #deletevectors */}
+
+透過 ID 或元資料過濾器刪除多個向量。任何一個`ids` or `filter` must be provided, but not both.
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the collection containing the vectors to delete',
+},
+{
+  name: 'ids',
+  type: 'string[]',
+  isOptional: true,
+  description: 'Array of vector IDs to delete (mutually exclusive with filter)',
+},
+{
+  name: 'filter',
+  type: 'Record<string, any>',
+  isOptional: true,
+  description: 'Metadata filter to identify vectors to delete (mutually exclusive with ids)',
+},
+]}
+/>
+
+### `disconnect()` {/* #disconnect */}
+
+關閉 MongoDB 用戶端連線。使用商店後應調用。
+
+## 回應類型 {/* #response-types */}
+
+查詢結果以如下格式傳回：
+
+```typescript
+interface QueryResult {
+  id: string
+  score: number
+  metadata?: Record<string, any>
+  vector?: number[] // Only included if includeVector is true
+  document?: string // Source text stored with the vector, when available
+}
+```
+
+## 錯誤處理 {/* #error-handling */}
+
+商店拋出可以捕獲的類型錯誤：
+
+```typescript
+try {
+  await store.query({
+    indexName: 'my_collection',
+    queryVector: queryVector,
+  })
+} catch (error) {
+  // Handle specific error cases
+  if (error.message.includes('Invalid collection name')) {
+    console.error(
+      'Collection name must start with a letter or underscore and contain only valid characters.',
+    )
+  } else if (error.message.includes('Collection not found')) {
+    console.error('The specified collection does not exist')
+  } else {
+    console.error('Vector store error:', error.message)
+  }
+}
+```
+
+## 自動嵌入 {/* #automated-embedding */}
+
+MongoDB 可以為您產生嵌入。建立索引`autoEmbed` and a Voyage AI model, write plain text through `documents`, and search with `queryText`. No embedding provider runs in your application, and no vectors travel through it.
+
+```typescript
+import { MongoDBVector } from '@mastra/mongodb'
+
+const store = new MongoDBVector({
+  id: 'mongodb-vector',
+  uri: process.env.MONGODB_URI,
+  dbName: process.env.MONGODB_DB_NAME,
+})
+
+// No `dimension`: the embedding model determines it.
+await store.createIndex({
+  indexName: 'movies',
+  autoEmbed: { model: 'voyage-4' },
+  filterFields: ['year'],
+})
+
+// Automated Embedding indexes build slower than client-embedded ones.
+await store.waitForIndexReady({ indexName: 'movies', timeoutMs: 300000 })
+
+// No `vectors`: MongoDB embeds the text as documents are written.
+await store.upsert({
+  indexName: 'movies',
+  documents: [
+    'A lonely astronaut adrift near a strange ocean planet.',
+    'A heist crew robs a bank vault in Paris.',
+  ],
+  metadata: [{ year: 1972 }, { year: 2001 }],
+})
+
+// No `queryVector`: MongoDB embeds the query string with the same model.
+const results = await store.query({
+  indexName: 'movies',
+  queryText: 'space opera about isolation',
+  topK: 5,
+  filter: { year: { $gt: 1970 } },
+})
+```
+
+### `autoEmbed`選項 {/* #autoembed-options */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'model',
+  type: 'string',
+  description:
+    'Voyage AI model to embed with, for example `voyage-4`. MongoDB rejects a name it does not support and lists the ones it does.',
+},
+{
+  name: 'path',
+  type: 'string',
+  isOptional: true,
+  defaultValue: 'document',
+  description:
+    'Text field to embed. Defaults to the managed `document` field that `upsert({ documents })` writes. Point it at a field of your own to index an existing collection in place.',
+},
+{
+  name: 'similarity',
+  type: "'cosine' | 'dotProduct' | 'euclidean'",
+  isOptional: true,
+  description: "Vector similarity function. Defaults to MongoDB's own default when omitted.",
+},
+{
+  name: 'numDimensions',
+  type: 'number',
+  isOptional: true,
+  defaultValue: '1024',
+  description: 'Length of the generated embeddings. Common values are 256, 512, 1024, and 2048.',
+},
+{
+  name: 'quantization',
+  type: "'float' | 'scalar' | 'binary' | 'binaryNoRescore'",
+  isOptional: true,
+  defaultValue: 'scalar',
+  description: 'Storage format for the generated vectors.',
+},
+{
+  name: 'indexingMethod',
+  type: "'hnsw' | 'flat'",
+  isOptional: true,
+  defaultValue: 'hnsw',
+  description: 'Index structure for the vector field.',
+},
+{
+  name: 'hnswOptions',
+  type: '{ maxEdges?: number; numEdgeCandidates?: number }',
+  isOptional: true,
+  description: "Tuning for the HNSW graph. MongoDB's defaults suit most workloads.",
+},
+]}
+/>
+
+任何其他字段`autoEmbed` index definition accepts is forwarded to MongoDB as given, so options added after this release work without a package update. Anything omitted keeps MongoDB's default.
+
+**重要提示：**
+
+* 自動嵌入是**MongoDB Preview feature**. It requires an Atlas cluster with Automated Embedding available, or the `mongodb/mongodb-atlas-local:preview` image for local development. Self-managed deployments need `mongot` configured with a Voyage AI API key.
+* Voyage AI API 金鑰必須透過 Atlas UI 進行設定。由 Voyage AI 直接頒發的密鑰會被預設嵌入端點拒絕。
+* **MongoDB 將產生的向量儲存在集合之外**，因此文件僅包含文字。`includeVector: true` isn't supported on an `autoEmbed` index and throws.
+* 嵌入是異步生成的。即使索引報告就緒，查詢也可以在寫入後短時間內合法地不傳回結果。
+* 索引聲明向量場或`autoEmbed` field, never both. Omit `autoEmbed` to keep supplying your own vectors. The client-side path is unchanged.
+* 透過`vectors` to an `autoEmbed` index is an error, since they would be written to a field no index reads.
+* 什麼時候`document` is the embedded field it's no longer a declared filter field, so `documentFilter` uses the `$match` pre-filter automatically. Metadata filters declared through `filterFields` still push into `$vectorSearch`.
+* `updateVector()`拒絕向量更新`autoEmbed` index. Upsert the document with new text instead, and MongoDB re-embeds it.
+* `queryVector`仍然適用於`autoEmbed` index, but the vector must come from a compatible model and match the index `quantization`. MongoDB rejects a mismatch.
+* 對於文件和查詢，嵌入產生按令牌計費。
+
+## 為現有集合建立索引 {/* #indexing-an-existing-collection */}
+
+您可以在現有操作集合上建立向量索引，而不是使用託管集合。當您想要在 MongoDB 資料庫中已存在的文件中新增向量搜尋功能時，這非常有用。
+
+```typescript
+import { MongoDBVector } from '@mastra/mongodb'
+
+const store = new MongoDBVector({
+  id: 'mongodb-vector',
+  uri: process.env.MONGODB_URI,
+  dbName: process.env.MONGODB_DB_NAME,
+})
+
+// Create a vector index on an existing 'transactions' collection
+await store.createIndex({
+  indexName: 'precedents',
+  dimension: 1024,
+  collectionName: 'transactions', // Use existing collection
+  searchIndexName: 'txn_vec_idx', // Custom search index name
+})
+
+// Wait for the index to be ready
+await store.waitForIndexReady({ indexName: 'precedents' })
+
+// Query using document mode to get full source documents
+const hits = await store.query({
+  indexName: 'precedents',
+  queryVector: embeddings,
+  topK: 5,
+  metadataMode: 'document', // Returns full document as metadata
+})
+
+// hits[0].metadata now contains all fields from the source document
+console.log(hits[0].metadata.amount, hits[0].metadata.customField)
+
+// Full-text / hybrid search on a BYO collection is opt-in: provision the text index first.
+await store.createSearchIndex({ indexName: 'precedents', fields: ['note'] })
+```
+
+**重要提示：**
+
+* 該集合必須已經存在並且包含帶有`embedding` field (or the custom `embeddingFieldPath` you configured)
+* 使用時永遠不會建立或刪除集合`collectionName`
+* **BYO 索引預設是唯讀的。** `upsert()`, `updateVector()`, `deleteVector()`, and `deleteVectors()` throw a clear error rather than mutating caller-owned operational documents. To let the store write embeddings into (or delete documents from) your collection, opt in explicitly with `createIndex({ ..., allowWrites: true })`. The policy is persisted and survives restarts. Entries written by older versions without the flag are treated as read-only (fail closed).
+* 使用`metadataMode: 'document'` when querying to retrieve the full source document as `metadata`
+* 在`'document'` mode the embedding is omitted from `metadata` by default; pass `includeVector: true` to retain it (and also expose it as a top-level `vector`)
+* **濾`'document'` mode operates on root document fields**，不是嵌套的`metadata.` subdocument. `filter: { lane: 'fraud' }` matches the top-level `lane` field of your operational documents (in the default `'field'` mode, bare fields are rewritten to `metadata.<field>` for managed collections). Both the pushdown and `$match` fallback paths honor this.
+* **本國的`ObjectId` `_id`s are supported.**&#x64CD;作性集合通常關鍵在於`ObjectId`; query results coerce `_id` to a string (the `QueryResult.id` contract), and `deleteVector()`/`updateVector()`/`deleteVectors()` accept that string and match the underlying `ObjectId` document. Managed collections (string `_id`s) are unaffected.
+* BYO 集合上的全文搜尋和混合搜尋**opt-in**: no full-text index is auto-created, so call `createSearchIndex()` before `textQuery()`/`hybridQuery()`. The full-text index builds asynchronously. Call `waitForSearchIndexReady()` (or pass `waitUntilReady: true`) before an immediate text/hybrid query.
+* `deleteIndex()`在 BYO 索引上會刪除向量索引（如果建立了文字索引，則刪除文字索引），但是**preserves** the collection and its documents
+
+## 最佳實踐 {/* #best-practices */}
+
+* 索引過濾器中使用的元資料欄位以獲得最佳查詢效能。
+* 在元資料中使用一致的欄位命名以避免意外的查詢結果。
+* 定期監控索引和集合統計資料以確保高效搜尋。
+* 對現有集合建立索引時，請確保所有文件都具有所需的`embedding` field.
+
+## 使用範例 {/* #usage-example-1 */}
+
+### 向量嵌入`MongoDB` {/* #vector-embeddings-with-mongodb */}
+
+嵌入是記憶體使用的數字向量`semanticRecall` to retrieve related messages by meaning (not keywords).
+
+：：：筆記
+
+建議將 MongoDB 向量搜尋用於生產用途。對於自託管部署，向量搜尋可用於[local Atlas deployments via the Atlas CLI](https://www.mongodb.com/docs/atlas/cli/current/atlas-cli-deploy-local/).
+
+:::
+
+此設定使用 FastEmbed（一種本地嵌入模型）來產生向量嵌入。
+要使用它，請安裝`@mastra/fastembed`:
+
+```bash npm2yarn
+npm install @mastra/fastembed@latest
+```
+
+將以下內容新增至您的Agent程式：
+
+```typescript title="src/mastra/agents/example-mongodb-agent.ts"
+import { Memory } from '@mastra/memory'
+import { Agent } from '@mastra/core/agent'
+import { MongoDBStore, MongoDBVector } from '@mastra/mongodb'
+import { fastembed } from '@mastra/fastembed'
+
+export const mongodbAgent = new Agent({
+  id: 'mongodb-agent',
+  name: 'mongodb-agent',
+  instructions:
+    'You are an AI agent with the ability to automatically recall memories from previous interactions.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  memory: new Memory({
+    storage: new MongoDBStore({
+      id: 'mongodb-storage',
+      uri: process.env.MONGODB_URI!,
+      dbName: process.env.MONGODB_DB_NAME!,
+    }),
+    vector: new MongoDBVector({
+      id: 'mongodb-vector',
+      uri: process.env.MONGODB_URI!,
+      dbName: process.env.MONGODB_DB_NAME!,
+    }),
+    embedder: fastembed,
+    options: {
+      lastMessages: 10,
+      semanticRecall: {
+        topK: 3,
+        messageRange: 2,
+      },
+      generateTitle: true, // generates descriptive thread titles automatically
+    },
+  }),
+})
+```
+
+### 使用 VoyageAI 進行向量嵌入 {/* #vector-embeddings-with-voyageai */}
+
+VoyageAI 提供針對檢索任務優化的專門嵌入模型。 VoyageAI 還與 MongoDB Atlas 整合以實現多模式嵌入。
+
+```bash npm2yarn
+npm install @mastra/voyageai@latest
+```
+
+基本使用範例：
+
+```typescript title="src/mastra/agents/example-mongodb-voyageai-agent.ts"
+import { Memory } from '@mastra/memory'
+import { Agent } from '@mastra/core/agent'
+import { MongoDBStore, MongoDBVector } from '@mastra/mongodb'
+import { voyage } from '@mastra/voyageai'
+
+export const mongodbVoyageAgent = new Agent({
+  id: 'mongodb-voyage-agent',
+  name: 'MongoDB VoyageAI Agent',
+  instructions: 'You are an AI agent with semantic recall powered by VoyageAI and MongoDB.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  memory: new Memory({
+    storage: new MongoDBStore({
+      id: 'mongodb-storage',
+      uri: process.env.MONGODB_URI!,
+      dbName: process.env.MONGODB_DB_NAME!,
+    }),
+    vector: new MongoDBVector({
+      id: 'mongodb-vector',
+      uri: process.env.MONGODB_URI!,
+      dbName: process.env.MONGODB_DB_NAME!,
+    }),
+    embedder: voyage, // VoyageAI's default model (voyage-3.5, 1024 dimensions)
+    options: {
+      lastMessages: 10,
+      semanticRecall: {
+        topK: 5,
+        messageRange: 2,
+      },
+    },
+  }),
+})
+```
+
+有關詳細的 VoyageAI 嵌入範例，包括專用模型、多模態嵌入和檢索優化，請參閱[VoyageAI embeddings documentation](/models/embeddings#voyageai).
+
+## 有關的 {/* #related */}
+
+* [元資料過濾器](/reference/rag/metadata-filters)
+* [VoyageAI 嵌入文檔](/models/embeddings#voyageai)

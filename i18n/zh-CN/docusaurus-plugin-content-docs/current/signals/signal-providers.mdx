@@ -1,0 +1,281 @@
+---
+title: 'Signal providers | Signals'
+description: 'Build Mastra signal providers that monitor external systems through polling or webhooks and deliver notifications into long-running agent threads.'
+packages:
+  - '@mastra/core'
+---
+
+# 信号提供者
+
+信号提供者监视外部系统并发送[notifications](/docs/signals/notifications)到订阅的Agent线程。例如，提供者可以监视构建管道，并在构建失败时通知订阅该管道的每个线程。
+
+当您的应用程序需要管理哪些线程从哪些源接收事件时，请使用提供程序。这[`SignalProvider`](/reference/signals/signal-provider) base class tracks those subscriptions, runs polling, and forwards notifications to the agent. Your provider supplies the code that reads the external system and matches events to subscriptions. It can also supply tools and processors to the agent.
+
+如果您的服务器已经接收到事件并知道其目标线程，请调用[`agent.sendNotificationSignal()`](/reference/agents/agent#sendnotificationsignalnotification-options) directly. For changing application context, use a [state signal](/docs/signals/state-signals). For context needed by one model request, use a [瞬态无功信号](/docs/signals/sending-signals#send-context-from-a-system).
+
+## Provider如何运作 {/* #how-a-provider-works */}
+
+在Agent中注册Provider`signals` array. It receives events in one of two ways:
+
+* **轮询：** [`poll()`](/reference/signals/signal-provider#polling) checks the external system at regular intervals.
+* **网络钩子：**&#x60A8;的服务器将传入事件传递给[`handleWebhook()`](/reference/signals/signal-provider#webhooks).
+
+对于每个匹配的订阅，您的Provider都会调用受保护的[`notify()`](/reference/signals/signal-provider#notifications) method. This forwards the event to `Agent.sendNotificationSignal()`, using the notification delivery policy, retries, and inbox.
+
+## 将外部身份映射到线程 {/* #map-external-identities-to-threads */}
+
+使用目标线程的[`resourceId` and `threadId`](/docs/memory/message-history#threads-and-resources) to route notifications. The provider also needs an `externalResourceId` to identify what the thread watches, such as the pipeline `acme-app-main`. Choose a stable value that you can match to incoming events.
+
+订阅由所有三个值作为键控，因此一个线程可以监视多个资源，并且多个线程可以监视同一个资源。将额外数据存储在`metadata` rather than in the external id. For webhooks, match the payload to `externalResourceId`, then use the subscription's `resourceId` and `threadId` as the target.
+
+## 快速入门 {/* #quickstart */}
+
+此示例检查管道的构建状态并在失败时通知订阅线程。这`builds` map stands in for your CI service. Replace `fetchBuildStatus()` with a call to that service.
+
+配置[notification storage on your `Mastra` instance](/docs/signals/notifications#storage-and-dispatcher-setup) before using the provider. Without it, `notify()` can't create records.
+
+```typescript title="src/mastra/signals/ci-signals.ts"
+import { SignalProvider } from '@mastra/core/signals'
+import type { SignalProviderTarget, SignalSubscription } from '@mastra/core/signals'
+
+type BuildStatus = {
+  id: string
+  status: 'passed' | 'failed'
+}
+
+const builds = new Map<string, BuildStatus>([
+  ['acme-app-main', { id: 'build_123', status: 'failed' }],
+])
+
+async function fetchBuildStatus(pipeline: string): Promise<BuildStatus> {
+  return builds.get(pipeline) ?? { id: 'build_unknown', status: 'passed' }
+}
+
+export class CiSignals extends SignalProvider<'ci-signals'> {
+  readonly id = 'ci-signals' as const
+  readonly pollInterval = 30_000
+
+  watch(target: SignalProviderTarget, pipeline: string) {
+    return this.subscribe(target, pipeline)
+  }
+
+  unwatch(target: SignalProviderTarget, pipeline: string) {
+    return this.unsubscribe(target, pipeline)
+  }
+
+  async poll(subscriptions: SignalSubscription[]) {
+    for (const sub of subscriptions) {
+      const build = await fetchBuildStatus(sub.externalResourceId)
+
+      if (build.status !== 'failed') continue
+
+      await this.notify(
+        {
+          source: this.id,
+          kind: 'ci-status',
+          priority: 'high',
+          summary: `Build failed for ${sub.externalResourceId}`,
+          payload: build,
+          dedupeKey: `${this.id}:${sub.externalResourceId}:${build.id}`,
+        },
+        { resourceId: sub.resourceId, threadId: sub.threadId },
+      )
+    }
+  }
+}
+```
+
+向Agent注册提供者，然后将线程订阅到它应该监视的管道：
+
+```typescript title="src/mastra/agents/support-agent.ts"
+import { Agent } from '@mastra/core/agent'
+import { CiSignals } from '../signals/ci-signals'
+
+export const ciSignals = new CiSignals()
+
+export const supportAgent = new Agent({
+  id: 'support-agent',
+  name: 'Support Agent',
+  instructions: 'Help the user triage CI updates.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  signals: [ciSignals],
+})
+
+ciSignals.watch({ resourceId: 'user_123', threadId: 'thread_456' }, 'acme-app-main')
+```
+
+Agent连接它、轮询并在管道发生故障时发送通知。登记`supportAgent` on your `Mastra` instance so `notify()` can reach its notification storage.
+
+## 建立一个Provider {/* #build-a-provider */}
+
+### 连接和订阅 {/* #connect-and-subscriptions */}
+
+覆盖[`connect()`](/reference/signals/signal-provider#connection) only when you need setup that depends on the connected agent. Always call `super.connect(agent)` first.
+
+订阅位于受保护的方法后面：
+
+* `subscribe(target, externalResourceId, metadata?)`添加订阅或将元数据合并到现有订阅中。
+* `unsubscribe(target, externalResourceId)`删除一个，并且`unsubscribeAll(target)` removes every subscription for a thread.
+* `getSubscriptions()`, `getSubscriptionsForResource()`, `getSubscriptionsForThread()`, `hasSubscription()`, and `subscriptionCount` read the registry for diagnostics and guards.
+
+仅公开您的应用程序需要的内容。 CI 示例换行`subscribe()` and `unsubscribe()` in public `watch()` and `unwatch()` methods.
+
+### 轮询 {/* #polling */}
+
+放`pollInterval` in milliseconds and implement `poll(subscriptions)` when the source can't push events.
+
+基类处理计时器：
+
+* 当没有订阅时，它会跳过一个周期，并且不会重叠周期，因此速度很慢`poll()` doesn't run concurrently with itself.
+* 它捕获并记录错误`poll()`, then waits for the next cycle.
+* 它调用`unref()` on the timer so polling alone doesn't keep the process alive.
+
+基类不会立即重试失败的轮询。让下一个间隔重试，或者在里面添加您自己的退避`poll()`.
+
+### 网络钩子 {/* #webhooks */}
+
+当源可以调用您的应用程序时，请使用 Webhook。覆盖`handleWebhook(request)` to parse the payload, look up subscriptions, and call `notify()` for each match:
+
+```typescript title="src/mastra/signals/ci-signals.ts"
+import { SignalProvider } from '@mastra/core/signals'
+import type { SignalProviderWebhookRequest } from '@mastra/core/signals'
+
+export class CiSignals extends SignalProvider<'ci-signals'> {
+  readonly id = 'ci-signals' as const
+
+  async handleWebhook(request: SignalProviderWebhookRequest) {
+    const payload = request.body as { pipeline: string; status: string }
+    const subscriptions = this.getSubscriptionsForResource(payload.pipeline)
+
+    for (const sub of subscriptions) {
+      await this.notify(
+        {
+          source: this.id,
+          kind: 'ci-status',
+          priority: 'high',
+          summary: `Build ${payload.status} for ${payload.pipeline}`,
+          payload,
+        },
+        { resourceId: sub.resourceId, threadId: sub.threadId },
+      )
+    }
+
+    return { status: 200, body: { matched: subscriptions.length } }
+  }
+}
+```
+
+`handleWebhook()`是一个提供者方法。从您自己的端点调用它，并在解析源需要的地方之前根据原始正文验证源的签名。
+
+### 持久订阅 {/* #durable-subscriptions */}
+
+基本注册表位于内存中，属于一个进程中的一个提供程序实例。它无法在重新启动或跨实例边界后继续存在。
+
+如果订阅必须在重新启动后继续存在，请将它们保留在您自己的存储中并在[`start()`](/reference/signals/signal-provider#start). A second process has an empty registry until it rehydrates its own copy.
+
+### 生命周期挂钩 {/* #lifecycle-hooks */}
+
+Agent打电话`connect()` when constructed, starts polling, then invokes `start()` without awaiting it. Keep `start()` independent of the first poll cycle and handle its errors.
+
+[`stop()`](/reference/signals/signal-provider#stop)是同步的。默认实现停止轮询并清除每个订阅索引。覆盖它进行清理，但调用`super.stop()` so the registry is released:
+
+```typescript oxfmt:false
+override stop() {
+  this.closeClient()
+  super.stop()
+}
+```
+
+称呼`stop()` from your shutdown path. The agent doesn't. If closing a client is asynchronous, expose an async shutdown method and await it before calling `stop()`.
+
+### 处理器和Tool {/* #processors-and-tools */}
+
+提供者可以向连接的Agent贡献行为：
+
+* 返回输入处理器`getInputProcessors()` and output processors from `getOutputProcessors()`.
+* 返回Agent可调用Tool`getTools()`.
+
+Agent会在之后解决这些问题`connect()` and registers the processors with the Mastra instance.
+
+### 发送通知 {/* #send-notifications */}
+
+[`notify()`](/reference/signals/signal-provider#notifications)包装连接的Agent的`sendNotificationSignal()` and accepts the same fields: `source`, `kind`, `summary`, optional `priority`, `payload`, `dedupeKey`, `coalesceKey`, and `attributes`.
+
+使用`dedupeKey` for one event that may arrive twice, such as the same failing build on consecutive polls, and `coalesceKey` when related events should merge into one pending record. The [Notifications guide](/docs/signals/notifications#create-and-coalesce-records) covers the merge rules.
+
+`notify()`当提供者未连接时抛出。它还会传播存储错误，因此让这些错误到达您的轮询或 Webhook 错误处理。
+
+### 干净地关闭 {/* #shut-down-cleanly */}
+
+关机期间：
+
+1. 停止接受新的 webhook 工作。
+2. 停止轮询`stopPolling()` or `stop()`.
+3. 清除订阅注册表。
+4. 关闭或释放外部客户端和连接。
+5. 让在飞行中`notify()` calls finish where your runtime allows it.
+
+基类清除注册表`stop()`. It can't drain an in-flight webhook handler or close an async client, so coordinate those in your shutdown path.
+
+## 内置Provider {/* #built-in-providers */}
+
+### 任务信号提供者 {/* #task-signal-provider */}
+
+[`TaskSignalProvider`](/reference/signals/task-signal-provider)捆绑任务Tool和`TaskStateProcessor` behind one registration. Add it when you want the agent to maintain a task list across turns:
+
+```typescript
+import { Agent } from '@mastra/core/agent'
+import { TaskSignalProvider } from '@mastra/core/signals'
+
+const agent = new Agent({
+  // ...
+  signals: [new TaskSignalProvider()],
+})
+```
+
+它贡献`task_write`, `task_update`, `task_complete`, and `task_check`, plus the processor that projects the task list onto a state-signal lane. Task tracking requires a memory-backed thread and a `storage` instance. Without memory, the tools report that tracking needs agent memory.
+
+### Webhook 信号提供者 {/* #webhook-signal-provider */}
+
+对于通用 Webhook 源，请使用[`WebhookSignalProvider`](/reference/signals/webhook-signal-provider) instead of writing a subclass. Configure a function that extracts the resource id and an optional one that builds the notification:
+
+```typescript title="src/mastra/index.ts"
+import { Agent } from '@mastra/core/agent'
+import { WebhookSignalProvider } from '@mastra/core/signals'
+
+const webhooks = new WebhookSignalProvider({
+  extractResourceId: payload => (payload as { repository: string }).repository,
+  buildNotification: (payload, sub) => ({
+    source: 'ci',
+    kind: 'build-status',
+    priority: 'medium',
+    summary: `Build ${(payload as { status: string }).status} for ${sub.externalResourceId}`,
+  }),
+})
+
+export const supportAgent = new Agent({
+  id: 'support-agent',
+  name: 'Support Agent',
+  instructions: 'Help the user triage updates.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  signals: [webhooks],
+})
+
+webhooks.subscribeThread({ resourceId: 'user_123', threadId: 'thread_456' }, 'acme/app')
+```
+
+称呼`webhooks.handleWebhook({ body, headers })` from your route. The provider matches the extracted resource id against its subscriptions and notifies each matching thread.
+
+没有`extractResourceId`, it reads `resource` or `externalResourceId` from the payload. Without `buildNotification`, it sends a `webhook-event` notification at `medium` priority.
+
+## 生产清单 {/* #production-checklist */}
+
+部署前：
+
+* **重复数据删除重试：**&#x7ED9;每一个事件一个稳定的`dedupeKey` or `coalesceKey`. Webhook deliveries and poll cycles repeat, and the provider doesn't deduplicate before `notify()`.
+* **验证网络钩子：**&#x5728;解析之前检查原始正文的签名，并拒绝 HTTP 端点上的无效请求。
+* **处理源中断：**&#x5728;下一个间隔重试轮询，因此在内部添加退避`poll()` if needed. Webhook sources usually retry their side, so return a non-2xx status when you couldn't accept the event.
+* **如果重要的话，请保留订阅：**&#x6CE8;册表位于内存中。将其重新水化`start()` when a restart must preserve watches.
+* **使用共享存储：**&#x901A;知记录和传递策略取决于Agent的 Mastra 存储。
+* **计划停工：**&#x505C;止接受 webhook、停止轮询、关闭客户端并让动态通知稳定下来。
+* **观察通知队列：**&#x6458;要和延期交付取决于[notification dispatcher](/docs/signals/notifications#dispatch), especially across shared storage.

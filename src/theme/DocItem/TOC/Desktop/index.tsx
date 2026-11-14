@@ -2,6 +2,8 @@ import { useDoc } from '@docusaurus/plugin-content-docs/client'
 import { ThemeClassNames } from '@docusaurus/theme-common'
 import { type ReactNode } from 'react'
 
+import SubscribeForm from '@site/src/components/subscribe-form'
+import PlatformCta from '@site/src/components/platform-cta'
 import TOC from '@theme/TOC'
 
 export default function DocItemTOCDesktop(): ReactNode {
@@ -32,6 +34,10 @@ export default function DocItemTOCDesktop(): ReactNode {
         maxHeadingLevel={frontMatter.toc_max_heading_level}
         className={ThemeClassNames.docs.docTocDesktop}
       />
+      <div className="mt-4 hidden flex-col gap-4 xl:flex">
+        <PlatformCta placement="card" />
+        <SubscribeForm />
+      </div>
     </>
   )
 }

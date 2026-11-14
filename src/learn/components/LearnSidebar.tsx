@@ -1,7 +1,6 @@
 import { useMemo } from 'react'
 import Link from '@docusaurus/Link'
 import { useLocation } from '@docusaurus/router'
-import useBaseUrl from '@docusaurus/useBaseUrl'
 import { cn } from '@site/src/lib/utils'
 import type { Lesson, LearnStorageV1, LessonStatus } from '../types'
 import { useLocalizedLearnContent } from '../localization'
@@ -29,9 +28,8 @@ function ProgressIcon({ storage, slug, status }: { storage: LearnStorageV1; slug
 }
 
 export function LearnSidebar({ lessons, storage, className }: LearnSidebarProps) {
-  const { course, isLocalized } = useLocalizedLearnContent()
+  const { course } = useLocalizedLearnContent()
   const location = useLocation()
-  const learnBasePath = useBaseUrl('/learn/')
 
   const modules = useMemo(() => {
     const map = new Map<string, Lesson[]>()
@@ -54,7 +52,7 @@ export function LearnSidebar({ lessons, storage, className }: LearnSidebarProps)
             to="/learn"
             className="learn-link block max-w-[200px] text-sm font-semibold text-(--mastra-text-primary)"
           >
-            {isLocalized ? course.title : course.title.replace('AI ', '')}
+            {course.title.replace('AI ', '')}
           </Link>
           <LearnProgressBar completed={watchedCount} total={publishedTotal} className="mt-3" />
         </div>
@@ -65,8 +63,8 @@ export function LearnSidebar({ lessons, storage, className }: LearnSidebarProps)
               <h4 className="mb-2! px-4 pt-2 text-xs font-semibold text-(--mastra-text-tertiary)">{moduleName}</h4>
               <ul>
                 {moduleLessons.map(lesson => {
-                  const lessonPath = `${learnBasePath}${lesson.slug}`
-                  const isActive = location.pathname === lessonPath || location.pathname === `${lessonPath}/`
+                  const isActive =
+                    location.pathname === `/learn/${lesson.slug}` || location.pathname === `/learn/${lesson.slug}/`
                   const isComingSoon = lesson.status === 'comingSoon'
 
                   if (isComingSoon) {

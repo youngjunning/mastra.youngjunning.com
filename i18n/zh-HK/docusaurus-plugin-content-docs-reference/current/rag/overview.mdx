@@ -1,0 +1,82 @@
+---
+title: "RAG (Retrieval-Augmented Generation) in Mastra | RAG"
+description: "RAG in Mastra helps you enhance LLM outputs by incorporating relevant context from your own data sources, improving accuracy and grounding responses in real information."
+packages:
+  - "@mastra/core"
+  - "@mastra/oracledb"
+  - "@mastra/pg"
+  - "@mastra/rag"
+---
+
+#
+
+Mastra 中的 RAG 透過整合您自己的資料來源中的相關上下文、提高準確性並根據真實資訊做出回應，幫助您增強 LLM 輸出。
+
+Mastra 的 RAG 系統提供：
+
+* 用於處理和嵌入文件的標準化 API
+* 支援多個向量存儲
+* 用於最佳檢索的分塊和嵌入策略
+* 用於追蹤嵌入和檢索性能的可觀察性
+
+## 例子 {/* #example */}
+
+
+
+```ts
+import { embedMany } from 'ai'
+import { PgVector } from '@mastra/pg'
+import { MDocument } from '@mastra/rag'
+import { z } from 'zod'
+
+// 1. Initialize document
+const doc = MDocument.fromText(`Your document text here...`)
+
+// 2. Create chunks
+const chunks = await doc.chunk({
+  strategy: 'recursive',
+  size: 512,
+  overlap: 50,
+})
+
+// 3. Generate embeddings; we need to pass the text of each chunk
+import { ModelRouterEmbeddingModel } from '@mastra/core/llm'
+
+const { embeddings } = await embedMany({
+  values: chunks.map(chunk => chunk.text),
+  model: new ModelRouterEmbeddingModel('openai/text-embedding-3-small'),
+})
+
+// 4. Store in vector database
+const pgVector = new PgVector({
+  id: 'pg-vector',
+  connectionString: process.env.POSTGRES_CONNECTION_STRING,
+})
+await pgVector.upsert({
+  indexName: 'embeddings',
+  vectors: embeddings,
+}) // using an index name of 'embeddings'
+
+// 5. Query similar chunks
+const results = await pgVector.query({
+  indexName: 'embeddings',
+  queryVector: queryVector,
+  topK: 3,
+}) // queryVector is the embedding of the query
+
+console.log('Similar chunks:', results)
+```
+
+這個例子展示了重點。初始化文件並建立區塊，然後在查詢類似內容之前產生並儲存嵌入。
+
+## 文件處理 {/* #document-processing */}
+
+RAG 的基本構建塊是文件處理。可以使用策略（遞歸、滑動視窗等）對文件進行分塊，並使用元資料進行豐富。請參閱[chunking and embedding doc](../../reference/rag/chunking-and-embedding).
+
+## 向量存儲 {/* #vector-storage */}
+
+Mastra 支援多種用於嵌入持久性和相似性搜尋的向量存儲，包括 pgvector、OracleDB、Pinecone、Qdrant 和 MongoDB。請參閱[vector database doc](./vector-databases).
+
+## 更多資源 {/* #more-resources */}
+
+* [思想鏈 RAG 範例](https://github.com/mastra-ai/mastra/tree/main/examples/basics/rag/cot-rag)

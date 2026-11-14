@@ -13,8 +13,8 @@ const MARKDOWN_MEDIA_TYPE = 'text/markdown'
 /**
  * Build the absolute markdown URL for a route.
  *
- * Every route publishes a sibling `llms.txt` file. The root route points at the
- * site-wide documentation index.
+ * Every route is served as markdown at `<route>.md`. The root route has no `.md` form, so it points
+ * at the site-wide index instead.
  */
 export function markdownUrlForRoute(route: string, siteUrl: string): string {
   const base = siteUrl.replace(/\/$/, '')
@@ -23,7 +23,7 @@ export function markdownUrlForRoute(route: string, siteUrl: string): string {
     return `${base}/llms.txt`
   }
 
-  return `${base}${route.replace(/\/$/, '')}/llms.txt`
+  return `${base}${route.replace(/\/$/, '')}.md`
 }
 
 /**

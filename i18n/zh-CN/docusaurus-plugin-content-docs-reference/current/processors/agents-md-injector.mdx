@@ -1,0 +1,118 @@
+---
+title: 'Reference: AgentsMDInjector | Processors'
+description: 'Load directory instructions from completed tool calls and configure reader-owned path identities for deduplication.'
+packages:
+  - '@mastra/core'
+---
+
+# AgentsMD注射器
+
+`AgentsMDInjector`在模型步骤之前加载目录指令。它扫描消息列表中已完成的Tool调用，最新的在前，并搜索其路径参数`AGENTS.md`, `CLAUDE.md`， 或者`CONTEXT.md`在祖先目录中。
+
+```typescript
+import { AgentsMDInjector } from '@mastra/core/processors'
+
+const injector = new AgentsMDInjector({ maxTokens: 1000 })
+```
+
+将处理器添加到Agent的`inputProcessors`. Each invocation injects at most one new instruction reminder as a persisted `reactive` signal. The search skips already loaded paths and continues until it finds an uncovered instruction file.
+
+## 构造函数选项 {/* #constructor-options */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'maxTokens',
+  type: 'number',
+  isOptional: true,
+  defaultValue: '1000',
+  description: 'Approximate token limit for each instruction file.',
+},
+{
+  name: 'reminderText',
+  type: 'string',
+  isOptional: true,
+  description: 'Fallback text when a discovered instruction file is empty or cannot be read.',
+},
+{
+  name: 'pathExists',
+  type: '(path: string) => boolean',
+  isOptional: true,
+  description: 'Override file and directory existence checks. Defaults to the local filesystem.',
+},
+{
+  name: 'isDirectory',
+  type: '(path: string) => boolean',
+  isOptional: true,
+  description: 'Override directory checks. Defaults to the local filesystem.',
+},
+{
+  name: 'readFile',
+  type: '(path: string) => string',
+  isOptional: true,
+  description: 'Override instruction reads. Defaults to UTF-8 local file reads.',
+},
+{
+  name: 'getIgnoredInstructionPaths',
+  type: '(args: ProcessInputStepArgs) => string[]',
+  isOptional: true,
+  description: 'Return paths already included in static instructions so they are not injected again.',
+},
+{
+  name: 'isEnabled',
+  type: '(args: ProcessInputStepArgs) => boolean',
+  isOptional: true,
+  description: 'Return false to disable instruction discovery for this request.',
+},
+{
+  name: 'getReader',
+  type: '(args: ProcessInputStepArgs) => ReminderFileReader | undefined',
+  isOptional: true,
+  description: 'Select a reader for this request. Returning undefined keeps the instance defaults.',
+},
+{
+  name: 'getBasePath',
+  type: '(args: ProcessInputStepArgs) => string | undefined',
+  isOptional: true,
+  description:
+    'Return the project root for this request. Relative tool paths resolve against it instead of `process.cwd()`, and instruction files outside it are never loaded. Returning undefined keeps `process.cwd()` resolution with no boundary.',
+},
+]}
+/>
+
+## `ReminderFileReader` {/* #reminderfilereader */}
+
+读取器控制文件访问和可选路径标识。返回一张来自`getReader` when instruction files live in a virtual filesystem or a trusted git ref rather than the current checkout.
+
+<PropertiesTable
+  content={[
+{
+  name: 'pathExists',
+  type: '(path: string) => boolean',
+  description: 'Whether the addressed file or directory exists in this reader.',
+},
+{
+  name: 'isDirectory',
+  type: '(path: string) => boolean',
+  description: 'Whether the addressed path is a directory in this reader.',
+},
+{ name: 'readFile', type: '(path: string) => string', description: 'Read instruction content from this reader.' },
+{
+  name: 'getPathIdentity',
+  type: '(path: string) => string',
+  isOptional: true,
+  description:
+    'Return a stable comparison key for instruction paths. Equal keys identify the same instructions; distinct files must have distinct keys. Defaults to normalized absolute paths for custom readers.',
+},
+]}
+/>
+
+`getPathIdentity`适用于搜索内重复数据删除、忽略的静态路径以及持久提醒元数据或标记中的路径。它不会重写读取地址、发出路径、指令内容或存储。它必须接受先前提醒以及当前Tool调用的路径，包括当前结帐中不再存在的文件。
+
+默认本地读取器解析文件系统别名以进行比较。提供任何实例级文件系统覆盖，或自定义读取器，无需`getPathIdentity`, keeps lexical path comparison without adding host filesystem lookups for identity.
+
+对于受信任的 git-ref 读者，可以通过规范项目根目录及其相对于该根目录的路径来识别文件。不解析签出控制的后代符号链接：受信任引用中的两个不同文件保持不同，即使签出使它们指向同一物理文件。
+
+## 可见性和信任 {/* #visibility-and-trust */}
+
+当调用者使用时，提醒保留在模型上下文和存储中[stream exclusions](/reference/streaming/agents/stream) to hide its signal chunks. Exclusions aren't an instruction-trust boundary. Use `isEnabled` and a trusted reader to control whether checkout instructions can be loaded.

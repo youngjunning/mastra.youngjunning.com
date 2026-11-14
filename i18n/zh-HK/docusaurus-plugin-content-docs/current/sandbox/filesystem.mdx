@@ -1,0 +1,275 @@
+---
+title: 'Filesystem'
+description: "Give Mastra agents local or remote filesystem access, configure persistent storage and mounts, and work with files through workspace tools."
+packages:
+  - '@mastra/core'
+---
+
+import { IntegrationGrid } from '@site/src/components/integrations/grid';
+
+# 檔案系統
+
+檔案系統為Agent程式提供了讀取、寫入、列出和執行的Tool。[searching](/docs/sandbox/search)文件。將其用作知識庫或在臨時沙箱運行之間保留文件。
+
+有兩種方式設定檔：
+
+* [直接檔案系統訪問](#direct-filesystem-access)用途`filesystem` with one filesystem provider or a [`CompositeFilesystem`](#manual-composition) that you create yourself.
+* [坐騎](#mounts)用途`mounts` to create a `CompositeFilesystem` from path-prefixed providers. When a static sandbox and filesystem provider support mounting, Mastra automatically mounts the provider at its configured path. Remote sandbox mounts typically use Filesystem in Userspace (FUSE).
+
+配置任一`filesystem` or `mounts`, not both. Configuring both throws a `WorkspaceError` with the code `INVALID_CONFIG`.
+
+兩種配置都提供Agent文件Tool。只有當沙箱可以成功掛載提供者時，沙箱指令才能看到該提供者。
+
+設定檔系統為Agent提供了以下Tool：
+
+|Tool|是否 |
+| - | - |
+|`mastra_workspace_read_file` | Reads all or part of a file. |
+| `mastra_workspace_write_file` | Creates or overwrites a file. |
+| `mastra_workspace_edit_file` | Replaces matching text in an existing file. |
+| `mastra_workspace_list_files` | Lists files and directories. |
+| `mastra_workspace_delete` | Deletes a file or directory. |
+| `mastra_workspace_file_stat`|傳回有關檔案或目錄的元資料。 |
+|`mastra_workspace_mkdir`|建立一個目錄和任何缺少的父目錄。 |
+|`mastra_workspace_grep`|使用正規表示式搜尋文件內容。 |
+|`mastra_workspace_ast_edit`|應用結構程式碼編輯。可用時間`@ast-grep/napi`已安裝。 |
+|`mastra_workspace_apply_patch`|在一次呼叫中建立、更新、移動和刪除多個檔案。預設關閉。 |
+
+這`apply_patch` tool is opt-in. Enable it with its own entry in `tools`. Setting the top-level `tools.enabled` doesn't turn it on. The tool checks every change in the patch before it writes any file:
+
+```typescript title="src/mastra/workspaces/index.ts"
+import { Workspace, LocalFilesystem, WORKSPACE_TOOLS } from '@mastra/core/workspace'
+
+export const workspace = new Workspace({
+  filesystem: new LocalFilesystem({ basePath: './workspace' }),
+  tools: {
+    [WORKSPACE_TOOLS.FILESYSTEM.APPLY_PATCH]: { enabled: true },
+  },
+})
+```
+
+## 支援的檔案系統 {/* #supported-filesystems */}
+
+### `LocalFilesystem` {/* #localfilesystem */}
+
+[`LocalFilesystem`](/reference/workspace/local-filesystem)連接到與 Mastra 應用程式位於同一台電腦上的目錄。將其用於本地開發或已存在於應用程式主機上的檔案。
+
+### 其他檔案系統 {/* #other-filesystems */}
+
+當檔案位於應用程式主機外部或已存在於外部服務中時，請使用另一個提供者：
+
+<IntegrationGrid
+  section="File storage"
+  additionalItems={[
+{
+  type: 'link',
+  href: '/reference/workspace/platform-filesystem',
+  label: 'Mastra Platform',
+  customProps: { icon: '/img/integrations/mastra.svg', customCSS: 'dark:invert' },
+},
+]}
+/>
+
+每個提供者都透過以下方式支援文件Tool`filesystem`. Sandbox mounting depends on both the filesystem provider and sandbox backend.
+
+## 直接檔案系統訪問 {/* #direct-filesystem-access */}
+
+使用`filesystem` when the agent should access a provider through file tools. It can also accept a resolver or a manually created `CompositeFilesystem`.
+
+為本機知識庫提供Agent文件Tool：
+
+```typescript
+import { LocalFilesystem, Workspace } from '@mastra/core/workspace'
+
+const workspace = new Workspace({
+  filesystem: new LocalFilesystem({
+    basePath: './knowledge-base',
+  }),
+})
+```
+
+Agent接收Tool，例如`mastra_workspace_read_file`, `mastra_workspace_write_file`, `mastra_workspace_list_files`, and `mastra_workspace_grep`. Paths are resolved under `./knowledge-base`, and no sandbox or command tools are required.
+
+看[Search](/docs/sandbox/search) to index the files for keyword or semantic retrieval. See the [filesystem tools reference](/reference/workspace/workspace-class#filesystem-tools) for every generated tool and its policies.
+
+## 坐騎 {/* #mounts */}
+
+使用`mounts` when programs inside a sandbox need to access persistent files by path. Mastra creates the mount automatically when the sandbox and filesystem provider support it. The agent still receives file tools, while command tools can run commands such as `ls`, `cat`, or `python` against the same files.
+
+例如，將 S3 儲存桶安裝在`/workspace` inside a Daytona sandbox:
+
+```typescript
+import { Mastra } from '@mastra/core'
+import { Workspace } from '@mastra/core/workspace'
+import { DaytonaSandbox } from '@mastra/daytona'
+import { S3Filesystem } from '@mastra/s3'
+
+const workspace = new Workspace({
+  mounts: {
+    '/workspace': new S3Filesystem({
+      bucket: process.env.S3_BUCKET!,
+      region: 'us-east-1',
+    }),
+  },
+  sandbox: new DaytonaSandbox(),
+})
+
+export const mastra = new Mastra({ workspace })
+```
+
+### 使用安裝座 {/* #using-mounts */}
+
+已透過提供者提供的文件顯示在`/workspace`. The agent can call `read_file('/workspace/report.md')` or run `cat /workspace/report.md`. Files written through either interface are saved by the provider and remain available after the sandbox stops.
+
+如果沒有掛載，Agent仍然可以透過在Tool呼叫之間傳遞檔案內容來將檔案Tool與沙箱命令結合。這適用於選定的文字檔案。當程式需要目錄樹或需要處理大型檔案或二進位時，掛載更適合。
+
+：：：警告
+
+文件Tool和命令Tool策略是獨立的。需要批准`write_file`, for example, doesn't stop the agent from using `execute_command` to write the same mounted path. If files must only be accessed through file tools, disable sandbox command tools.
+
+:::
+
+### 路徑 {/* #paths */}
+
+掛載路徑是向檔案Tool以及成功沙箱掛載後的命令公開的路徑。底層提供者可能會將這些文件儲存在其他地方。
+
+對於安裝在以下位置的遠端提供者`/workspace`:
+
+* 文件Tool使用以下路徑`/workspace/report.md`.
+* 遠端沙箱指令通常使用相同的路徑。
+* 提供者將路徑對應到其配置的儲存桶、前綴或遠端目錄。
+
+`LocalSandbox`在其內部創建一個符號鏈接`workingDirectory` instead. A `/workspace` mount becomes `<workingDirectory>/workspace` on the host and is usually addressed as `workspace` by commands.
+
+## 複合檔案系統 {/* #composite-filesystem */}
+
+這`mounts` option creates a `CompositeFilesystem`. This TypeScript path router presents several providers as one virtual directory tree.
+
+### 多個檔案系統 {/* #multiple-filesystems */}
+
+在其安裝路徑下配置每個提供者：
+
+```typescript
+import { Workspace } from '@mastra/core/workspace'
+import { E2BSandbox } from '@mastra/e2b'
+import { GCSFilesystem } from '@mastra/gcs'
+import { S3Filesystem } from '@mastra/s3'
+
+const workspace = new Workspace({
+  mounts: {
+    '/data': new S3Filesystem({
+      bucket: 'agent-data',
+      region: 'us-east-1',
+    }),
+    '/reports': new GCSFilesystem({
+      bucket: 'agent-reports',
+    }),
+  },
+  sandbox: new E2BSandbox({ id: 'analysis-sandbox' }),
+})
+```
+
+使用此配置：
+
+* `list_files('/')`返回虛擬目錄`data` and `reports`.
+* `read_file('/data/input.csv')`到 S3 提供者的路由。
+* `write_file('/reports/summary.md')`路由至 Google Cloud Storage Provider。
+* 當每個沙箱掛載成功時，沙箱指令使用相同的路徑。
+
+在將剩餘路徑傳遞給其提供者之前，複合材料會移除掛載前綴。挂载路径不能嵌套，因此同一组合不能同时包含两者`/data` and `/data/archive`.
+
+### 沒有沙箱 {/* #without-a-sandbox */}
+
+您可以配置`mounts` without a sandbox. Mastra still creates the `CompositeFilesystem`, and all file tools work with mount-prefixed paths. The agent receives no command or process tools because no sandbox is configured.
+
+### 手工構圖 {/* #manual-composition */}
+
+您也可以建立一個`CompositeFilesystem` yourself and pass it through `filesystem` for path routing without automatic sandbox mount wiring:
+
+```typescript
+import { CompositeFilesystem, LocalFilesystem, Workspace } from '@mastra/core/workspace'
+import { S3Filesystem } from '@mastra/s3'
+
+const filesystem = new CompositeFilesystem({
+  mounts: {
+    '/local': new LocalFilesystem({ basePath: './data' }),
+    '/archive': new S3Filesystem({
+      bucket: 'agent-archive',
+      region: 'us-east-1',
+    }),
+  },
+})
+
+const workspace = new Workspace({ filesystem })
+```
+
+當應用程式的另一部分需要組合作為檔案系統提供者時，請使用手動組合。對於正常的沙箱安裝，`mounts` option performs the same routing setup with less configuration.
+
+## 安裝可用性 {/* #mount-availability */}
+
+文件Tool和複合路由無需安裝沙箱即可運作。當遠端沙箱和檔案系統提供者支援掛載時，`mounts` automatically uses FUSE to make the files visible to commands. `LocalSandbox` uses symlinks instead.
+
+內建沙箱安裝目前包括：
+
+|Sandbox後端 |檔案系統提供者 |
+| - | - |
+|`LocalSandbox` | `LocalFilesystem` |
+| E2B | Amazon S3, Google Cloud Storage, Azure Blob Storage |
+| Daytona | Amazon S3, Google Cloud Storage, Azure Blob Storage |
+| Blaxel | Amazon S3, Google Cloud Storage |
+
+`s3fs`, `gcsfuse`, or `blobfuse2` inside the sandbox. Some backends install missing software during startup, which can require network access and additional startup time. Other combinations require an [`onMount`](/reference/workspace/workspace-class#constructor-parameters) hook or provider-specific setup.
+
+如果沙箱安裝不可用或失敗，Workspace仍然可用。檔案Tool繼續透過其 SDK 存取提供程序，但命令看不到該路徑。 Mastra 向Agent程式描述這些提供者只能透過文件Tool使用。
+
+## 每個使用者或執行緒的檔案系統 {/* #filesystems-per-user-or-thread */}
+
+這`filesystem` option accepts a resolver when storage should vary by request, user, role, or tenant:
+
+```typescript
+const workspace = new Workspace({
+  filesystem: ({ requestContext }) => {
+    const userId = requestContext.get('user-id') as string
+
+    return new S3Filesystem({
+      bucket: process.env.S3_BUCKET!,
+      region: process.env.S3_REGION!,
+      prefix: `users/${userId}`,
+    })
+  },
+})
+```
+
+每個使用者都會獲得一個單獨的檔案系統視圖，檔案Tool會自動從請求上下文中解析提供者。
+
+`mounts`不接受解析器，且不能與沙箱解析器結合使用。當每個使用者或執行緒需要在單獨的沙箱內單獨儲存時，請在沙箱解析器內建立並安裝提供者。看[Sandboxes per user or thread](/docs/sandbox/overview#sandboxes-per-user-or-thread).
+
+## 政策和遏制 {/* #policies-and-containment */}
+
+使用下面的單獨常數`WORKSPACE_TOOLS.FILESYSTEM`, such as `WORKSPACE_TOOLS.FILESYSTEM.WRITE_FILE`, to configure each file tool. Set approval globally or per tool. Configure read-before-write and output limits on individual filesystem tool entries. See the [filesystem tool configuration reference](/reference/workspace/workspace-class#filesystem-tools).
+
+`LocalFilesystem`包含存取權限`basePath` by default. Use `allowedPaths` when the agent needs specific directories outside that root:
+
+```typescript
+const workspace = new Workspace({
+  filesystem: new LocalFilesystem({
+    basePath: './knowledge-base',
+    allowedPaths: ['../shared-policies'],
+  }),
+})
+```
+
+遏制適用於檔案系統操作，包括檔案Tool和搜尋索引。它不限制 shell 命令。
+
+放`readOnly: true` when the agent should use files without changing them. For a static provider, Mastra removes write-related file tools.
+
+使用檔案系統解析器，寫入Tool保持註冊狀態，因為在請求運行之前不知道提供者。提供者在執行時拒絕寫入嘗試。
+
+為了`LocalFilesystem` entries in a composite, keep `contained: true`, which is the default. Set `contained: false` only when unrestricted host filesystem access is intentional.
+
+## 有關的 {/* #related */}
+
+* [沙箱](/docs/sandbox/overview)
+* [搜尋](/docs/sandbox/search)
+* [檔案系統提供者介面](/reference/workspace/filesystem)
+* [配置API參考](/reference/workspace/workspace-class)

@@ -1,0 +1,132 @@
+---
+title: "AI SDK overview"
+description: "Wrap Vercel AI SDK models with Mastra processors and memory using withMastra(), while retaining existing AI SDK generation, streaming, and UI integrations."
+packages:
+  - "@mastra/ai-sdk"
+  - "@mastra/libsql"
+---
+
+# 人工智能软件开发Tool包
+
+如果您已经在使用[Vercel AI SDK](https://sdk.vercel.ai)直接并想要添加 Mastra 功能，例如[处理器](/docs/agents/processors)或者[记忆](/docs/memory/memory-processors)无需切换到完整的 Mastra Agent API，[`withMastra()`](/reference/ai-sdk/with-mastra)让您可以使用这些功能包装任何 AI SDK 模型。当您想要保留现有的 AI SDK 代码但添加输入/输出处理和对话持久性（包括内容过滤）时，这非常有用。
+
+：：：提示
+
+如果您想将 Mastra 与 AI SDK UI 一起使用（例如`useChat()`), visit the [AI SDK UI guide](/integrations/agentic-ui/ai-sdk-ui).
+
+:::
+
+## 安装 {/* #installation */}
+
+安装`@mastra/ai-sdk` to begin using the `withMastra()` function.
+
+```bash npm2yarn
+npm install @mastra/ai-sdk@latest
+```
+
+## 示例 {/* #examples */}
+
+### 带处理器 {/* #with-processors */}
+
+处理器允许您在将消息发送到模型之前对其进行转换（`processInput`) and after responses are received (`processOutputResult`). This example creates a logging processor that logs message counts at each stage, then wraps an OpenAI model with it.
+
+```typescript title="src/example.ts"
+import { openai } from '@ai-sdk/openai'
+import { generateText } from 'ai'
+import { withMastra } from '@mastra/ai-sdk'
+import type { Processor } from '@mastra/core/processors'
+
+const loggingProcessor: Processor<'logger'> = {
+  id: 'logger',
+  async processInput({ messages }) {
+    console.log('Input:', messages.length, 'messages')
+    return messages
+  },
+  async processOutputResult({ messages }) {
+    console.log('Output:', messages.length, 'messages')
+    return messages
+  },
+}
+
+const model = withMastra(openai('gpt-5.4'), {
+  inputProcessors: [loggingProcessor],
+  outputProcessors: [loggingProcessor],
+})
+
+const { text } = await generateText({
+  model,
+  prompt: 'What is 2 + 2?',
+})
+```
+
+### 有记忆 {/* #with-memory */}
+
+在 LLM 调用之前，内存会自动从存储中加载以前的消息，并在调用之后保存新消息。此示例配置 libSQL 存储后端来保存对话历史记录，加载最后 10 条消息作为上下文。
+
+```typescript title="src/memory-example.ts"
+import { openai } from '@ai-sdk/openai'
+import { generateText } from 'ai'
+import { withMastra } from '@mastra/ai-sdk'
+import { LibSQLStore } from '@mastra/libsql'
+
+const storage = new LibSQLStore({
+  id: 'my-app',
+  url: 'file:./data.db',
+})
+await storage.init()
+
+const memoryStorage = await storage.getStore('memory')
+
+const model = withMastra(openai('gpt-5.4'), {
+  memory: {
+    storage: memoryStorage!,
+    threadId: 'user-thread-123',
+    resourceId: 'user-123',
+    lastMessages: 10,
+  },
+})
+
+const { text } = await generateText({
+  model,
+  prompt: 'What did we talk about earlier?',
+})
+```
+
+### 带处理器和内存 {/* #with-processors--memory */}
+
+您可以将处理器和内存组合在一起。输入处理器在内存加载历史消息之后运行，输出处理器在内存保存响应之前运行。
+
+```typescript title="src/combined-example.ts"
+import { openai } from '@ai-sdk/openai'
+import { generateText } from 'ai'
+import { withMastra } from '@mastra/ai-sdk'
+import { LibSQLStore } from '@mastra/libsql'
+
+const storage = new LibSQLStore({ id: 'my-app', url: 'file:./data.db' })
+await storage.init()
+
+const memoryStorage = await storage.getStore('memory')
+
+const model = withMastra(openai('gpt-5.4'), {
+  inputProcessors: [myGuardProcessor],
+  outputProcessors: [myLoggingProcessor],
+  memory: {
+    storage: memoryStorage!,
+    threadId: 'thread-123',
+    resourceId: 'user-123',
+    lastMessages: 10,
+  },
+})
+
+const { text } = await generateText({
+  model,
+  prompt: 'Hello!',
+})
+```
+
+## 有关的 {/* #related */}
+
+* [`withMastra()`](/reference/ai-sdk/with-mastra)：API参考`withMastra()`
+* [处理器](/docs/agents/processors)：了解输入和输出处理器
+* [记忆](/docs/memory/overview)：Mastra记忆系统概述
+* [人工智能SDK界面](/integrations/agentic-ui/ai-sdk-ui)：将 AI SDK UI 挂钩与 Mastra Agent、Workflow程和网络结合使用

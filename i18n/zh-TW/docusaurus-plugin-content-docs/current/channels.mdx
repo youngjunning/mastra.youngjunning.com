@@ -1,0 +1,509 @@
+---
+title: "Channels"
+description: "Connect Mastra agents to Slack, Discord, Telegram, and other messaging channels with webhooks, thread context, tool approvals, and formatted replies."
+packages:
+  - "@mastra/core"
+---
+
+import { IntegrationGrid } from '@site/src/components/integrations/grid';
+
+# 頻道
+
+**添加於：** `@mastra/core@1.22.0`
+
+通道將Agent連接到 Slack、Microsoft Teams、Discord、Telegram、WhatsApp、GitHub 和 Linear 等訊息傳遞和協作平台。當用戶在平台上發送訊息或評論時，Agent會接收它並透過正常的Agent管道對其進行處理，並將回應串流回對話。馬斯特拉用途[Chat SDK](https://chat-sdk.dev/) for this channel layer.
+
+從適合您平台的頁面開始：
+
+<IntegrationGrid section="Channels" />
+
+[其他適配器](#other-adapters)列出了其他平台。 Mastra 通道可與相容的[Chat SDK adapters](https://chat-sdk.dev/adapters) beyond the platforms listed here, and the same Mastra configuration pattern applies across adapters.
+
+## 何時使用管道 {/* #when-to-use-channels */}
+
+當客服人員需要執行以下操作時使用管道：
+
+* 在用戶已經交談或工作的地方與他們見面。
+* 在 Slack、Microsoft Teams、Discord、Telegram 和 WhatsApp 等聊天平台中回覆。
+* 支援多人Agent，其中多人在共享通道或線程中與同一Agent互動。
+* 與 GitHub 問題、拉取請求線程和線性評論等協作Workflow整合。
+
+## 使用 Mastra Connect 更快設定通道 {/* #configure-channels-faster-with-mastra-connect */}
+
+如果您不想為每個頻道配置機器人或應用程式並自行維護憑證，則可以使用[Mastra Connect](/docs/mastra-platform/connect#add-channels). It manages credentials for you, simplifying channel setup and maintenance.
+
+## 配置Agent {/* #configure-an-agent */}
+
+通道使用 Chat SDK 適配器並遵循相同的 Mastra 端模式：建立通道適配器並將其新增至Agent。
+
+```typescript title="src/mastra/agents/your-agent.ts"
+import { Agent } from '@mastra/core/agent'
+import { createSlackAdapter } from '@chat-adapter/slack'
+
+export const yourAgent = new Agent({
+  id: 'your-agent',
+  name: 'Your Agent',
+  instructions: 'You are a helpful assistant.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  channels: {
+    adapters: {
+      slack: createSlackAdapter(),
+    },
+  },
+})
+```
+
+
+
+通道適配器需要特定於Provider的環境變數來進行憑證和請求驗證，例如機器人令牌、簽署金鑰、應用程式 ID 和 Webhook 驗證令牌。檢查您的平台或[Chat SDK adapter catalog](https://chat-sdk.dev/adapters) for the exact variable names.
+
+:::
+
+我們建議配置[storage](/docs/storage) for channels. Storage preserves channel and memory state across restarts, including thread subscriptions and tool approvals:
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { LibSQLStore } from '@mastra/libsql'
+import { yourAgent } from './agents/your-agent'
+
+export const mastra = new Mastra({
+  agents: { yourAgent },
+  storage: new LibSQLStore({
+    id: 'mastra-storage',
+    url: process.env.DATABASE_URL,
+  }),
+})
+```
+
+## Webhook 路由 {/* #webhook-routes */}
+
+平台透過 webhook 將頻道活動傳送到 Mastra。 Webhook 是一個 HTTP 端點，當發生某些事情時，平台會呼叫該端點，例如新訊息、提及或使用者在互動式Tool批准卡上選擇「批准」。 Webhook 將訊息傳遞給您的Agent程式進行處理，Agent程式在同一通道中做出回應。
+
+Mastra 為每個配置的適配器註冊一個 Webhook 路由並為您處理請求：
+
+```text
+/api/agents/<AGENT_ID>/channels/<PLATFORM>/webhook
+```
+
+例如，Agent程式上的 Slack 適配器具有`your-agent` ID uses:
+
+```text
+/api/agents/your-agent/channels/slack/webhook
+```
+
+將平台的 Webhook、事件或互動 URL 指向此路徑。請遵循適合您的平台或[Chat SDK docs](https://chat-sdk.dev/adapters). The webhook acknowledges the request before the agent finishes responding. See [Error handling and delivery](#error-handling-and-delivery) for what happens when verification or a handler fails.
+
+在本機開發期間，平台 Webhook 需要公用 URL 才能存取本機伺服器。使用像這樣的隧道[cloudflared](https://github.com/cloudflare/cloudflared) or [ngrok](https://ngrok.com/) to expose your server, `localhost:4111` by default:
+
+```bash npm2yarn
+npx cloudflared tunnel --url http://localhost:4111
+```
+
+例如，使用產生的公用 URL 作為 Webhook 路徑的基本 URL`https://abc123.trycloudflare.com/api/agents/your-agent/channels/slack/webhook`.
+
+
+
+隧道 URL 用於本機開發。部署 Mastra 伺服器後，將平台的 Webhook、事件或互動 URL 更新為您的生產 URL。
+
+:::
+
+## 線程上下文 {/* #thread-context */}
+
+當使用者在頻道線程中的對話中提及Agent時，Agent可能沒有先前的上下文。在第一次提及時，Mastra 會從平台獲取較早的訊息，並在提及運行之前將它們保存到Agent的記憶體線程中。
+
+1. 在線程中第一次提及時，Agent會獲取線程的第一條訊息以及提及先前的最新訊息。`maxMessages` (default `10`) sets the window: the first message plus up to `maxMessages - 1` recent messages. When messages fall between the two, a `[… N earlier Slack messages omitted]` marker (the platform name matches the channel) is saved in their place.
+2. 每個獲取的訊息都作為其自己的用戶訊息保存到記憶體中，歸因於其作者和平台訊息 ID 並攜帶其附件，並帶有`source: 'thread-history'` attribute. The mention itself then dispatches as a normal message.
+3. 回應後，Agent訂閱該線程並透過 Mastra 記憶體擁有完整歷史記錄。
+4. 該線程中的後續訊息不會從平台重新取得。
+
+放`threadContext: { maxMessages: 0 }` to disable this behavior. This only applies to non-direct message threads.
+
+沒有記憶的Agent無法保存行，因此他們會收到與提及內的上下文文字相同的歷史記錄。當寫入記憶體失敗時，同樣的回退也適用。
+
+記憶的`lastMessages` option limits how many messages reach the prompt. Its default of `10` trims the first message and the omitted marker when `maxMessages` is `10`, so set `lastMessages` to at least `maxMessages + 1`.
+
+Mastra 還添加了一個簡短的系統訊息，告訴Agent請求來自哪個管道和平台，例如訊息是來自直接訊息還是公共管道。放`threadContext: { addSystemMessage: false }` to skip it.
+
+## Tool審批 {/* #tool-approval */}
+
+Tool有`requireApproval: true` render as interactive cards with Approve and Deny buttons:
+
+```typescript title="src/mastra/tools/delete-file.ts"
+import { promises as fs } from 'node:fs'
+import { createTool } from '@mastra/core/tools'
+import { z } from 'zod'
+
+export const deleteFile = createTool({
+  id: 'delete-file',
+  description: 'Delete a file from the system',
+  inputSchema: z.object({
+    path: z.string().describe('Path to the file to delete'),
+  }),
+  requireApproval: true,
+  execute: async ({ path }) => {
+    await fs.unlink(path)
+    return { deleted: path }
+  },
+})
+```
+
+當Agent程式呼叫此Tool時，使用者會看到一張包含Tool名稱、參數以及批准和拒絕操作的卡片。該Tool僅在獲得批准後才執行。
+
+要用您自己的訊息替換該卡，例如本地化按鈕，請返回`{ kind: 'post', message: card }` from a `toolDisplay` function. A custom function replaces rendering for every tool event, not only approvals. Mastra's default action handler only resumes the run when the buttons keep the ids it expects. See [Custom approval cards](/reference/agents/channels#custom-approval-cards).
+
+預設情況下，只有請求Tool呼叫的使用者才能批准或拒絕它。對於其他成員應該能夠回應的共享頻道，請設定`toolApprovers: 'anyone'` on that adapter:
+
+```typescript title="src/mastra/agents/your-agent.ts" oxfmt:false
+channels: {
+  adapters: {
+    slack: {
+      adapter: createSlackAdapter(),
+      toolApprovers: 'anyone',
+    },
+  },
+},
+```
+
+這僅繞過請求者檢查：操作仍然需要待處理的Tool批准和映射的執行緒。當運行沒有記錄請求者時（例如，計劃的運行），預設值不是嚴格的身份保證；在這種情況下，另一個渠道成員也許能夠做出回應。如果儲存的訊息在重新啟動後識別出多個可能的請求者，則僅請求者模式會拒絕他們的點擊。
+
+放`toolDisplay: 'text'` on an adapter to render tool calls as plain text instead of interactive cards. In `'hidden'` mode, `autoResumeSuspendedTools` can resume data-bearing `suspend()` flows when a later user message arrives on the same thread. This requires memory. Hidden mode only suppresses approval buttons. It doesn't turn a message into consent. Tools that require approval remain suspended until an explicit approval or decline is submitted through a UI or API action.
+
+### 自訂操作處理 {/* #custom-action-handling */}
+
+使用`handlers.onAction` to handle button clicks and select changes from cards you post yourself. The handler is called with the Chat SDK action event and the default handler, plus the same `ctx` the other channel handlers receive. Values you set on `ctx.requestContext` before delegating carry through to the resumed tool call. The default handler processes the built-in Approve and Deny buttons and ignores every other action ID, so call it for events you don't handle to keep tool approval working:
+
+```typescript title="src/mastra/agents/your-agent.ts" oxfmt:false
+channels: {
+  adapters: {
+    slack: createSlackAdapter(),
+  },
+  handlers: {
+    onAction: async (event, defaultHandler, ctx) => {
+      if (event.actionId === 'retry') {
+        await event.thread?.post('Retrying...')
+        return
+      }
+      await defaultHandler()
+    },
+  },
+},
+```
+
+環境`onAction: false` disables action handling entirely, including the built-in tool approval buttons. To register more Chat SDK handlers after the channels start, use `agent.getChannels()?.sdk`.
+
+## 回覆格式 {/* #reply-formatting */}
+
+Agent預設以降價形式回覆貼文。具有原生 Markdown 渲染功能的平台（例如 Slack）可以直接渲染粗體文字、連結和表格。其他平台將 markdown 轉換為自己的格式。Agent編寫標準 Markdown，並且它可以在任何地方正確呈現，與 Studio 中相同回應的呈現方式相符。
+
+放`textFormat: 'plain'` on an adapter to post replies as literal plain text instead:
+
+```typescript title="src/mastra/agents/your-agent.ts" oxfmt:false
+channels: {
+  adapters: {
+    slack: {
+      adapter: createSlackAdapter(),
+      textFormat: 'plain',
+    },
+  },
+},
+```
+
+如果提示您的Agent發出特定於平台的方言（例如 Slack mrkdwn）而不是標準 markdown，請使用此逃生口。如果您新增了此類提示指令來解決字面上的 Markdown 渲染，請將其刪除。預設現在原生呈現標準降價。`textFormat` affects final reply text only. Tool cards, error messages, and natively streamed text are unaffected.
+
+### 僅透過Tool回复 {/* #reply-only-through-a-tool */}
+
+放`textDisplay: 'hidden'` to stop posting the agent's reply text. The agent's own messages then reach the thread only through tools you give it, for example a tool that posts to the thread. This keeps intermediate narration such as "Running the tests now" out of the thread, and lets the agent decide when to post:
+
+```typescript title="src/mastra/agents/your-agent.ts" oxfmt:false
+channels: {
+  adapters: {
+    slack: {
+      adapter: createSlackAdapter(),
+      textDisplay: 'hidden',
+    },
+  },
+},
+```
+
+Tool顯示、批准提示、錯誤訊息和鍵入狀態不受影響。回复文字仍然到達Agent的流和記憶體。
+
+Mastra 添加到Agent提示的通道指令遵循以下設定：隱藏文字後，Agent被告知只有使用Tool發布的內容才能到達對話，並且可以透過不發布任何內容來跳過訊息。
+
+## 不從訊息開始的運行 {/* #runs-that-dont-start-from-a-message */}
+
+在通道中啟動的執行緒也可以從其他地方運行，例如時間表、Studio 提示或喚醒Agent程式的訊號。這些運行獲得與訊息啟動的運行相同的通道指令。Agent商知道自己在頻道中的身份以及其文字回覆是否發佈在那裡。由於兩種運行的系統提示符號相同，因此它會保留在快取中。
+
+透過通道傳入的訊息帶有`platform` attribute (for example `platform="slack"`), so the agent can tell them apart from a prompt sent from somewhere else.
+
+這些運行的回應與對訊息的回應經過相同的適配器路徑。 Mastra 會記住最後一個在線程中寫入的人，因此需要接收者的適配器（例如 Slack 的本機串流傳輸）也以相同的方式運作。
+
+## 多用戶意識 {/* #multi-user-awareness */}
+
+在群組對話中，Mastra 在每個訊息前加上寄件者姓名和平台 ID 前綴，以便Agent可以區分發言者：
+
+```text
+[Alice (@U123ABC)]: Can you help me with this?
+[Bob (@U456DEF)]: I have a question too.
+```
+
+## 每條訊息信號元數據 {/* #per-message-signal-metadata */}
+
+使用`signalMetadata` in a custom Channel handler to attach structured context to one inbound message. The metadata follows the message when it starts an idle run or joins an active run.
+
+以下範例在呼叫預設處理程序之前附加已註冊的檔案 ID：
+
+```typescript title="src/mastra/agents/your-agent.ts"
+import { Agent } from '@mastra/core/agent'
+import { createSlackAdapter } from '@chat-adapter/slack'
+
+export const yourAgent = new Agent({
+  id: 'your-agent',
+  name: 'Your Agent',
+  instructions: 'You are a helpful assistant.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  channels: {
+    adapters: {
+      slack: createSlackAdapter(),
+    },
+    handlers: {
+      onDirectMessage: async (thread, message, defaultHandler, ctx) => {
+        ctx.signalMetadata.attachmentIds = ['file-1']
+        await defaultHandler(thread, message)
+      },
+    },
+  },
+})
+```
+
+僅加入 JSON 可序列化的非敏感值。信號元資料可以儲存在記憶體中或透過共享的發布-訂閱傳輸發送。它不會添加到模型提示中。
+
+使用`requestContext` for run-scoped configuration, such as credentials for a message that starts a run. Use `signalMetadata` for context that must stay attached to one message, including messages delivered to an active run.
+
+## 錯誤處理和交付 {/* #error-handling-and-delivery */}
+
+通道 Webhook 在Agent完成之前確認平台，因此`200` response means "received", not "answered". Before that acknowledgment, the adapter rejects bad requests synchronously (`401` for failed verification, `400` for an unparseable body, `503` for transient state failures) and the platform redelivers on non-`2xx` responses per its own policy. After the `200`, the platform never retries and Mastra owns errors. The default handler catches agent-run failures and posts an error message to the thread (customize it with `formatError`, which defaults to `❌ Error: {message}`). A custom handler that throws for a single message is only logged by Chat SDK, so nothing is posted or retried (see [Batched messages](#batched-messages) for multi-sender batches). Catch failures in custom handlers yourself:
+
+```typescript title="src/mastra/agents/your-agent.ts" oxfmt:false
+channels: {
+  adapters: {
+    slack: createSlackAdapter(),
+  },
+  handlers: {
+    onDirectMessage: async (thread, message, defaultHandler, ctx) => {
+      try {
+        ctx.signalMetadata.ticketId = await lookupTicket(message)
+      } catch (error) {
+        ctx.mastra?.getLogger().error('Ticket lookup failed', { error })
+        await thread.post('Something went wrong looking up your ticket. Try again in a moment.')
+        return
+      }
+      await defaultHandler(thread, message)
+    },
+  },
+},
+```
+
+平台重試有時會多次傳遞事件。適配器使用通道狀態進行重複資料刪除，這[storage](/docs/storage) can preserve across restarts. Because this protection is best effort, custom-handler side effects should be idempotent so duplicate delivery can't repeat work such as ticket creation.
+
+### 大量訊息 {/* #batched-messages */}
+
+當一個`chatOptions.concurrency` strategy (`burst`, `debounce`, or `queue`) batches several messages into one dispatch, Mastra splits the batch into one turn per sender: consecutive messages from the same sender form one turn, oldest first. Your handler runs once per turn with its own `ctx.requestContext`, `ctx.signalMetadata`, and `ctx.skipped` (that turn's earlier messages), so authorization and context apply to every sender. Await `defaultHandler` inside your handler, otherwise senders' turns can overlap. A handler that throws for one turn is logged, the remaining turns still run, and the first error is re-thrown afterwards. In a batch routed to `onMention` because one message mentions the bot, other senders' non-mention messages also reach `onMention` with `message.isMention` set to `false`.
+
+## 記錄 {/* #logging */}
+
+聊天 SDK 日誌使用[logger](/docs/observability/logging) on your Mastra instance by default, so they follow its format, level, and `redact` setting. Each record has a `component` field set to `chat-sdk`. With `PinoLogger`, Mastra's own channel logs have `component` set to `CHANNEL`, so you can filter the two apart. To send them elsewhere, set `chatOptions.logger`, which overrides this default.
+
+適配器有自己的記錄器，預設為控制台。您的應用程式在 Mastra 實例存在之前會建立每個適配器，因此 Mastra 無法為您設定該記錄器。經過[`toChatLogger()`](/reference/agents/channels#tochatlogger) when you create the adapter:
+
+```typescript title="src/mastra/agents/support-agent.ts"
+import { Agent } from '@mastra/core/agent'
+import { toChatLogger } from '@mastra/core/channels'
+import { createDiscordAdapter } from '@chat-adapter/discord'
+import { logger } from '../logger'
+
+export const supportAgent = new Agent({
+  id: 'support-agent',
+  name: 'Support Agent',
+  instructions: 'You are a helpful support assistant.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  channels: {
+    adapters: {
+      discord: createDiscordAdapter({
+        logger: toChatLogger(logger, { component: 'discord', minLevel: 'warn' }),
+      }),
+    },
+  },
+})
+```
+
+這`logger` here is the same one you pass to `new Mastra({ logger })`. Export it from its own file, such as `src/mastra/logger.ts`, so the agent file and `src/mastra/index.ts` can both import it. State adapters such as `createRedisState()` also default to the console and take the same `logger` option.
+
+Discord 適配器的網關路徑將每個訊息的前 100 個字元記錄在`info`, and `minLevel: 'warn'` keeps that text out of your logs. The Chat SDK itself logs message text at `debug`. If your Mastra logger runs at `debug`, set `chatOptions.logger` with a higher `minLevel` to keep that text out.
+
+：：：警告
+
+伐木工的`redact` setting doesn't apply to logs exported to [observability](/docs/observability/logging), and `warn` and `error` records export by default. When an `onSlashCommand` handler throws, the Chat SDK's `error` record includes the command's text, so catch errors in that handler to keep the text out of your logs and the export. If you set the observability `logging.level` to `info` or lower, use `minLevel` to keep other message text out of the export.
+
+:::
+
+## 多模式內容 {/* #multimodal-content */}
+
+像 Gemini 這樣的模型可以本地處理圖像、視訊和音訊。結合`inlineMedia` and `inlineLinks` to let users share rich content with your agent across platforms:
+
+```typescript title="src/mastra/agents/vision-agent.ts"
+import { Agent } from '@mastra/core/agent'
+import { createDiscordAdapter } from '@chat-adapter/discord'
+
+export const visionAgent = new Agent({
+  id: 'vision-agent',
+  name: 'Vision Agent',
+  instructions: 'You can see images, watch videos, and listen to audio.',
+  model: '__GATEWAY_GOOGLE_MODEL_FLASH__',
+  channels: {
+    adapters: {
+      discord: createDiscordAdapter(),
+    },
+    inlineMedia: ['image/*', 'video/*', 'audio/*'],
+    inlineLinks: [
+      { match: 'youtube.com', mimeType: 'video/*' },
+      { match: 'youtu.be', mimeType: 'video/*' },
+      'imgur.com',
+    ],
+  },
+})
+```
+
+
+
+* 使用者上傳螢幕截圖，Agent描述其所看到的內容。
+* 用戶上傳了一個`.mp4` clip and the agent summarizes the video.
+* 用戶貼上 YouTube 鏈接，Agent觀看並討論該視頻。
+* 用戶貼上 imgur 鏈接，Agent可以直接看到圖像。
+
+預設情況下，僅內聯發送影像（`inlineMedia: ['image/*']`). Unsupported types are described as text summaries so the agent knows about the file without failing on models that reject them. See [Channels reference](/reference/agents/channels#inline-media) for all `inlineMedia` patterns and [inlineLinks reference](/reference/agents/channels#inline-links) for domain matching, HEAD detection, and forced MIME types.
+
+## 無伺服器部署 {/* #serverless-deployment */}
+
+
+
+### 讓函數保持活力`waitUntil` {/* #keep-the-function-alive-with-waituntil */}
+
+通道 Webhook 返回`200` response right away, then the agent runs in the background to post its reply. On most serverless platforms the function is frozen as soon as it responds, which stops the run before the agent answers. Pass a `waitUntil` function so the platform keeps the instance alive until the run finishes.
+
+在 Vercel 上，透過`waitUntil` from `@vercel/functions`:
+
+```typescript title="src/mastra/agents/your-agent.ts"
+import { Agent } from '@mastra/core/agent'
+import { createSlackAdapter } from '@chat-adapter/slack'
+import { waitUntil } from '@vercel/functions'
+
+export const yourAgent = new Agent({
+  id: 'your-agent',
+  name: 'Your Agent',
+  instructions: 'You are a helpful assistant.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  channels: {
+    adapters: {
+      slack: createSlackAdapter(),
+    },
+    waitUntil,
+  },
+})
+```
+
+Vercel 和 AWS Lambda 需要`waitUntil`, since they freeze the function as soon as the response is sent. Cloudflare Workers and Netlify Functions are detected automatically from the request context, so they don't need it. For runtimes where `waitUntil` lives on the request context but isn't detected automatically, use `resolveWaitUntil`. See the [Channels reference](/reference/agents/channels#parameters) for details.
+
+### 與共享的發布/訂閱協調實例 {/* #coordinate-instances-with-a-shared-pubsub */}
+
+通道透過Agent路由訊息[signal pipeline](/docs/signals/overview), and each run acquires a lease on its thread so one run owns the conversation at a time.
+
+預設的記憶體中發布/訂閱不能跨越實例邊界，因此在無伺服器上，後續訊息可以路由到與運行Agent程式的實例不同的實例。
+
+如果沒有共享的發布/訂閱，則該實例將無法到達活動運行並啟動自己的運行，從而使原始運行保持不變並且線程被處理兩次。
+
+在 Redis Streams 上配置一個共享的 pub/sub`Mastra` instance so leases and signals coordinate across instances:
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { RedisStreamsPubSub } from '@mastra/redis-streams'
+import { yourAgent } from './agents/your-agent'
+
+export const mastra = new Mastra({
+  agents: { yourAgent },
+  pubsub: new RedisStreamsPubSub({
+    url: process.env.REDIS_URL,
+    keyPrefix: 'mastra:my-app',
+  }),
+})
+```
+
+[PubSub guide](/docs/server/pubsub) and the [`RedisStreamsPubSub` reference](/reference/pubsub/redis-streams).
+
+## 其他適配器 {/* #other-adapters */}
+
+Mastra 頻道使用 Chat SDK 轉接器，因此平台指南並不是支援平台的完整清單。使用導出與以下相容的適配器工廠的任何 Chat SDK 平台適配器`channels.adapters`.
+
+### 適配器目錄 {/* #adapter-catalog */}
+
+這[Chat SDK adapter catalog](https://chat-sdk.dev/adapters) is the canonical source for available adapters. The list below is a snapshot and may not always be up to date.
+
+
+
+* Agent電話
+* 百利甜酒
+* 不和諧
+* GitHub
+* 谷歌聊天
+* 簡訊
+* 卡普索
+* 雲雀/飛書
+* 線性
+* 林克
+* 活塊
+* 矩陣
+* 最重要的
+* 信差
+* 諾武
+* 重新發送
+* 森藍
+* 電報
+* 特威利奧
+* 維爾特
+* 網路
+* 網訊
+* 微信
+* WhatsApp 商業雲
+* X
+* 札洛
+* 澤尼奧
+
+
+
+### 使用相同的 Mastra 接線 {/* #use-the-same-mastra-wiring */}
+
+每个 Chat SDK 适配器的 Mastra 端都遵循相同的设置。安裝適配器包並將其工廠添加到`channels.adapters`. Then configure the platform credentials and point its webhook to the generated Mastra route.
+
+
+
+* [不和諧](/integrations/channels/discord)
+* [微軟團隊](/integrations/channels/teams)
+* [鬆弛](/integrations/channels/slack)
+* [電報](/integrations/channels/telegram)
+* [WhatsApp](/integrations/channels/whatsapp)
+
+### 檢查適配器文檔 {/* #check-the-adapter-docs */}
+
+在將新適配器連接到 Mastra 之前，請檢查適配器文件以了解：
+
+* 附件、卡片和豐富訊息支援。
+* 憑證環境變數。
+* 所需的平台權限或範圍。
+* 常規訊息是否需要長時間運作的偵聽器或輪詢。
+* 平台是否需要單獨的路線來進行設定、事件或互動。
+* Webhook 驗證行為。
+
+## 有關的 {/* #related */}
+
+* [通路參考](/reference/agents/channels)
+* [AgentController通道](/docs/harness/agent-controller#connect-chat-channels)
+* 📹 [Mastra channels workshop](https://www.youtube.com/watch?v=E9KFsZEnQO8\&t=5s)

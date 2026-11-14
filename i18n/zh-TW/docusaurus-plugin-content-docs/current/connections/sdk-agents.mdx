@@ -1,0 +1,388 @@
+---
+title: "SDK agents | Connections"
+description: "Use Claude Agent SDK, Cursor Agent SDK, and OpenAI Agents SDK agents inside Mastra as delegated agents with their native tools and model options."
+packages:
+  - "@mastra/claude"
+  - "@mastra/cursor"
+  - "@mastra/openai"
+  - "@mastra/core"
+---
+
+# SDKAgent
+
+SDK Agent程式可讓您在 Mastra 內使用其他Agent程式 SDK 框架。使用它們在 Mastra 專案中註冊 SDK 支援的Agent，而Provider SDK 保留自己的執行時間、Tool、權限和Agent循環。
+
+## 何時使用 SDK Agent {/* #when-to-use-sdk-agents */}
+
+* Provider SDK 已擁有Agent循環、Tool、權限或本地運行時。
+* 您想要在 Mastra 專案中註冊 SDK 支援的Agent程式。
+* 您需要與 Mastra 相容`generate()` and `stream()` outputs.
+* 您希望 SDK 運作中的使用、成本和Tool活動顯示在 Mastra 可觀察性中。
+
+## 支援的 SDK Agent {/* #supported-sdk-agents */}
+
+* [克勞德AgentSDK](#claude-agent-sdk)： 使用`@mastra/claude` to register a Claude SDK agent and call it with Mastra `generate()` and `stream()`.
+* [遊標AgentSDK](#cursor-agent-sdk)： 使用`@mastra/cursor` to register a Cursor SDK agent and call it with Mastra `generate()` and `stream()`.
+* [OpenAI Agent程式 SDK](#openai-agents-sdk)： 使用`@mastra/openai` to register an OpenAI SDK agent and call it with Mastra `generate()` and `stream()`.
+
+沒有專用 Mastra 套件的編碼Agent，例如 Cline 和 OpenCode，透過[Agent Client Protocol](/docs/connections/acp) instead.
+
+## 克勞德AgentSDK {/* #claude-agent-sdk */}
+
+使用`@mastra/claude` for Claude Code runtime configuration, permissions, tools, and agent-loop behavior.
+
+### 安裝克勞德軟體包 {/* #install-claude-packages */}
+
+安裝 Mastra 套件和 Claude Agent SDK 對等依賴項：
+
+```bash npm2yarn
+npm install @mastra/claude @anthropic-ai/claude-agent-sdk zod
+```
+
+設定 Claude SDK 憑證：
+
+```bash
+export ANTHROPIC_API_KEY="..."
+```
+
+### 創建 Claude SDK Agent {/* #create-a-claude-sdk-agent */}
+
+透過配置Claude Agent SDK`sdkOptions`.
+
+```typescript title="src/mastra/agents/claude-sdk-agent.ts"
+import { ClaudeSDKAgent } from '@mastra/claude'
+
+export const claudeSDKAgent = new ClaudeSDKAgent({
+  id: 'claude-sdk-agent',
+  name: 'Claude SDK Agent',
+  description: 'Use Claude Agent SDK through Mastra.',
+  sdkOptions: {
+    model: '__AI_SDK_ANTHROPIC_MODEL_SONNET__',
+    cwd: process.cwd(),
+  },
+})
+```
+
+### 新增Claude SDKTool {/* #add-claude-sdk-tools */}
+
+Claude Agent SDK 自訂Tool透過 Claude SDK 模型上下文協定 (MCP) 伺服器提供。`ClaudeSDKAgent` doesn't accept Mastra's `tools` option, and tools created with Mastra's `createTool()` aren't automatically available to it because the Claude SDK owns the agent loop. A Mastra tool can't be passed directly to `createSdkMcpServer()`.
+
+使用 Claude Agent SDK 建立Tool`tool()` helper, add it to a server, then pass the server through `sdkOptions.mcpServers`. The helper takes a raw Zod shape, not a `z.object()`, and a handler that returns MCP content. This example returns sample temperature data:
+
+```typescript title="src/mastra/agents/claude-sdk-agent.ts"
+import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk'
+import { ClaudeSDKAgent } from '@mastra/claude'
+import { z } from 'zod'
+
+const getTemperature = tool(
+  'get_temperature',
+  'Get the temperature for a city using sample data.',
+  { city: z.string() },
+  async ({ city }) => ({
+    content: [{ type: 'text', text: `${city}: 27 C` }],
+  }),
+)
+
+const weatherServer = createSdkMcpServer({
+  name: 'weather',
+  version: '1.0.0',
+  tools: [getTemperature],
+})
+
+export const claudeSDKAgent = new ClaudeSDKAgent({
+  id: 'claude-sdk-agent',
+  name: 'Claude SDK Agent',
+  description: 'Use Claude Agent SDK through Mastra.',
+  sdkOptions: {
+    model: '__AI_SDK_ANTHROPIC_MODEL_SONNET__',
+    cwd: process.cwd(),
+    mcpServers: {
+      weather: weatherServer,
+    },
+    allowedTools: ['mcp__weather__get_temperature'],
+  },
+})
+```
+
+這`allowedTools` value uses Claude Agent SDK MCP tool naming: `mcp__<server name>__<tool name>`.
+
+## 遊標AgentSDK {/* #cursor-agent-sdk */}
+
+使用`@mastra/cursor` to register a Cursor SDK agent in Mastra while keeping Cursor-specific setup in Cursor SDK options.
+
+### 安裝遊標包 {/* #install-cursor-packages */}
+
+安裝 Mastra 套件和 Cursor SDK 對等相依性：
+
+```bash npm2yarn
+npm install @mastra/cursor @cursor/sdk
+```
+
+設定 Cursor SDK 憑證：
+
+```bash
+export CURSOR_API_KEY="..."
+```
+
+### 建立 Cursor SDK Agent {/* #create-a-cursor-sdk-agent */}
+
+`sdkOptions`.
+
+```typescript title="src/mastra/agents/cursor-sdk-agent.ts"
+import { CursorSDKAgent } from '@mastra/cursor'
+
+export const cursorSDKAgent = new CursorSDKAgent({
+  id: 'cursor-sdk-agent',
+  name: 'Cursor SDK Agent',
+  description: 'Use Cursor Agent SDK through Mastra.',
+  sdkOptions: {
+    apiKey: process.env.CURSOR_API_KEY,
+    model: {
+      id: '__AI_SDK_OPENAI_MODEL_BASE__',
+    },
+    local: {
+      cwd: process.cwd(),
+    },
+  },
+})
+```
+
+遊標本地Agent需要顯式模型。將其設定為`sdkOptions.model`.
+
+### 使用現有的 Cursor SDK Agent {/* #use-an-existing-cursor-sdk-agent */}
+
+如果您的應用程式已建立 Cursor SDK Agent，請將該Agent傳遞給`CursorSDKAgent` instead:
+
+```typescript title="src/mastra/agents/cursor-sdk-agent.ts"
+import { Agent as CursorAgent } from '@cursor/sdk'
+import { CursorSDKAgent } from '@mastra/cursor'
+
+const cursorAgent = CursorAgent.create({
+  apiKey: process.env.CURSOR_API_KEY,
+  model: {
+    id: '__AI_SDK_OPENAI_MODEL_BASE__',
+  },
+  local: {
+    cwd: process.cwd(),
+  },
+})
+
+export const cursorSDKAgent = new CursorSDKAgent({
+  id: 'cursor-sdk-agent',
+  name: 'Cursor SDK Agent',
+  description: 'Use Cursor Agent SDK through Mastra.',
+  agent: cursorAgent,
+})
+```
+
+### 新增遊標SDKTool {/* #add-cursor-sdk-tools */}
+
+Cursor Agent SDK Tool使用 Cursor SDK 選項進行設定。透過模型上下文協定 (MCP) 伺服器`sdkOptions.mcpServers`:
+
+```typescript title="src/mastra/agents/cursor-sdk-agent.ts"
+import { CursorSDKAgent } from '@mastra/cursor'
+import { mcpServers } from '../mcp/cursor'
+
+export const cursorSDKAgent = new CursorSDKAgent({
+  id: 'cursor-sdk-agent',
+  name: 'Cursor SDK Agent',
+  description: 'Use Cursor Agent SDK through Mastra.',
+  sdkOptions: {
+    apiKey: process.env.CURSOR_API_KEY,
+    model: {
+      id: '__AI_SDK_OPENAI_MODEL_BASE__',
+    },
+    local: {
+      cwd: process.cwd(),
+    },
+    mcpServers,
+  },
+})
+```
+
+## OpenAI Agent程式 SDK {/* #openai-agents-sdk */}
+
+使用`@mastra/openai` to register an OpenAI Agents SDK agent in Mastra while keeping OpenAI-specific agent settings in OpenAI SDK options.
+
+### 安裝 OpenAI 軟體包 {/* #install-openai-packages */}
+
+
+
+```bash npm2yarn
+npm install @mastra/openai @openai/agents zod
+```
+
+設定 OpenAI SDK 憑證：
+
+```bash
+export OPENAI_API_KEY="..."
+```
+
+### 建立 OpenAI SDK Agent {/* #create-an-openai-sdk-agent */}
+
+透過配置 OpenAI Agents SDK`sdkOptions`. `OpenAISDKAgent` creates the OpenAI SDK agent on first use.
+
+```typescript title="src/mastra/agents/openai-sdk-agent.ts"
+import { OpenAISDKAgent } from '@mastra/openai'
+
+export const openaiSDKAgent = new OpenAISDKAgent({
+  id: 'openai-sdk-agent',
+  name: 'OpenAI SDK Agent',
+  description: 'Use OpenAI Agents SDK through Mastra.',
+  sdkOptions: {
+    name: 'Repository assistant',
+    instructions: 'Answer clearly and cite the relevant files.',
+    model: '__AI_SDK_OPENAI_MODEL_BASE__',
+  },
+})
+```
+
+### 使用現有的 OpenAI SDK Agent {/* #use-an-existing-openai-sdk-agent */}
+
+如果您的應用程式已建立 OpenAI SDK Agent，請將該Agent傳遞給`OpenAISDKAgent` instead:
+
+```typescript title="src/mastra/agents/openai-sdk-agent.ts"
+import { Agent as OpenAIAgent } from '@openai/agents'
+import { OpenAISDKAgent } from '@mastra/openai'
+
+const sdkAgent = new OpenAIAgent({
+  name: 'Repository assistant',
+  instructions: 'Answer clearly and cite the relevant files.',
+  model: '__AI_SDK_OPENAI_MODEL_BASE__',
+})
+
+export const openaiSDKAgent = new OpenAISDKAgent({
+  id: 'openai-sdk-agent',
+  name: 'OpenAI SDK Agent',
+  description: 'Use OpenAI Agents SDK through Mastra.',
+  agent: sdkAgent,
+})
+```
+
+### 新增OpenAI SDKTool {/* #add-openai-sdk-tools */}
+
+OpenAI Agents SDK Tool使用 OpenAI SDK 選項進行設定。使用 OpenAI SDK 建立Tool，然後傳遞它們`sdkOptions.tools`.
+
+```typescript title="src/mastra/agents/openai-sdk-agent.ts"
+import { tool } from '@openai/agents'
+import { OpenAISDKAgent } from '@mastra/openai'
+import { z } from 'zod'
+
+const getTemperature = tool({
+  name: 'get_temperature',
+  description: 'Get the current temperature for a city.',
+  parameters: z.object({
+    city: z.string(),
+  }),
+  execute: async ({ city }) => {
+    return `${city}: 27 C`
+  },
+})
+
+export const openaiSDKAgent = new OpenAISDKAgent({
+  id: 'openai-sdk-agent',
+  name: 'OpenAI SDK Agent',
+  description: 'Use OpenAI Agents SDK through Mastra.',
+  sdkOptions: {
+    name: 'Weather assistant',
+    model: '__AI_SDK_OPENAI_MODEL_BASE__',
+    tools: [getTemperature],
+  },
+})
+```
+
+## 註冊SDKAgent {/* #register-sdk-agents */}
+
+像其他Agent程式一樣在 Mastra 實例中註冊 SDK Agent程式：
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { claudeSDKAgent } from './agents/claude-sdk-agent'
+import { cursorSDKAgent } from './agents/cursor-sdk-agent'
+import { openaiSDKAgent } from './agents/openai-sdk-agent'
+
+export const mastra = new Mastra({
+  agents: {
+    claudeSDKAgent,
+    cursorSDKAgent,
+    openaiSDKAgent,
+  },
+})
+```
+
+註冊後，請致電他們`mastra.getAgentById()`:
+
+```typescript title="src/mastra/run-sdk-agent.ts"
+import { mastra } from './index'
+
+const agent = mastra.getAgentById('cursor-sdk-agent')
+const stream = await agent.stream('Inspect this project and describe the test setup.')
+
+for await (const chunk of stream.textStream) {
+  process.stdout.write(chunk)
+}
+```
+
+## 恢復 SDK 運行 {/* #resume-sdk-runs */}
+
+SDKAgent支援Mastra`resumeGenerate()` and `resumeStream()` with provider-native resume data. Pass the message to continue with and the resume identifier used by the underlying SDK.
+
+Claude SDK Agent可以恢復已知會話`sessionId`:
+
+```typescript title="src/mastra/resume-claude.ts"
+const result = await claudeSDKAgent.resumeGenerate({
+  message: 'Continue the previous task.',
+  sessionId: 'claude-session-id',
+})
+
+console.log(result.text)
+```
+
+OpenAI SDK Agent可以恢復先前的回應、對話或會話：
+
+```typescript title="src/mastra/resume-openai.ts"
+const stream = await openaiSDKAgent.resumeStream({
+  message: 'Continue the previous task.',
+  previousResponseId: 'resp_123',
+})
+
+for await (const chunk of stream.textStream) {
+  process.stdout.write(chunk)
+}
+```
+
+Cursor SDK Agent可以繼續使用包裝的 SDK Agent程式。如果需要透過 ID 恢復儲存的 Cursor SDK Agent，請透過`agentId` in `resumeData`.
+
+## 結構化輸出 {/* #structured-output */}
+
+Claude 和 OpenAI SDK Agent程式支援 Mastra`structuredOutput` through their provider-native structured output APIs. The validated value is available on `result.object`.
+
+```typescript title="src/mastra/run-openai-structured-output.ts"
+import { z } from 'zod'
+
+const result = await openaiSDKAgent.generate<{ summary: string }>('Summarize this project.', {
+  structuredOutput: {
+    schema: z.object({
+      summary: z.string(),
+    }),
+  },
+})
+
+console.log(result.object.summary)
+```
+
+Cursor SDK Agent程式在以下情況下會拋出明顯的錯誤：`structuredOutput` is requested because the Cursor TypeScript SDK doesn't expose a schema-constrained output API.
+
+## 可觀察性 {/* #observability */}
+
+SDKAgent創建MastraAgent和模型跨度`generate()` and `stream()` calls. Mastra records SDK-provided usage, tool activity, and provider metadata when the vendor SDK exposes those events.
+
+Claude SDK 運行可以包括來自 Claude 結果訊息的 SDK 估計成本。 Cursor SDK 運行包括來自 Cursor 互動更新的令牌使用情況。 OpenAI SDK 運作包含 OpenAI 運作狀態中的令牌使用情況。
+
+有關存儲和儀表板設置，請參閱[Observability](/docs/observability/overview).
+
+## 有關的 {/* #related */}
+
+* [Agent商概覽](/docs/agents/overview)
+* [Tool](/docs/agents/tools)
+* [可觀察性](/docs/observability/overview)

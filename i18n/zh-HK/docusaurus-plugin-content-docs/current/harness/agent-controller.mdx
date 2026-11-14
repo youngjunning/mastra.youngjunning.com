@@ -1,37 +1,34 @@
 ---
-title: "AgentController | Harness"
-description: "使用隔離 Session、持久化 thread、mode、審批、subagent 和 channel，建立互動式 agent 應用程式。"
+title: 'Agent Controller | Harness'
+description: 'Build interactive Mastra agent applications with Agent Controller sessions, persistent threads, modes, approvals, subagents, channels, and runtime state.'
 packages:
-  - "@mastra/core"
+  - '@mastra/core'
+  - '@mastra/client-js'
 ---
 
-# AgentController
+# Agent控制器
 
-:::experimental
+`AgentController`是互動式Agent應用程式的共享運行時主機。它協調模式、模型、儲存、工作空間、Tool批准、子Agent和通道。每個使用者或活動任務透過一個隔離的工作[`Session`](/reference/agent-controller/session).
 
-[`AgentController`](/reference/agent-controller/agent-controller-class) 功能目前處於 beta 階段，在正式脫離 beta 狀態前，次要版本可能會包含破壞性變更。
+[馬斯特拉代碼](https://code.mastra.ai)和[Mastra Factory](https://factory.mastra.ai) are the flagship AgentController implementations. They're coding agents with multi-model support, persistent conversations, and plan-then-execute workflows. Read [Building a coding agent](https://mastra.ai/blog/building-a-coding-agent) for a step-by-step TUI guide.
 
-:::
+當您託管的Agent程式在程式碼庫中工作時，請使用以下命令建立它[`createCodingAgent()`](/reference/coding-agent/create-coding-agent) instead of `new Agent()`. It returns a standard `Agent` that already has a workspace, task tracking, and retries for transient model errors, which are the defaults Mastra Code runs on.
 
-`AgentController` 是互動式 agent 應用程式的共享運行時 host。它會協調 mode、model、storage、Workspace、Tool 審批、subagent 和 channel。每位用戶或每項進行中的任務，都會透過隔離的 [`Session`](/reference/agent-controller/session) 運作。
+## 何時使用Agent控制器 {/* #when-to-use-the-agent-controller */}
 
-[Mastra Code](https://code.mastra.ai) 是 AgentController 的旗艦實作。它是以終端機為基礎的編程助手，支援多 model、持久化對話，以及先規劃後執行的 Workflow。請閱讀[建立編程助手](/guides/guide/coding-agent)，了解逐步操作方法。
+當您的應用程式需要時，請使用Agent控制器：
 
-## 何時使用 AgentController {/* #when-to-use-the-agentcontroller */}
+* 共享一個對話線程的多種Agent模式（例如，計劃→建置→審查）
+* UI 與Agent循環之間的控制層（模型切換、狀態持久性、執行緒管理）
+* 人機互動門控的Tool審批流程與權限策略
+* 子Agent編排，使用受限Tool委派重點子任務
+* 重新啟動後持久線程和選定的線程設置，每個會話具有隔離的實時狀態
 
-當應用程式需要以下功能時，請使用 AgentController：
+您可以自己將所有這些組裝在[Agent class](/docs/agents/overview), which exposes the full agent loop, tools, and memory. The AgentController provides opinionated defaults for an ongoing session where the agent acts as a collaborator rather than a one-shot endpoint. Use the Agent class directly for full control or request-response calls. Choose AgentController for ongoing sessions without building your own session runtime.
 
-- 共用同一個對話 thread 的多個 agent mode（例如：規劃 → 建構 → 審查）
-- 位於 UI 與 agent loop 之間的控制層（切換 model、持久化 state、管理 thread）
-- Tool 審批流程和權限政策，以 human-in-the-loop 方式把關
-- 協調 subagent，把範圍明確的子任務委派給受 Tool 限制的 subagent
-- 在重新啟動後仍保留 thread 和所選的 thread 設定，同時為每個 Session 隔離即時 state
+## 快速入門 {/* #quickstart */}
 
-你可以自行在 [Agent class](/docs/agents/overview) 之上組合所有這些功能；該 class 會公開完整的 agent loop、Tool 和 memory。AgentController 為持續運作的 Session 提供具取向的預設設定，讓 agent 以協作者而非一次性 endpoint 的方式工作。如果需要完全控制流程或進行 request-response 呼叫，請直接使用 Agent class。如果想採用協作式 Session 模式，但不想自行建構其周邊運行時，請使用 AgentController。
-
-## 快速開始 {/* #quickstart */}
-
-建立底層的 [`Agent`](/reference/agents/agent)、storage 和 [`Workspace`](/reference/workspace/workspace-class)。先呼叫一次 [`controller.init()`](/reference/agent-controller/agent-controller-class#init)，再使用 [`controller.createSession()`](/reference/agent-controller/agent-controller-class#createsessionoptions) 建立 Session。使用 [`session.subscribe()`](/reference/agent-controller/session#subscribelistener) 訂閱事件，並透過 [`session.sendMessage()`](/reference/agent-controller/session#sendmessage-content-files-requestcontext-) 傳送工作：
+[`Agent`](/reference/agents/agent), storage, and [`Workspace`](/reference/workspace/workspace-class). Call [`controller.init()`](/reference/agent-controller/agent-controller-class#init) once, then use [`controller.createSession()`](/reference/agent-controller/agent-controller-class#createsessionoptions) to create a Session. Subscribe with [`session.subscribe()`](/reference/agent-controller/session#subscribelistener) and send work with [`session.sendMessage()`](/reference/agent-controller/session#sendmessage-content-files-requestcontext-author-):
 
 ```typescript title="src/mastra/agent-controller.ts"
 import { Agent } from '@mastra/core/agent'
@@ -79,8 +76,8 @@ const session = await controller.createSession({
 })
 
 const unsubscribe = session.subscribe(event => {
-  if (event.type === 'message_update') {
-    console.log(event.message)
+  if (event.type === 'message_update' && event.event.type === 'text-delta') {
+    process.stdout.write(event.event.delta)
   }
 })
 
@@ -88,59 +85,102 @@ await session.sendMessage({ content: 'Plan a small TypeScript CLI.' })
 unsubscribe()
 ```
 
-多個 Session 應共用同一個 controller。請勿在 controller 上儲存目前的 Session，也不要透過 controller 層級的訊息方法路由工作。
+每個訊息都會發出一個`message_start` event with the initial message, zero or more `message_update` events with compact deltas, and a `message_end` event containing the message ID. Apply updates by ID when you need to reconstruct the complete message.
+
+對多個會話使用相同的控制器。不要在控制器上儲存目前會話或透過控制器級訊息方法路由工作。
 
 ## 了解運行時模型 {/* #understand-the-runtime-model */}
 
-controller、Session 和 thread 各有不同的生命週期：
+控制器、會話和執行緒有不同的生命週期：
 
-- **Controller**：設定與運行時服務的共享 host。只需初始化一次，之後可重複使用。
-- **Session**：針對單一用戶、任務或並行工作範圍而設的隔離即時運行時。它擁有目前使用的 mode、model、state、event bus、run state、grant，以及目前的 thread binding。
-- **Thread**：包含訊息和 thread 設定的已儲存對話。設定 storage 後，即使重新建立 controller 或 process，thread 仍可保留。
+* **控制器**：用於配置和運行時服務的共享主機。初始化一次並重複使用。
+* **會議**：一個使用者、任務或並發工作的隔離即時執行時，透過其會話 ID 進行尋址。它擁有活動模式、模型、狀態、事件匯流排、運行狀態、授權和當前執行緒綁定。
+* **線**：包含訊息和線程設定的儲存對話。當您配置儲存時，執行緒可以在控制器和進程重新建立後繼續存在。
 
-Session 是即時 state。任意的 [`session.state`](/reference/agent-controller/session#state)、權限 grant、待處理審批和進行中的 run，不會在重新建立 process 後自動保留。Thread 訊息和所選的 thread 設定（包括 mode 和各 mode 的 model 選擇）則可透過 storage 持久化。
+會話是即時狀態。隨意的[`session.state`](/reference/agent-controller/session#state), permission grants, pending approvals, and active runs don't automatically survive process recreation. Thread messages and selected thread settings, including the active mode and the current model, can persist through storage, but switching modes doesn't change the model.
 
-## Session 和 thread {/* #sessions-and-threads */}
+## 會話和執行緒 {/* #sessions-and-threads */}
 
-`createSession()` 會按 `resourceId` 和可選的 `scope` 取得或建立 Session：
+`createSession()`透過會話獲取或創建`id`. The `resourceId` names who owns the session's threads and resource-scoped memory. When you omit `id`, it defaults to `resourceId`:
 
 ```typescript
 const webSession = await controller.createSession({
+  id: 'user-123:web',
   resourceId: 'user-123',
-  scope: 'web',
 })
 
-const sameWebSession = await controller.createSession({
-  resourceId: 'user-123',
-  scope: 'web',
-})
+const sameWebSession = await controller.getSession('user-123:web')
 
 const workerSession = await controller.createSession({
+  id: 'user-123:background-worker',
   resourceId: 'user-123',
-  scope: 'background-worker',
 })
 
 console.log(webSession === sameWebSession) // true
 console.log(webSession === workerSession) // false
 ```
 
-不同 scope 的 Session 會各自擁有獨立的 event bus、run loop、state、mode 與 model 選擇，以及目前的 thread binding。它們儲存的 thread 仍屬於同一個共享 `resourceId`。
+具有不同 ID 的會話具有單獨的事件匯流排、運行循環、狀態、模式和模型選擇以及當前執行緒綁定。它們儲存的線程和資源範圍記憶體仍然屬於共享`resourceId`, so listing threads by resource returns both sessions' threads.
 
-當 host 必須把 Session 綁定至指定的 thread 時，請傳入 `threadId`。controller 會切換至現有 thread；如果該 thread 不存在，便以該 ID 建立。即使 `createSession()` 傳回快取的 Session，此行為亦同樣適用：
+經過`threadId` when the host must bind the Session to an exact thread. The controller switches to the existing thread or creates it with that ID when it's missing. This behavior also applies when `createSession()` returns a cached Session:
 
 ```typescript
 const session = await controller.createSession({
+  id: 'user-123:web',
   resourceId: 'user-123',
-  scope: 'web',
   threadId: 'support-ticket-42',
 })
 ```
 
-使用 [`session.thread.create()`](/reference/agent-controller/session#sessionthreadcreate-title-id-) 和 [`session.thread.switch()`](/reference/agent-controller/session#sessionthreadswitch-threadid-emitevent-)，可讓同一個即時 Session 在不同對話之間切換。
+使用[`session.thread.create()`](/reference/agent-controller/session#sessionthreadcreate-title-id-requestcontext-) and [`session.thread.switch()`](/reference/agent-controller/session#sessionthreadswitch-threadid-emitevent-requestcontext-) to move one live Session between conversations.
 
-## 切換 mode 和 model {/* #switch-modes-and-models */}
+### 轉移執行緒所有權 {/* #transfer-thread-ownership */}
 
-Mode 會變更共享底層 agent 所使用的 instructions 和 Tool，而毋須取代 Session 或 thread。請在 controller 上設定各 mode 專用的 Tool 和可見範圍：
+每個新線程都將其持久性所有者存儲在`metadata.ownerId` and its original creator in `metadata.createdBy`. Both default to the Session host's `ownerId`. `createdBy` doesn't change when ownership transfers.
+
+讀取活動線程的所有者並將其傳遞給`session.thread`:
+
+```typescript
+const currentOwnerId = await session.thread.getOwner()
+
+await session.thread.transferOwnership({
+  toOwnerId: 'user-456',
+})
+```
+
+傳輸在一個進程內串行進行。需要持久跨進程比較和設定的主機應先將其提交到自己的儲存中，然後調用`transferOwnership()` to mirror the owner onto the active thread.
+
+每次運行都會在啟動時拍攝執行緒所有者的快照。Tool和其他動態運行時程式碼可以從中讀取該值`AgentControllerRequestContext.threadOwnerId`. If ownership changes during a run, the active run keeps the old snapshot and the next run receives the new owner. `context.session.ownerId` remains the identity of the process-local Session host.
+
+### 列出客戶端儲存的訊息 {/* #list-stored-messages-from-the-client */}
+
+使用Agent控制器客戶端來翻閱執行緒的儲存訊息。傳遞選項物件會傳回帶有分頁元資料的訊息：
+
+```typescript
+import { MastraClient } from '@mastra/client-js'
+
+const client = new MastraClient({ baseUrl: 'http://localhost:4111' })
+const session = client.getAgentController('assistant-controller').session('user-123')
+
+const result = await session.listMessages('support-ticket-42', {
+  page: 0,
+  perPage: 20,
+  orderBy: { field: 'createdAt', direction: 'DESC' },
+  filter: {
+    dateRange: { start: new Date('2026-01-01') },
+  },
+})
+
+console.log(result.messages)
+console.log(result.total)
+console.log(result.hasMore)
+```
+
+`page`是零索引的。省略`perPage` uses the storage default of 40 messages. Use `include` to request a message by ID with adjacent messages. `limit` is a deprecated alias for `perPage`; existing paged callers may use `{ limit, page }`, but must use `perPage` with `orderBy`, `filter`, or `include`. The existing numeric form, `session.listMessages(threadId, limit)`, remains available when you need the newest message window as an array, ordered oldest-first.
+
+## 切換模式和型號 {/* #switch-modes-and-models */}
+
+模式變更共享後備Agent使用的指令和Tool，而不替換會話或執行緒。在控制器上配置特定於模式的Tool和可見性：
 
 ```typescript
 const modes = [
@@ -161,9 +201,9 @@ const modes = [
 ]
 ```
 
-`tools` 和 `additionalTools` 是互斥的輸入，用於加入 mode 專用 Tool。當 controller 有共享底層 agent 時，任一輸入都會把這些 Tool 疊加至 agent 的 Tool。使用 `availableTools` 限制某個 mode 最終公開的 Tool 名稱。權限 deny 仍優先於此 allowlist。
+`tools`和`additionalTools` are mutually exclusive inputs for adding mode-specific tools. When the controller has a shared backing agent, either input layers those tools onto the agent's tools. Use `availableTools` to restrict the final exposed tool names for a mode. Permission denies still take precedence over this allowlist.
 
-使用 [`session.mode.switch()`](/reference/agent-controller/session#sessionmodeswitch-modeid-) 切換即時 Session。透過 [`session.mode.get()`](/reference/agent-controller/session#sessionmodeget) 或 [`session.mode.resolve()`](/reference/agent-controller/session#sessionmoderesolve) 讀取目前使用的 mode：
+切換即時會話[`session.mode.switch()`](/reference/agent-controller/session#sessionmodeswitch-modeid-). Read the active mode with [`session.mode.get()`](/reference/agent-controller/session#sessionmodeget) or [`session.mode.resolve()`](/reference/agent-controller/session#sessionmoderesolve):
 
 ```typescript
 await session.mode.switch({ modeId: 'build' })
@@ -172,22 +212,46 @@ console.log(session.mode.get()) // "build"
 console.log(session.mode.resolve().instructions)
 ```
 
-使用 [`session.model.switch()`](/reference/agent-controller/session#sessionmodelswitch-modelid-scope-modeid-) 獨立切換 model，然後透過 [`session.model.get()`](/reference/agent-controller/session#sessionmodelget) 讀取目前的選擇。以 thread 為 scope 的選擇會按 mode 儲存，Session 返回該 mode 時便會還原：
+獨立切換模型[`session.model.switch()`](/reference/agent-controller/session#sessionmodelswitchmodelid-options), then read the active selection with [`session.model.get()`](/reference/agent-controller/session#sessionmodelget). The selection is stored as the thread's current model and remains active when the Session changes modes:
 
 ```typescript
-await session.model.switch({
-  modelId: '__GATEWAY_ANTHROPIC_MODEL_SONNET__',
-  scope: 'thread',
-})
+await session.model.switch('__GATEWAY_ANTHROPIC_MODEL_SONNET__')
 
 console.log(session.model.get())
 ```
 
-若選擇只需保存在記憶體而不應寫入 thread 設定，請使用 `scope: 'global'`。
+### 選擇觀察記憶模型 {/* #select-observational-memory-models */}
 
-## 管理 thread 和 state {/* #manage-threads-and-state */}
+觀察者和反射器模型的選擇是獨立的。每個角色都可以使用主機從活動主模型和會話狀態解析的明確模型或自動選擇。
 
-使用 [`session.thread.list()`](/reference/agent-controller/session#sessionthreadlistoptions) 列出已儲存的對話：
+使用返回特定模型 ID 的同步解析器配置自動選擇：
+
+```typescript
+const controller = new AgentController({
+  // ...
+  omConfig: {
+    observerModel: 'auto',
+    reflectorModel: 'auto',
+    defaultObserverModelId: '__GATEWAY_OPENAI_MODEL_LUNA__',
+    defaultReflectorModelId: '__GATEWAY_OPENAI_MODEL_LUNA__',
+    resolveAutoModelId: ({ currentModelId }) => currentModelId,
+  },
+})
+```
+
+`session.om.observer.model()`回報`'auto'` or a concrete model ID. `session.om.observer.modelId()` returns the effective concrete model. A host can therefore change the main model without rewriting automatic role settings.
+
+將一個角色重置為自動選擇而不更改另一個角色：
+
+```typescript
+await session.om.observer.switchModel({ modelId: 'auto' })
+```
+
+如果解析器傳回`undefined` or throws, the role uses its concrete `defaultObserverModelId` or `defaultReflectorModelId` fallback. See the [`Session` Observational Memory API](/reference/agent-controller/session#observational-memory) for explicit selection.
+
+## 管理線程和狀態 {/* #manage-threads-and-state */}
+
+列出儲存的對話[`session.thread.list()`](/reference/agent-controller/session#sessionthreadlistoptions):
 
 ```typescript
 const thread = await session.thread.create({ title: 'Release planning' })
@@ -197,7 +261,7 @@ await session.thread.switch({ threadId: thread.id })
 console.log(threads.length)
 ```
 
-使用 `session.state` 管理與 Session 關聯的結構化即時 state。透過 [`session.state.get()`](/reference/agent-controller/session#sessionstateget) 讀取，並使用 [`session.state.set()`](/reference/agent-controller/session#sessionstatesetupdates) 寫入更新。如需驗證和預設值，請在 controller 上定義 `stateSchema` 和 `initialState`：
+使用`session.state` for structured live state associated with the Session. Read it with [`session.state.get()`](/reference/agent-controller/session#sessionstateget) and write updates with [`session.state.set()`](/reference/agent-controller/session#sessionstatesetupdates). Define `stateSchema` and `initialState` on the controller when you need validation and defaults:
 
 ```typescript
 console.log(session.state.get())
@@ -205,11 +269,11 @@ console.log(session.state.get())
 await session.state.set({ activeProject: 'docs-site' })
 ```
 
-`session.state.get()` 會傳回 snapshot。`set()` 會驗證更新並將其合併至 Session state。除非 host 明確持久化並還原此 state，否則應將其視為即時 Session 資料。
+`session.state.get()`返回快照。`set()` validates and merges the update into the Session state. Treat this state as live Session data unless your host explicitly persists and restores it.
 
-## 審批 Tool 並恢復 suspension {/* #approve-tools-and-resume-suspensions */}
+## 批准Tool並恢復暫停 {/* #approve-tools-and-resume-suspensions */}
 
-權限政策會決定 Tool 是獲准、被拒，還是傳送至 UI 供用戶審批。透過 controller 上的 `toolCategoryResolver`，把自訂 Tool 對應至不同 category：
+權限策略決定是否允許、拒絕Tool或將Tool傳送至 UI 進行批准。將自訂Tool對應到類別`toolCategoryResolver` on the controller:
 
 ```typescript
 const controller = new AgentController({
@@ -220,7 +284,9 @@ const controller = new AgentController({
 })
 ```
 
-使用 [`session.permissions.setForCategory()`](/reference/agent-controller/session#sessionpermissionssetforcategory-category-policy-) 設定 category policy，並透過 [`session.permissions.setForTool()`](/reference/agent-controller/session#sessionpermissionssetfortool-toolname-policy-) 設定 Tool policy：
+呼叫規則允許的Tool不會暫停運作。定期上`Agent`, tool calls in one step run concurrently when none of them needs approval or can suspend. Durable agents run them one at a time unless the session's `yolo` state is on.
+
+配置類別策略[`session.permissions.setForCategory()`](/reference/agent-controller/session#sessionpermissionssetforcategory-category-policy-) and tool policies with [`session.permissions.setForTool()`](/reference/agent-controller/session#sessionpermissionssetfortool-toolname-policy-):
 
 ```typescript
 await session.permissions.setForCategory({
@@ -234,7 +300,7 @@ await session.permissions.setForTool({
 })
 ```
 
-當 policy 解析為 `ask` 時，請訂閱審批事件，並使用 [`session.respondToToolApproval()`](/reference/agent-controller/session#respondtotoolapproval-decision-toolcallid-requestcontext-declinecontext-) 傳回用戶的決定：
+當政策決定`ask`, subscribe for the approval event and return the user's decision with [`session.respondToToolApproval()`](/reference/agent-controller/session#respondtotoolapproval-decision-toolcallid-requestcontext-declinecontext-):
 
 ```typescript
 session.subscribe(event => {
@@ -247,9 +313,9 @@ session.subscribe(event => {
 })
 ```
 
-`always_allow_category` 決定會在即時 Session 的剩餘期間授予該 Tool category。Session grant 並非持久的 process 層級權限。
+這`always_allow_category` decision grants the tool category for the gate's thread. Grants aren't durable process-level permissions.
 
-互動式 Tool（例如 [`ask_user`](/reference/tools/ask-user-tool) 和 [`submit_plan`](/reference/tools/submit-plan-tool)）則使用可恢復的 Tool suspension。請透過 [`session.respondToToolSuspension()`](/reference/agent-controller/session#respondtotoolsuspension-resumedata-toolcallid-requestcontext-) 恢復：
+互動式Tool，例如[`ask_user`](/reference/tools/ask-user-tool) and [`submit_plan`](/reference/tools/submit-plan-tool) use resumable tool suspensions instead. Resume them with [`session.respondToToolSuspension()`](/reference/agent-controller/session#respondtotoolsuspension-resumedata-address-toolcallid-requestcontext-):
 
 ```typescript
 session.subscribe(event => {
@@ -262,11 +328,13 @@ session.subscribe(event => {
 })
 ```
 
-對於 `submit_plan`，請使用 `{ action: 'approved' }` 或 `{ action: 'rejected', feedback }` 恢復。獲審批的 plan 可在 run 繼續前，切換至由 `transitionsTo` 設定的 mode。
+為了`submit_plan`, resume with `{ action: 'approved' }` or `{ action: 'rejected', feedback }`. An approved plan can switch to the mode configured by `transitionsTo` before the run continues.
 
-## 委派給 subagent {/* #delegate-to-subagents */}
+內建的`submit_plan` tool takes a plan file path, not the plan text. The agent writes the plan to a file and submits its path. It needs a filesystem it can write to, such as a workspace filesystem. To show the plan for approval, your app reads the file at the submitted `path`.
 
-在 controller 上設定可用的 subagent 類型。之後，內置的 `subagent` Tool 便可使用這些定義，委派範圍明確的任務：
+## 委託給子Agent {/* #delegate-to-subagents */}
+
+在控制器上配置可用的子Agent程式類型。內建的`subagent` tool can then delegate focused tasks using those definitions:
 
 ```typescript
 const controller = new AgentController({
@@ -281,19 +349,19 @@ const controller = new AgentController({
       instructions: 'Inspect the change and report actionable findings.',
       allowedControllerTools: ['searchDocs'],
       allowedWorkspaceTools: ['view', 'find_files'],
-      defaultModelId: '__GATEWAY_OPENAI_MODEL_MINI__',
+      defaultModelId: '__GATEWAY_OPENAI_MODEL_LUNA__',
     },
   ],
 })
 ```
 
-一般 subagent 會以其設定的 instructions 和受限制的 Toolset 啟動。當 child 應複製 parent thread，並使用 parent agent 的 instructions 和 Tool 運行時，請設定 `forked: true`。Forked subagent 會保留 parent prompt prefix、忽略定義中的 instructions、Tool、allowlist 和預設 model，並要求 controller 已設定 memory。
+常規子Agent程式從其配置的指令和受限Tool集開始。放`forked: true` when the child should clone the parent thread and run with the parent agent's instructions and tools. Forked subagents preserve the parent prompt prefix, ignore the definition's instructions, tools, allowlists, and default model, and require memory on the controller.
 
-使用 [`session.subagents.model.set()`](/reference/agent-controller/session#sessionsubagentsmodelset-modelid-agenttype-) 儲存一個預設 subagent model，或為特定 agent 類型儲存 model。透過 [`session.subagents.model.get()`](/reference/agent-controller/session#sessionsubagentsmodelget-agenttype-) 讀取選擇：
+使用[`session.subagents.model.set()`](/reference/agent-controller/session#sessionsubagentsmodelset-modelid-agenttype-) to store one default subagent model or a model for a specific agent type. Read the selection with [`session.subagents.model.get()`](/reference/agent-controller/session#sessionsubagentsmodelget-agenttype-):
 
 ```typescript
 await session.subagents.model.set({
-  modelId: '__GATEWAY_OPENAI_MODEL_MINI__',
+  modelId: '__GATEWAY_OPENAI_MODEL_LUNA__',
 })
 
 await session.subagents.model.set({
@@ -306,11 +374,11 @@ const reviewerModel = session.subagents.model.get({
 })
 ```
 
-這些選擇會寫入 thread 設定。agent 類型的選擇優先於 Session 的預設 subagent model。
+這些選擇將寫入線程設定。Agent類型選擇優先於會話的預設子Agent模型。
 
-## 連接聊天 channel {/* #connect-chat-channels */}
+## 連接聊天頻道 {/* #connect-chat-channels */}
 
-把 channel adapter 傳入 controller，並在 [`Mastra`](/reference/core/mastra-class) instance 上註冊：
+[`Mastra`](/reference/core/mastra-class) instance:
 
 ```typescript title="src/mastra/index.ts"
 import { Mastra } from '@mastra/core'
@@ -333,7 +401,7 @@ const controller = new AgentController({
     },
     onSessionStart: async ({ session, thread }) => {
       const plan = await billing.planFor(thread.resourceId)
-      await session.model.switch({ modelId: plan.modelId })
+      await session.model.switch(plan.modelId)
     },
   },
 })
@@ -344,23 +412,69 @@ export const mastra = new Mastra({
 })
 ```
 
-將每個平台的 webhook 指向該 controller 專用的 route：
+將每個平台 Webhook 指向特定於控制器的路由：
 
 ```text
 /api/agent-controllers/<CONTROLLER_ID>/channels/<PLATFORM>/webhook
 ```
 
-每個外部聊天 thread 都會對應至一個 controller Session 和 Mastra thread。預設情況下，新 Session 會使用從 adapter 的 chat-thread ID 衍生而來，並以 `channel:` 為前綴的 resource ID。使用 `resolveResourceId`，可將直接訊息對應至現有的應用程式用戶，或選擇另一個 memory owner。callback 只會影響新 thread；現有 thread 會保留其已儲存的 resource ID。
+每個外部聊天執行緒對應到一個控制器會話和 Mastra 執行緒。預設情況下，新會話使用從適配器的聊天執行緒 ID 派生的資源 ID，前綴為`channel:`. Use `resolveResourceId` to map direct messages to an existing application user or choose another memory owner. The callback only affects new threads. An existing thread keeps its stored resource ID.
 
-Channel Session 由 controller 建立，而非由你的程式碼建立，因此應在 `onSessionStart` 進行設定。它會在 Session 綁定至所對應的 thread 後、處理第一則訊息前，為每個 Session 運行一次。你可在這裏套用 channel Session 在其他情況下不會獲得的 model、memory 設定或 Session state。同一 thread 的後續訊息會重用 Session，不會再次呼叫此 callback。錯誤會記錄在 log 中並被忽略，因此即使 Session 無法完成設定，仍會回覆訊息。
+通道會話是由控制器而不是您的程式碼創建的，因此`onSessionStart` is where you configure them. It runs once per session, after the session is bound to its mapped thread and before the first message is handled. A channel session starts with controller defaults, so this is where you set its model and memory settings. Later messages in the same thread reuse the session and don't call it again. Errors are logged and swallowed so a session that can't be configured still answers the message.
 
-Controller channel Session 和自動審批 state 會保存在記憶體中，因此請使用長期運行的伺服器。待處理審批和即時 Session state 不會在 process 重新啟動後保留。無法顯示審批控制項的 adapter 會自動運行 Tool，而不顯示審批提示，以免 run 一直處於 suspended 狀態。
+### 授權和路由通道會話 {/* #authorize-and-route-channel-sessions */}
 
-有關 adapter 設定和各平台專用的 webhook 設定，請參閱 [Channel](/docs/capabilities/channels/overview)。
+`onSessionStart`在會話存在後運行併吞掉錯誤，因此它無法拒絕請求。使用`resolveSession` when your host decides whether a session may exist. It replaces the built-in session creation and runs before any session exists. Throwing refuses the request before the controller creates a session or calls the model. Mastra logs the refusal and leaves the chat thread silent, so your authorization message never reaches the channel.
 
-## 連接 UI {/* #connect-a-ui */}
+```typescript oxfmt:false
+channels: {
+  adapters: { slack: createSlackAdapter() },
+  resolveSession: async ({ controller, thread, requestContext }) => {
+    const install = await installs.authorize(requestContext.get('teamId'))
 
-訂閱 Session 事件以接收漸進式更新。當 UI 需要完整的 render snapshot 時，透過 [`session.displayState.get()`](/reference/agent-controller/session#sessiondisplaystateget) 讀取經歸納的 display state：
+    return controller.createSession({
+      id: `${install.id}:${thread.id}`,
+      resourceId: thread.resourceId,
+      threadId: thread.id,
+      ownerId: controller.id,
+      requestContext,
+    })
+  },
+}
+```
+
+在下面創建會話`thread.resourceId`. Because a session can bind only threads it owns, use `resolveResourceId` to assign a different owner to the mapped thread. Pass `threadId: thread.id` so the session opens on the mapped thread. Without it, a session that has tags or a `projectPath` doesn't treat the mapped thread as its own, so it creates an extra empty thread before switching to the mapped one. Sessions are get-or-create by `id`. Give each installation or principal its own `id` when one thread needs separate sessions.
+
+不是拒絕的故障（儲存中斷、解析器依賴項中的錯誤）仍然會向執行緒發布錯誤，因此損壞的機器人看起來不像沉默的機器人。如果您需要在自己的程式碼中區分它們，則拒絕是`ChannelSessionRejectedError` with the original error as its `cause`.
+
+`resolveSession`當使用者使用該操作的請求上下文回答批准卡時也會運作。共用安裝會重新驗證核准者，而不是信任發送原始訊息的人。
+
+### 處理過時的批准 {/* #handle-stale-approvals */}
+
+批准門存在於記憶體中，因此重新啟動後回答的每個批准都會過時。 Mastra 絕不會為了陳舊的操作而運行該Tool。使用`onStaleToolApproval` to settle the attempt the user answered, instead of dropping it:
+
+```typescript oxfmt:false
+channels: {
+  adapters: { slack: createSlackAdapter() },
+  onStaleToolApproval: async ({ decision, toolCallId, runId, memory }) => {
+    await runs.markInterrupted({ runId, toolCallId, decision, threadId: memory.thread })
+  },
+}
+```
+
+`runId`是提交批准卡的运行，这是用户回答的尝试，也是您在重新启动后解决的尝试。會話自己的運行單獨傳遞為`currentRunId`, and is usually `null` or a different run by then.
+
+控制器通道會話和自動批准狀態保存在記憶體中，因此請使用長期存在的伺服器。待批准和即時會話狀態不會在流程重新啟動後繼續存在。無法呈現核准控制項的轉接器會在沒有核准提示的情況下自動執行Tool，因此運作不會保持暫停狀態。
+
+看[Channels](/docs/channels) for adapter setup and platform-specific webhook configuration.
+
+## 連結使用者介面 {/* #connect-a-ui */}
+
+連接方式取決於 UI 的運作位置。擁有控制器的終端 UI 或伺服器持有`Session` object and subscribes to it directly. A browser UI runs in a different process, so it reaches the same session over the controller's HTTP routes with [`@mastra/client-js`](/reference/client-js/mastra-client).
+
+### 伺服器端會話 {/* #server-side-sessions */}
+
+訂閱會話事件以取得增量更新。讀取縮小的顯示狀態[`session.displayState.get()`](/reference/agent-controller/session#sessiondisplaystateget) when the UI needs a complete render snapshot:
 
 ```typescript
 const unsubscribe = session.subscribe(event => {
@@ -375,11 +489,46 @@ render(session.displayState.get())
 unsubscribe()
 ```
 
-訂閱會按 Session 隔離。同一 controller 上另一個 Session 的事件不會傳送給此 listener。請閱讀[建立編程助手](/guides/guide/coding-agent)指南，查看完整的 TUI 範例。
+訂閱是透過會話隔離的。來自同一控制器上另一個會話的事件不會傳遞到此偵聽器。閱讀[Building a coding agent](https://mastra.ai/blog/building-a-coding-agent) guide for a complete TUI example.
 
-## 相關內容 {/* #related */}
+### 客戶端會話 {/* #client-side-sessions */}
 
-- [Agent](/docs/agents/overview)
-- [Workspace](/docs/workspace/overview)
-- [Observational memory](/docs/memory/observational-memory)
-- [Channel](/docs/capabilities/channels/overview)
+[`client.getAgentController(key).session(sessionId)`](/reference/client-js/agent-controller)傳回由其會話 ID 尋址的會話用戶端。傳送控制器註冊的密鑰`new Mastra({ agentControllers })`, which can differ from the controller's `id`. Sessions are get-or-create on the server, so `create()` resumes an existing conversation instead of forking it. Pass `resourceId` to `create()` when several sessions share one resource; otherwise the resource defaults to the session id:
+
+```typescript title="src/components/agent-session.ts"
+import { MastraClient } from '@mastra/client-js'
+
+const client = new MastraClient({ baseUrl: 'http://localhost:4111' })
+const session = client.getAgentController('coding-controller').session('user-123')
+
+await session.create()
+
+const subscription = await session.subscribe({
+  onEvent: event => handleEvent(event),
+  onError: error => showDisconnected(error),
+  onReconnect: () => {
+    void session.state().then(resync).catch(showDisconnected)
+  },
+  reconnect: true,
+})
+
+// Call when the UI disconnects.
+subscription.unsubscribe()
+```
+
+`subscribe()`與進程內偵聽器不同，它採用一個選項物件並且是異步的。一旦流建立，它的承諾就會解決，而當它無法連接時，它就會拒絕。被拒絕的呼叫不會在後台留下任何運行。`reconnect: true` re-establishes a stream that drops after it was established, with exponential backoff. A connection that stays open but stops delivering data, for example after the device sleeps, counts as a drop once no data, including server heartbeats, arrives for `idleTimeoutMs` (default `60000`).
+
+伺服器不會重播串流關閉時錯過的事件，因此請閱讀`session.state()` from `onReconnect` for the current mode, model, and thread. The client surface has no `session.displayState.get()`.
+
+發送作品給`session.sendMessage(content)`, or `session.sendMessage({ content, files })` to attach base64-encoded files. The reply arrives as `message_*` events on the subscription, not as the return value of the call. Answer a `tool_approval_required` event with `session.approveTool(toolCallId, approved)`, and a `tool_suspended` event with `session.respondToToolSuspension(toolCallId, resumeData)`.
+
+`onEvent`接收會話發出的每個事件。請參閱[Agent Controller API](/reference/client-js/agent-controller#events) reference for the event types and how to narrow them.
+
+## 有關的 {/* #related */}
+
+* [Agent商](/docs/agents/overview)
+* [工作空間](/docs/sandbox/overview)
+* [觀察記憶](/docs/memory/observational-memory)
+* [頻道](/docs/channels)
+* [馬斯特拉代碼](https://code.mastra.ai)
+* [馬斯特拉工廠](https://factory.mastra.ai)

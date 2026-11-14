@@ -1,14 +1,10 @@
 ---
-title: "語意回憶 | Memory"
-description: "瞭解如何在 Mastra 中使用語意回憶，透過向量搜尋與嵌入向量擷取過往對話中的相關訊息。"
+title: "Semantic recall | Memory"
+description: "Retrieve relevant messages from past Mastra conversations with semantic recall, vector search, embeddings, metadata filters, and configurable storage."
 packages:
   - "@mastra/core"
   - "@mastra/fastembed"
-  - "@mastra/libsql"
   - "@mastra/memory"
-  - "@mastra/mongodb"
-  - "@mastra/oracledb"
-  - "@mastra/pg"
 ---
 
 import Tabs from "@theme/Tabs";
@@ -16,29 +12,59 @@ import TabItem from "@theme/TabItem";
 
 # 語意回憶
 
-如果你問朋友上週末做了什麼，他會在記憶中搜尋與「上週末」相關的事件，再告訴你當時做了什麼。這大致就是 Mastra 語意回憶的運作方式。
+語意回憶是Agent記憶的檢索增強生成 (RAG) 的內建形式。當使用者發送訊息時，Mastra 會搜尋較早的訊息以尋找具有相似含義的訊息，並將最相關的訊息新增至Agent的上下文中。
 
-:::tip[📹 觀看影片]
+意義匹配很重要，因為人們經常記住某件事背後的想法，而不是他們使用的確切單字。用戶可能會問「我們對退款有何決定？」在最初寫下「讓我們把錢還給他們」之後。關鍵字搜尋會錯過這種聯繫，但語義回憶會找到它。
 
-觀看 [Mastra 語意回憶](https://www.youtube.com/watch?v=UVZtK8cK8xQ\&pp=ygUVbWFzdHJhIHdvcmtpbmcgbWVtb3J5)，瞭解 Agent 如何擷取過往對話中的相關訊息。
+當您的Agent商需要較長對話中較早的詳細資訊或用戶其他對話中不再包含的詳細資訊時，請使用語義回憶[recent message history](./message-history).
+
+:::提示\[📹觀看]
+
+手錶[Mastra semantic recall](https://www.youtube.com/watch?v=UVZtK8cK8xQ\&pp=ygUVbWFzdHJhIHdvcmtpbmcgbWVtb3J5) to see how agents retrieve relevant messages from past conversations.
 
 :::
 
-## 語意回憶的運作方式 {/* #how-semantic-recall-works */}
+## 語意回憶如何運作 {/* #how-semantic-recall-works */}
 
-語意回憶是一種以 RAG 為基礎的搜尋功能。當訊息已不在[近期訊息歷史](./message-history)中時，它能協助 Agent 在較長的互動中維持脈絡。
+語義召回是基於 RAG 的搜索，當訊息不再存在時，可以幫助Agent在較長的互動中維護上下文[recent message history](./message-history).
 
-它使用訊息的向量嵌入進行相似度搜尋、整合向量儲存，並可設定擷取訊息周圍的 context window。
+它使用訊息的向量嵌入進行相似性搜索，並與向量存儲集成，並且在檢索到的消息周圍具有可配置的上下文視窗。
 
-![顯示 Mastra Memory 語意回憶的圖表](/img/semantic-recall.png)
+```mermaid
+flowchart LR
+  accTitle: Semantic recall before and after an LLM request
+  accDescr: The pre-LLM pipeline embeds a user prompt and queries the vector database. The results become the semantic recall part of the context messages, which feed the context window. The post-LLM pipeline embeds all new messages and inserts them into the vector database.
 
-啟用後，新訊息會用來查詢向量資料庫，找出語意相似的訊息。
+  subgraph pre["RAG pipeline pre-LLM"]
+    direction TB
+    prompt(( user prompt )) --> queryEmbedding([create embeddings<br/>from user prompt])
+    queryEmbedding --> query@{ shape: cyl, label: "query vector DB" }
+  end
 
-取得 LLM 回應後，所有新訊息（使用者、助理及 Tool 呼叫／結果）都會插入向量資料庫，以供後續互動回想。
+  subgraph context["context"]
+    direction BT
+    contextWindow([context window])
+    messages[context messages<br/><br/>system instruction<br/>working memory<br/><strong>semantic recall</strong><br/>conversation history<br/>new user message]
+    messages --> contextWindow
+  end
 
-## 快速開始 {/* #quickstart */}
+  subgraph post["RAG pipeline post-LLM"]
+    direction TB
+    llm([LLM request]) --> messageEmbedding([create embeddings<br/>from all new messages])
+    messageEmbedding --> insert@{ shape: cyl, label: "insert in<br/>vector DB" }
+  end
 
-語意回憶預設為停用。若要啟用，請在 `options` 中設定 `semanticRecall: true`，並提供 `vector` 儲存與 `embedder`：
+  pre -- results --> context
+  context --> post
+```
+
+啟用後，新訊息將用於在向量資料庫中查詢語義相似的訊息。
+
+收到 LLM 的回應後，所有新訊息（使用者、助手和Tool呼叫/結果）都會插入向量資料庫中，以便在以後的互動中呼叫。
+
+## 快速入門 {/* #quickstart */}
+
+預設情況下禁用語義回憶。要啟用它，請設定`semanticRecall: true` in `options` and provide a `vector` store and an `embedder`. A store that generates embeddings itself, such as MongoDB with Automated Embedding, works without one. See [Server-side embeddings](#server-side-embeddings).
 
 <Tabs>
   <TabItem value="libsql" label="LibSQL" default>
@@ -104,9 +130,9 @@ import TabItem from "@theme/TabItem";
   </TabItem>
 </Tabs>
 
-## 使用 `recall()` 方法 {/* #using-the-recall-method */}
+## 使用`recall()` method {/* #using-the-recall-method */}
 
-`listMessages` 會依 thread ID 擷取訊息並提供基本分頁，而 [`recall()`](/reference/memory/recall) 另外支援**語意搜尋**。若需要依語意而非時間先後尋找訊息，請搭配 `vectorSearchString` 使用 `recall()`：
+儘管`listMessages` retrieves messages by thread ID with basic pagination, [`recall()`](/reference/memory/recall) adds support for **semantic search**. When you need to find messages by meaning rather than recency, use `recall()` with a `vectorSearchString`:
 
 ```typescript
 const memory = await agent.getMemory()
@@ -127,9 +153,9 @@ const { messages: relevantMessages } = await memory!.recall({
 })
 ```
 
-## 儲存設定 {/* #storage-configuration */}
+## 儲存配置 {/* #storage-configuration */}
 
-語意回憶仰賴[儲存空間與向量資料庫](/reference/memory/memory-class)來儲存訊息及其嵌入向量。
+語意回憶依賴[storage and vector db](/reference/memory/memory-class) to store messages and their embeddings.
 
 ```ts title="src/mastra/agents/index.ts"
 import { Memory } from '@mastra/memory'
@@ -155,35 +181,35 @@ const agent = new Agent({
 })
 ```
 
-以下每個向量儲存頁面都包含安裝說明、設定參數與使用範例：
+下面的每個向量商店頁面都包含安裝說明、設定參數和使用範例：
 
-- [Astra](/reference/vectors/astra)
-- [Chroma](/reference/vectors/chroma)
-- [Cloudflare Vectorize](/reference/vectors/vectorize)
-- [Convex](/reference/vectors/convex)
-- [Couchbase](/reference/vectors/couchbase)
-- [DuckDB](/reference/vectors/duckdb)
-- [Elasticsearch](/reference/vectors/elasticsearch)
-- [LanceDB](/reference/vectors/lance)
-- [libSQL](/reference/vectors/libsql)
-- [MongoDB](/reference/vectors/mongodb)
-- [OpenSearch](/reference/vectors/opensearch)
-- [OracleDB](/reference/vectors/oracledb)
-- [Pinecone](/reference/vectors/pinecone)
-- [PostgreSQL](/reference/vectors/pg)
-- [Qdrant](/reference/vectors/qdrant)
-- [S3 Vectors](/reference/vectors/s3vectors)
-- [Turbopuffer](/reference/vectors/turbopuffer)
-- [Upstash](/reference/vectors/upstash)
+* [阿斯特拉](/integrations/vectors/astra)
+* [色度](/integrations/vectors/chroma)
+* [Cloudflare 向量化](/integrations/vectors/vectorize)
+* [凸面](/integrations/vectors/convex)
+* [沙發底座](/integrations/vectors/couchbase)
+* [鴨資料庫](/integrations/vectors/duckdb)
+* [彈性搜尋](/integrations/vectors/elasticsearch)
+* [蘭斯資料庫](/integrations/vectors/lance)
+* [函式庫SQL](/integrations/vectors/libsql)
+* [MongoDB](/integrations/vectors/mongodb)
+* [開放搜尋](/integrations/vectors/opensearch)
+* [甲骨文資料庫](/integrations/vectors/oracledb)
+* [松果](/integrations/vectors/pinecone)
+* [PostgreSQL](/integrations/vectors/pg)
+* [奎德蘭特](/integrations/vectors/qdrant)
+* [S3 向量](/integrations/vectors/s3vectors)
+* [渦輪噴射機](/integrations/vectors/turbopuffer)
+* [烏普斯塔什](/integrations/vectors/upstash)
 
-## 回憶設定 {/* #recall-configuration */}
+## 召回配置 {/* #recall-configuration */}
 
-下列選項可控制語意回憶行為：
+以下選項控制語意回憶行為：
 
-1. **topK**：要擷取的相似訊息數量
-1. **messageRange**：每個相符項目周圍要一併納入的訊息
-1. **scope**：搜尋目前 thread，或某個 resource 的所有 thread
-1. **filter**：限制搜尋結果的 metadata 條件
+1. **頂級K**：要檢索的相似訊息的數量
+2. **訊息範圍**：每場比賽包含的周圍消息
+3. **範圍**：是否在目前執行緒或所有執行緒中搜尋某個資源
+4. **篩選**：限制搜尋結果的元資料條件
 
 ```typescript {5-9}
 const agent = new Agent({
@@ -201,15 +227,15 @@ const agent = new Agent({
 })
 ```
 
-:::note
 
-LibSQL、OracleDB、PostgreSQL、MongoDB 與 Upstash 儲存 adapter 支援 `scope: 'resource'`。
+
+`scope: 'resource'`LibSQL、OracleDB、PostgreSQL、MongoDB 和 Upstash 儲存適配器支援。
 
 :::
 
-### Metadata 篩選 {/* #metadata-filtering */}
+### 元資料過濾 {/* #metadata-filtering */}
 
-`filter` 選項會將語意回憶結果限制為 thread metadata 相符的訊息。
+這`filter` option restricts semantic recall results to messages with matching thread metadata.
 
 ```typescript {5-10}
 const agent = new Agent({
@@ -228,22 +254,24 @@ const agent = new Agent({
 })
 ```
 
-篩選條件會比對儲存訊息時寫入訊息嵌入向量的 metadata。若 thread metadata 日後變更，現有嵌入向量仍會保留先前的 metadata，直到再次儲存或建立這些訊息的索引。
+儲存訊息時，過濾器會匹配訊息嵌入中儲存的元資料。如果線程元數據稍後發生更改，現有嵌入將保留其先前的元數據，直到這些訊息再次保存或索引。
 
-支援的篩選運算子：
+Agent運行在訊息嵌入上儲存線程元資料。舊版保存的訊息（不儲存該訊息）在再次儲存或編制索引之前不會與過濾器相符。
 
-- `$and`：邏輯 AND
-- `$eq`：等於
-- `$gt`：大於
-- `$gte`：大於或等於
-- `$in`：位於陣列中
-- `$lt`：小於
-- `$lte`：小於或等於
-- `$ne`：不等於
-- `$nin`：不在陣列中
-- `$or`：邏輯 OR
+支援的過濾器運算子：
 
-以下範例示範常見使用情境的 metadata 篩選條件：
+* `$and`：邏輯與
+* `$eq`：等於
+* `$gt`: 大於
+* `$gte`: 大於或等於
+* `$in`：在數組中
+* `$lt`： 少於
+* `$lte`：小於或等於
+* `$ne`：不等於
+* `$nin`: 不在數組中
+* `$or`：邏輯或
+
+以下範例示範了常見用例的元資料過濾器：
 
 ```typescript
 // Filter by project
@@ -266,13 +294,70 @@ const options = {
 }
 ```
 
-## Embedder 設定 {/* #embedder-configuration */}
+### 長訊息 {/* #long-messages */}
 
-語意回憶仰賴[嵌入模型](/reference/memory/memory-class)將訊息轉換為嵌入向量。Mastra 可透過 model router 使用 `provider/model` 字串來支援嵌入模型，你也可以使用任何與 AI SDK 相容的[嵌入模型](https://sdk.vercel.ai/docs/ai-sdk-core/embeddings)。
+嵌入模型每個輸入接受有限數量的標記。記憶體將較長的消息分割成區塊，並將每個區塊儲存為其自己的向量行，因此可以呼叫訊息的每個部分。`maxChunkChars` sets the largest chunk in characters:
 
-### 使用 Model Router（建議） {/* #using-the-model-router-recommended */}
+```typescript {5}
+const agent = new Agent({
+  id: 'agent',
+  memory: new Memory({
+    options: {
+      semanticRecall: { topK: 3, messageRange: 2, maxChunkChars: 6000 },
+    },
+  }),
+})
+```
 
-最簡單的方式是使用支援自動完成的 `provider/model` 字串：
+預設為 16,384 個字符，大約 4,096 個英文文本標記，適合`openai/text-embedding-3-small` and its 8,191-token limit. The limit is in characters because each embedding provider uses its own tokenizer. Chinese, Japanese, and Korean text, and code, use more tokens per character than English, so lower `maxChunkChars` when that kind of text makes up most of your messages.
+
+當你不設定時`maxChunkChars` and the embedder declares its input limit, Memory derives the chunk size from that limit. [FastEmbed](#using-fastembed-local) models declare their 512-token window, so they need no configuration.
+
+每個區塊行的 ID 來自訊息 ID，因此再次儲存訊息會替換其行。如果您透過以下方式再次儲存較短文字的訊息`memory.saveMessages()`, rows for chunks past the new end stay searchable until the message is updated with `memory.updateMessages()` or deleted.
+
+放`maxChunkChars` on the `Memory` constructor. Memory options passed per request, such as `memory.options` in `agent.stream()`, don't change it, so API callers can't force many small chunks.
+
+## 伺服器端嵌入 {/* #server-side-embeddings */}
+
+一些向量存儲本身產生嵌入。對於其中之一，語義回憶無需`embedder`: the database embeds each message on write and the search string on arrival. The embedding provider stays out of your application entirely.
+
+MongoDB 透過以下方式做到這一點[Automated Embedding](/integrations/vectors/mongodb): name a Voyage AI model on the vector store and leave the `embedder` out.
+
+```typescript title="src/mastra/agents/index.ts"
+import { Memory } from '@mastra/memory'
+import { MongoDBStore, MongoDBVector } from '@mastra/mongodb'
+
+const memory = new Memory({
+  storage: new MongoDBStore({
+    id: 'agent-storage',
+    uri: process.env.MONGODB_URI,
+    dbName: process.env.MONGODB_DB_NAME,
+  }),
+  vector: new MongoDBVector({
+    id: 'agent-vector',
+    uri: process.env.MONGODB_URI,
+    dbName: process.env.MONGODB_DB_NAME,
+    autoEmbed: { model: 'voyage-4' },
+  }),
+  options: {
+    semanticRecall: { topK: 3, messageRange: 2 },
+  },
+})
+```
+
+訊息以文字形式存儲，MongoDB 嵌入它們，因此模型選擇和向量大小屬於索引而不是您的應用程式。召回通過Agent和通過[`recall()`](#using-the-recall-method).
+
+MongoDB 在背景嵌入新寫入的訊息。不久前儲存的訊息可能無法立即調出。
+
+`embedder`. Enabling semantic recall with neither an `embedder` nor a store that embeds server-side raises an error naming both options.
+
+## 包埋機配置 {/* #embedder-configuration */}
+
+語意回憶依賴[embedding model](/reference/memory/memory-class) to convert messages into embeddings. Mastra supports embedding models through the model router using `provider/model` strings, or you can use any [embedding model](https://sdk.vercel.ai/docs/ai-sdk-core/embeddings) compatible with the AI SDK.
+
+### 使用模型路由器（推薦） {/* #using-the-model-router-recommended */}
+
+最簡單的方法是使用`provider/model` string with autocomplete support:
 
 ```ts title="src/mastra/agents/index.ts"
 import { Memory } from '@mastra/memory'
@@ -292,9 +377,9 @@ const agent = new Agent({
 
 支援的嵌入模型：
 
-- **OpenAI**：`text-embedding-3-small`、`text-embedding-3-large`、`text-embedding-ada-002`
-- **Google**：`gemini-embedding-001`
-- **OpenRouter**：存取各種 Provider 的嵌入模型
+* **開放人工智慧**: `text-embedding-3-small`, `text-embedding-3-large`, `text-embedding-ada-002`
+* **Google**: `gemini-embedding-001`
+* **開放路由器**：存取來自多個Provider的嵌入模型
 
 ```ts {7}
 import { Agent } from '@mastra/core/agent'
@@ -312,11 +397,11 @@ const agent = new Agent({
 })
 ```
 
-Model router 會自動從環境變數（`OPENAI_API_KEY`、`GOOGLE_API_KEY`、`OPENROUTER_API_KEY`）偵測 API key。Google 模型也會改用 `GOOGLE_GENERATIVE_AI_API_KEY` 作為備援。
+模型路由器會自動處理來自環境變數的 API 金鑰偵測（`OPENAI_API_KEY`, `GOOGLE_API_KEY`, `OPENROUTER_API_KEY`). Google models also fall back to `GOOGLE_GENERATIVE_AI_API_KEY`.
 
-### 使用 AI SDK 套件 {/* #using-ai-sdk-packages */}
+### 使用AI SDK包 {/* #using-ai-sdk-packages */}
 
-你也可以直接使用 AI SDK 嵌入模型：
+您也可以直接使用AI SDK嵌入模型：
 
 ```ts {2,7}
 import { Memory } from '@mastra/memory'
@@ -331,15 +416,15 @@ const agent = new Agent({
 })
 ```
 
-### 使用 FastEmbed（本機） {/* #using-fastembed-local */}
+### 使用 FastEmbed（本地） {/* #using-fastembed-local */}
 
-若要使用 FastEmbed（本機嵌入模型），請安裝 `@mastra/fastembed`：
+若要使用 FastEmbed（本機嵌入模型），請安裝`@mastra/fastembed`:
 
 ```bash npm2yarn
 npm install @mastra/fastembed@latest
 ```
 
-接著在 Memory 中進行設定：
+然後在你的記憶體中配置它：
 
 ```ts {3,7}
 import { Memory } from '@mastra/memory'
@@ -354,19 +439,62 @@ const agent = new Agent({
 })
 ```
 
-## PostgreSQL 索引最佳化 {/* #postgresql-index-optimization */}
+FastEmbed 也公開了針對非英語內容的多語言 E5 模型。 E5是不對稱的，因此它分為兩種型號：`multilingualE5LargePassage` for text you index and `multilingualE5LargeQuery` for search text.
 
-使用 PostgreSQL 作為向量儲存時，可以設定向量索引來最佳化語意回憶效能。對於包含數千則訊息的大規模部署，這點尤其重要。
+```ts {3,7}
+import { Memory } from '@mastra/memory'
+import { Agent } from '@mastra/core/agent'
+import { fastembed } from '@mastra/fastembed'
 
-PostgreSQL 同時支援 IVFFlat 與 HNSW 索引。Mastra 預設會建立 IVFFlat 索引，但 HNSW 索引通常能提供更好的效能，尤其是使用內積距離的 OpenAI 嵌入向量。
+const agent = new Agent({
+  id: 'agent',
+  memory: new Memory({
+    embedder: fastembed.multilingualE5LargePassage,
+  }),
+})
+```
+
+記憶體使用單一嵌入器來儲存和調用訊息，因此選擇兩種模型之一併一致使用它。使用配對的`multilingualE5LargeQuery` model only where you control both sides of the pipeline, such as a RAG workflow that indexes with the passage model and searches with the query model.
+
+多語言 E5 產生 1024 維向量。您的向量索引必須使用匹配的維度創建，並且 E5 向量不能與同一索引中另一個嵌入器的向量混合。
+
+FastEmbed 模型每個輸入最多嵌入 512 個標記（大約 2,000 到 2,500 個英文文字字元）。較長的輸入會被截斷，因此超過限制的文字不會影響嵌入。語義召回調整其訊息區塊的大小以自動適應此視窗（請參閱[Long messages](#long-messages)). Outside of memory, the AI SDK v3 FastEmbed models return a warning when an input is truncated. The legacy v1 and v2 models don't. If you embed long documents with FastEmbed, chunk them to fit the window, for example with `maxSize: 1500` in `MDocument.chunk()`.
+
+### 設定嵌入尺寸 {/* #setting-the-embedding-dimension */}
+
+為了命名向量索引，記憶體需要嵌入器的輸出維度。預設情況下，它透過在第一次設定語義召回時嵌入一個短探測字元字串來尋找維度，每個`Memory` instance. If you already know the dimension, set `embeddingDimension`. Memory then skips the probe, so startup makes no embedding call and doesn't depend on the embedding provider being reachable:
+
+```ts title="src/mastra/agents/index.ts"
+import { Memory } from '@mastra/memory'
+
+const memory = new Memory({
+  embedder: 'openai/text-embedding-3-small',
+  embeddingDimension: 1536,
+  options: {
+    semanticRecall: true,
+  },
+})
+```
+
+無論維度是配置的還是探測的，索引名稱都是相同的，因此現有索引可以繼續工作。
+
+該值必須與嵌入器傳回的向量相符。記憶體將其與第一個真實嵌入進行比較，如果不匹配，它會拋出一個`MASTRA_MEMORY_EMBEDDING_DIMENSION_MISMATCH` error naming both values before creating or querying any index. Update `embeddingDimension` whenever you change the embedding model or its output dimension.
+
+## PostgreSQL 索引優化 {/* #postgresql-index-optimization */}
+
+當使用 PostgreSQL 作為向量儲存時，您可以透過配置向量索引來最佳化語義召回效能。這對於包含數千條訊息的大規模部署尤其重要。
+
+PostgreSQL 支援 IVFFlat 和 HNSW 索引。預設情況下，Mastra 會建立 IVFFlat 索引，但 HNSW 索引通常提供更好的效能，尤其是使用內積距離的 OpenAI 嵌入。
+
+語義回憶總是按線程或資源進行過濾。 PgVector 僅使用 pgvector 0.8.0 或更高版本上的 HNSW 進行這些搜尋的向量索引。使用 IVFFlat，每次搜尋都會將查詢與執行緒或資源中的每個訊息進行比較。
 
 ```typescript {18-23}
 import { Memory } from '@mastra/memory'
-import { PgStore, PgVector } from '@mastra/pg'
+import { PostgresStore, PgVector } from '@mastra/pg'
 
 const agent = new Agent({
   memory: new Memory({
-    storage: new PgStore({
+    storage: new PostgresStore({
       id: 'agent-storage',
       connectionString: process.env.DATABASE_URL,
     }),
@@ -381,8 +509,10 @@ const agent = new Agent({
         indexConfig: {
           type: 'hnsw', // Use HNSW for better performance
           metric: 'dotproduct', // Best for OpenAI embeddings
-          m: 16, // Number of bi-directional links (default: 16)
-          efConstruction: 64, // Size of candidate list during construction (default: 64)
+          hnsw: {
+            m: 16, // Number of bi-directional links (default: 16)
+            efConstruction: 64, // Size of candidate list during construction (default: 64)
+          },
         },
       },
     },
@@ -390,17 +520,17 @@ const agent = new Agent({
 })
 ```
 
-如需索引設定選項與效能調校的詳細資訊，請參閱 [PgVector 設定指南](/reference/vectors/pg#index-configuration-guide)。
+有關索引配置選項和效能調整的詳細信息，請參閱[PgVector configuration guide](/integrations/vectors/pg#index-configuration-guide).
 
-## 停用語意回憶 {/* #disable-semantic-recall */}
+## 禁用語意回憶 {/* #disable-semantic-recall */}
 
-語意回憶預設為停用（`semanticRecall: false`）。每次呼叫都會增加延遲，因為新訊息會先轉換成嵌入向量並用於查詢向量資料庫，之後 LLM 才會收到訊息。
+預設會停用語義回憶（`semanticRecall: false`). Each call adds latency because new messages are converted into embeddings and used to query a vector database before the LLM receives them.
 
-在下列情況下，請維持停用語意回憶：
+在以下情況下保持語義召回禁用：
 
-- 訊息歷史已為目前對話提供足夠的脈絡。
-- 你正在建置對效能敏感的應用程式，例如即時雙向音訊，其中嵌入與向量查詢延遲會明顯影響體驗。
+* 訊息歷史記錄為當前對話提供了足夠的上下文。
+* 您正在建立效能敏感的應用程序，例如即時雙向音頻，其中嵌入和向量查詢延遲很明顯。
 
-## 查看回想出的訊息 {/* #viewing-recalled-messages */}
+## 查看撤回的消息 {/* #viewing-recalled-messages */}
 
-啟用 Tracing 後，任何透過語意回憶擷取的訊息都會與近期訊息歷史（若有設定）一併顯示在 Agent 的 Trace 輸出中。
+啟用追蹤後，透過語義呼叫檢索到的任何訊息都將與最近的訊息歷史記錄（如果已配置）一起顯示在Agent程式的追蹤輸出中。

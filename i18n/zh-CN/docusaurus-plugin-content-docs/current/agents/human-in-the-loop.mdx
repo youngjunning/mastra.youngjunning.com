@@ -1,0 +1,817 @@
+---
+title: 'Human-in-the-loop | Agents'
+description: 'Add human-in-the-loop controls to Mastra agents with tool approval and suspended execution, so people can provide input before a run resumes or stops.'
+packages:
+  - '@mastra/core'
+  - '@mastra/libsql'
+  - '@mastra/memory'
+---
+
+# 人在回路
+
+Agent商有时也需要同样的[human-in-the-loop (HITL)](/docs/workflows/human-in-the-loop)当调用处理敏感操作（例如删除资源或运行长进程）的Tool时，Workflow程中使用的监督。通过人机交互，您可以在Tool调用执行之前将其挂起，以便人员可以批准或拒绝它，或者让Tool自行挂起以向用户请求其他上下文。
+
+## 何时使用人机交互 {/* #when-to-use-human-in-the-loop */}
+
+* **破坏性或不可逆转的行为**例如删除记录或发送电子邮件，或者处理付款。
+* **高成本运营**就像调用昂贵的第三方 API 时您想要首先验证参数一样。
+* **有条件确认**Tool开始执行，然后发现它需要用户在完成之前确认或提供额外的数据。
+
+## 快速入门 {/* #quickstart */}
+
+将Tool标记为`requireApproval: true`, then check for the `tool-call-approval` chunk in the stream to approve or decline the action:
+
+```typescript title="src/mastra/agents/index.ts"
+import { Agent } from '@mastra/core/agent'
+import { createTool } from '@mastra/core/tools'
+import { z } from 'zod'
+
+const deleteTool = createTool({
+  id: 'delete-record',
+  description: 'Delete a record by ID',
+  inputSchema: z.object({ id: z.string() }),
+  outputSchema: z.object({ deleted: z.boolean() }),
+  requireApproval: true,
+  execute: async ({ id }) => {
+    await db.delete(id)
+    return { deleted: true }
+  },
+})
+
+const agent = new Agent({
+  id: 'my-agent',
+  name: 'My Agent',
+  model: '__GATEWAY_OPENAI_MODEL_LUNA__',
+  tools: { deleteTool },
+})
+
+const stream = await agent.stream('Delete record abc-123')
+
+for await (const chunk of stream.fullStream) {
+  if (chunk.type === 'tool-call-approval') {
+    const approved = await agent.approveToolCall({ runId: stream.runId })
+    for await (const c of approved.textStream) process.stdout.write(c)
+  }
+}
+```
+
+：：：笔记
+
+人机交互使用快照来捕获请求状态。配置一个[storage provider](/docs/storage) on your Mastra instance or you'll see a "snapshot not found" error.
+
+Agent运行的快照是最小的恢复工件：它们仅保存恢复挂起的运行所需的内容，并在运行完成后被删除。使用[tracing](/docs/observability/overview) for the execution record and [memory](/docs/memory/overview) for the conversation history.
+
+:::
+
+## 审批如何运作 {/* #how-approval-works */}
+
+Mastra 提供了两种不同的机制来暂停Tool调用：**pre-execution approval** and **runtime suspension**.
+
+### 执行前批准 {/* #pre-execution-approval */}
+
+执行前批准暂停Tool调用*before* its `execute` function runs. The LLM still decides which tool to call and provides arguments, but `execute` doesn't run until you explicitly approve.
+
+标志与 OR 逻辑相结合来控制这一点。如果*either* is `true`, the call pauses:
+
+|旗帜|在哪里设置 |范围 |
+| - | - | - |
+|`requireToolApproval: true` | `stream()` / `generate()` options | Pauses **every** tool call for that request |
+| `requireApproval: true` | `createTool()` definition | Pauses calls to **that specific tool** |
+
+该流发出一个`tool-call-approval` chunk containing the `toolCallId`, `toolName`, and `args`. Call `approveToolCall()` or `declineToolCall()` with the stream's `runId` to continue:
+
+```typescript
+const stream = await agent.stream("What's the weather in London?", {
+  requireToolApproval: true,
+})
+
+for await (const chunk of stream.fullStream) {
+  if (chunk.type === 'tool-call-approval') {
+    console.log('Tool:', chunk.payload.toolName)
+    console.log('Args:', chunk.payload.args)
+
+    // Approve
+    const approved = await agent.approveToolCall({ runId: stream.runId })
+    for await (const c of approved.textStream) process.stdout.write(c)
+
+    // Or decline
+    const declined = await agent.declineToolCall({ runId: stream.runId })
+    for await (const c of declined.textStream) process.stdout.write(c)
+  }
+}
+```
+
+#### 解释下降 {/* #explaining-a-decline */}
+
+`declineToolCall()`, `declineToolCallGenerate()`, and `declineNetworkToolCall()` accept an optional `reason`. The reason is returned to the model in place of the tool result, so the model can adjust instead of retrying blindly. It's also stored on the tool call's `approval` metadata, so it's still there when the conversation is recalled.
+
+```typescript
+const declined = await agent.declineToolCall({
+  runId: stream.runId,
+  toolCallId,
+  reason: 'Reading other users PII is not allowed, ask the user for their own email instead',
+})
+```
+
+没有一个`reason`, the model receives the default message `Tool call was not approved by the user`.
+
+#### 有条件批准的功能 {/* #conditional-approval-with-a-function */}
+
+而不是布尔值，`requireToolApproval` accepts a function that decides per tool call. It receives the `toolName`, the `args` the model passed, the `requestContext`, and the `workspace`. Return `true` to require approval for that call, or `false` to allow it. This lets you gate approval at runtime, for example, only for tools whose name matches a pattern:
+
+```typescript
+const stream = await agent.stream('Clean up old records', {
+  requireToolApproval: ({ toolName }) => /^delete_/.test(toolName),
+})
+```
+
+该函数可以是异步的。对于依赖于Tool名称和参数的决策，请使用[classifier](/docs/classifier) to estimate whether the call needs human review:
+
+```typescript title="src/mastra/agents/run-with-approval.ts"
+import { Classifier } from '@mastra/core/classifier'
+import { typeSafeAi } from '@ai-sdk/typesafe-ai'
+import { agent } from './agent'
+
+const approvalClassifier = new Classifier({
+  id: 'tool-approval-classifier',
+  model: typeSafeAi.decisionModel('__AI_SDK_TYPESAFE_DECISION_MODEL__'),
+  questions: {
+    requiresApproval: {
+      type: 'boolean',
+      instructions:
+        'Does this tool call need human approval because it is destructive, irreversible, expensive, or handles sensitive data?',
+    },
+  },
+})
+
+const stream = await agent.stream('Clean up old records', {
+  requireToolApproval: async ({ toolName, args }) => {
+    const result = await approvalClassifier.decide({
+      state: {
+        toolName,
+        argumentNames: Object.keys(args),
+      },
+    })
+
+    // A refused question has no probability, so it falls back to requiring approval.
+    return (result.answers.requiresApproval.probability ?? 1) >= 0.7
+  },
+})
+```
+
+该示例发送参数名称而不是值，因为分类器将其状态转发到配置的决策模型。如果决策需要参数值，请首先编辑敏感数据或使用满足受保护Tool的数据处理要求的决策模型和提供程序。
+
+返回`true` pauses the tool call for human approval. It doesn't approve or decline the call automatically. Choose a threshold that matches the risk of the tools available to the agent. If this `requireToolApproval` function throws, it defaults to requiring approval.
+
+然后，运行时将该结果与Tool的结果相结合`requireApproval` setting. A boolean `true` requires approval, while `false` doesn't disable approval required by `requireToolApproval`. A tool-level `requireApproval` function is authoritative and replaces the combined result for that tool.
+
+：：：笔记
+
+基于功能`requireToolApproval` is only available on regular `stream()` / `generate()` calls. Durable agents and stored agents persist their options, and a function can't be serialized, so they accept only a boolean. If you pass a function in those contexts it falls back to requiring approval for every tool call.
+
+:::
+
+#### 将批准与确切的Tool参数绑定 {/* #bind-approval-to-the-exact-tool-arguments */}
+
+对于敏感Tool，请将批准绑定到向审阅者显示的确切Tool名称和参数。如果这些参数在执行前发生变化，则该Tool不应在旧的批准下运行。
+
+这`tool-call-approval` chunk already includes `toolName`, `toolCallId`, and `args`. You can fingerprint those fields when the approval request is shown. The example below uses a JSON string as the fingerprint, but in production you should use a stable hash of the tool name and arguments:
+
+```typescript title="src/mastra/agents/approval-bound-agent.ts"
+import { Agent } from '@mastra/core/agent'
+
+// For your production usecase, build a stable hash of the tool name and args
+function actionFingerprint(toolName: string, args: unknown) {
+  const payload = JSON.stringify({ toolName, args })
+  return `fingerprint-${payload}`
+}
+
+const sensitiveTools = new Set(['issue_refund', 'delete_record'])
+const approvedFingerprints = new Set<string>()
+
+export const approvalBoundAgent = new Agent({
+  id: 'approval-bound-agent',
+  name: 'Approval Bound Agent',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  tools: { issueRefundTool, deleteRecordTool },
+  hooks: {
+    beforeToolCall: ({ toolName, input }) => {
+      if (!sensitiveTools.has(toolName)) return
+
+      const fingerprint = actionFingerprint(toolName, input)
+      if (!approvedFingerprints.delete(fingerprint)) {
+        return {
+          proceed: false,
+          output: `Tool call blocked: approval did not match ${toolName} arguments.`,
+        }
+      }
+    },
+  },
+})
+```
+
+```typescript
+const stream = await approvalBoundAgent.stream('Refund order ord-1042', {
+  requireToolApproval: ({ toolName }) => sensitiveTools.has(toolName),
+})
+
+async function consumeApprovalStream(currentStream: typeof stream) {
+  for await (const chunk of currentStream.fullStream) {
+    if (chunk.type === 'tool-call-approval') {
+      const { toolName, toolCallId, args } = chunk.payload
+      const fingerprint = actionFingerprint(toolName, args)
+
+      // Present toolName, args, and fingerprint to your approval UI.
+      const approved = await showApprovalDialog({ toolName, args, fingerprint })
+
+      const nextStream = approved
+        ? await approveReviewedToolCall(currentStream.runId, toolCallId, fingerprint)
+        : await approvalBoundAgent.declineToolCall({ runId: currentStream.runId, toolCallId })
+
+      await consumeApprovalStream(nextStream)
+    }
+  }
+}
+
+async function approveReviewedToolCall(runId: string, toolCallId: string, fingerprint: string) {
+  approvedFingerprints.add(fingerprint)
+  return approvalBoundAgent.approveToolCall({ runId, toolCallId })
+}
+
+await consumeApprovalStream(stream)
+```
+
+在生产中，将批准的指纹存储在范围为用户、运行、Tool调用和策略版本的持久存储中。这`Set` above is intentionally small so the boundary is clear: the approval is consumed once, and only for the same canonical tool arguments that were reviewed.
+
+### 运行时暂停`suspend()` {/* #runtime-suspension-with-suspend */}
+
+Tool也可以暂停*during* its `execute` function by calling `suspend()`. This is useful when the tool starts running and then discovers it needs additional user input or confirmation before it can finish.
+
+该流发出一个`tool-call-suspended` chunk with a custom payload defined by the tool's `suspendSchema`. You resume by calling `resumeStream()` with data matching the tool's `resumeSchema`.
+
+```typescript
+const weatherTool = createTool({
+  id: 'get-weather',
+  inputSchema: z.object({
+    location: z.string().optional(),
+  }),
+  suspendSchema: z.object({
+    question: z.string(),
+  }),
+  resumeSchema: z.object({
+    location: z.string(),
+  }),
+  execute: async ({ location }, context) => {
+    if (!location) {
+      return await context?.agent?.suspend({
+        question: 'Which city would you like the weather for?',
+      })
+    }
+    return await fetchWeather(location)
+  },
+})
+```
+
+：：：笔记
+
+`suspend()`不抛出，调用后立即返回（例如`return await suspend({ ... })`). Code after `await suspend(...)` still runs before the tool pauses.
+
+:::
+
+使用`suspend()` instead of a tool without `execute` when the tool needs a structured answer from the user and also runs inside a subagent: subagents can't run client tools, but suspension propagates through the supervisor. To resume from AI SDK `useChat()`, see [resuming a suspended tool from `useChat()`](/integrations/agentic-ui/ai-sdk-ui#resuming-a-suspended-tool-from-usechat).
+
+## Tool批准`generate()` {/* #tool-approval-with-generate */}
+
+Tool批准也适用于`generate()` for non-streaming use cases. When a tool requires approval, `generate()` returns immediately with `finishReason: 'suspended'`, a `suspendPayload` containing the tool call details (`toolCallId`, `toolName`, `args`), and a `runId`:
+
+```typescript
+const output = await agent.generate('Find user John', {
+  requireToolApproval: true,
+})
+
+if (output.finishReason === 'suspended') {
+  console.log('Tool requires approval:', output.suspendPayload.toolName)
+
+  // Approve
+  const result = await agent.approveToolCallGenerate({
+    runId: output.runId,
+    toolCallId: output.suspendPayload.toolCallId,
+  })
+  console.log('Final result:', result.text)
+
+  // Or decline
+  const result = await agent.declineToolCallGenerate({
+    runId: output.runId,
+    toolCallId: output.suspendPayload.toolCallId,
+  })
+}
+```
+
+### 流与生成比较 {/* #stream-vs-generate-comparison */}
+
+|方面|`stream()` | `generate()` |
+| - | - | - |
+| Response type | Streaming chunks | Complete response |
+| Approval detection | `tool-call-approval` chunk | `finishReason: 'suspended'` |
+| Approve method | `approveToolCall({ runId })` | `approveToolCallGenerate({ runId, toolCallId })` |
+| Decline method | `declineToolCall({ runId })` | `declineToolCallGenerate({ runId, toolCallId })` |
+| Result | Stream to iterate | Full output object |
+
+：：：笔记`toolCallId` is optional on all four methods. Pass it when multiple tool calls may be pending (common in supervisor agents). When omitted, the agent resumes the most recent suspended tool call.
+:::
+
+## Tool级审批 {/* #tool-level-approval */}
+
+您可以将单个Tool标记为需要批准，而不是在Agent级别暂停每个Tool调用。您可以获得细粒度的控制：只有特定的Tool会暂停，而其他Tool会立即执行。
+
+### 批准使用`requireApproval` {/* #approval-using-requireapproval */}
+
+放`requireApproval: true` on a tool definition. The tool pauses before execution regardless of whether `requireToolApproval` is set on the agent:
+
+```typescript title="src/mastra/tools/test-tool.ts"
+import { createTool } from '@mastra/core/tools'
+import { z } from 'zod'
+
+export const testTool = createTool({
+  id: 'test-tool',
+  description: 'Fetches weather for a location',
+  inputSchema: z.object({
+    location: z.string(),
+  }),
+  outputSchema: z.object({
+    weather: z.string(),
+  }),
+  resumeSchema: z.object({
+    approved: z.boolean(),
+  }),
+  execute: async inputData => {
+    const response = await fetch(`https://wttr.in/${inputData.location}?format=3`)
+    const weather = await response.text()
+
+    return { weather }
+  },
+  requireApproval: true,
+})
+```
+
+什么时候`requireApproval` is `true`, the stream emits `tool-call-approval` chunks the same way agent-level approval does. Use `approveToolCall()` or `declineToolCall()` to continue:
+
+```typescript
+const stream = await agent.stream("What's the weather in London?")
+
+for await (const chunk of stream.fullStream) {
+  if (chunk.type === 'tool-call-approval') {
+    console.log('Approval required for:', chunk.payload.toolName)
+  }
+}
+
+const handleApproval = async () => {
+  const approvedStream = await agent.approveToolCall({ runId: stream.runId })
+
+  for await (const chunk of approvedStream.textStream) {
+    process.stdout.write(chunk)
+  }
+  process.stdout.write('\n')
+}
+```
+
+### 批准使用`suspend()` {/* #approval-using-suspend */}
+
+通过这种方法，Agent和Tool都不使用`requireApproval`. Instead, the tool's `execute` function calls `suspend()` to pause at a specific point and return context or confirmation prompts to the user. This is useful when approval depends on runtime conditions rather than being unconditional.
+
+```typescript title="src/mastra/tools/test-tool-b.ts"
+import { createTool } from '@mastra/core/tools'
+import { z } from 'zod'
+
+export const testToolB = createTool({
+  id: 'test-tool-b',
+  description: 'Fetches weather for a location',
+  inputSchema: z.object({
+    location: z.string(),
+  }),
+  outputSchema: z.object({
+    weather: z.string(),
+  }),
+  resumeSchema: z.object({
+    approved: z.boolean(),
+  }),
+  suspendSchema: z.object({
+    reason: z.string(),
+  }),
+  execute: async (inputData, context) => {
+    const { resumeData: { approved } = {}, suspend } = context?.agent ?? {}
+
+    if (!approved) {
+      return suspend?.({ reason: 'Approval required.' })
+    }
+
+    const response = await fetch(`https://wttr.in/${inputData.location}?format=3`)
+    const weather = await response.text()
+
+    return { weather }
+  },
+})
+```
+
+通过这种方法，流包括`tool-call-suspended` chunk, and the `suspendPayload` contains the `reason` defined by the tool's `suspendSchema`. Call `resumeStream` with the `resumeSchema` data and `runId` to continue:
+
+```typescript
+const stream = await agent.stream("What's the weather in London?")
+
+for await (const chunk of stream.fullStream) {
+  if (chunk.type === 'tool-call-suspended') {
+    console.log(chunk.payload.suspendPayload)
+  }
+}
+
+const handleResume = async () => {
+  const resumedStream = await agent.resumeStream({ approved: true }, { runId: stream.runId })
+
+  for await (const chunk of resumedStream.textStream) {
+    process.stdout.write(chunk)
+  }
+  process.stdout.write('\n')
+}
+```
+
+和`generate()`, the result has `finishReason: 'suspended'`. The tool's data from `suspend()` is in `suspendPayload.suspendPayload`. Call `resumeGenerate()` with the `resumeSchema` data and `runId`:
+
+```typescript
+const output = await agent.generate("What's the weather in London?")
+
+if (output.finishReason === 'suspended') {
+  console.log(output.suspendPayload.suspendPayload) // { reason: 'Approval required.' }
+
+  const resumed = await agent.resumeGenerate({ approved: true }, { runId: output.runId! })
+  console.log(resumed.text)
+}
+```
+
+当暂停或审批门控的Tool调用恢复时，流会发出`tool-call-resumed` chunk with the same `toolCallId` before the call's `tool-result`. Its `payload.kind` is `'suspension'` or `'approval'`, and the payload repeats the original `args`, `suspendPayload`, and `resumeSchema`. The chunk is only emitted when a real suspension or approval request is cleared.
+
+和`@mastra/ai-sdk`, it arrives as a `data-tool-call-suspended` part (or `data-tool-call-approval` part for approvals) with `resumed: true`, which replaces the original part and keeps its payload. Use this signal to mark a question as answered. Don't infer it from the shape of the tool output: when the suspension came from a sub-agent, the output of the delegation call is the sub-agent's result, not your answer.
+
+## 自动刀具恢复 {/* #automatic-tool-resumption */}
+
+当使用调用的Tool时`suspend()`, you can enable automatic resumption so the agent resumes suspended tools based on the user's next message. Set `autoResumeSuspendedTools` to `true` in the agent's default options or per-request:
+
+```typescript title="src/mastra/agents/my-agent.ts"
+import { Agent } from '@mastra/core/agent'
+import { Memory } from '@mastra/memory'
+
+const agent = new Agent({
+  id: 'my-agent',
+  name: 'My Agent',
+  instructions: 'You are a helpful assistant',
+  model: '__GATEWAY_OPENAI_MODEL_LUNA__',
+  tools: { weatherTool },
+  memory: new Memory(),
+  defaultOptions: {
+    autoResumeSuspendedTools: true,
+  },
+})
+```
+
+启用后，Agent会从下一条用户消息的消息历史记录中检测已暂停的Tool。它提取`resumeData` based on the tool's `resumeSchema`, then automatically resumes the tool.
+
+自动恢复适用于数据承载`suspend()` flows. It doesn't approve tools that use `requireApproval`; those tools remain suspended until an explicit approval or decline is submitted through `approveToolCall()`, `declineToolCall()`, `resumeStream({ approved: boolean })`, or an equivalent UI or API action.
+
+以下示例显示了完整的会话流程：
+
+```typescript title="src/mastra/tools/weather-tool.ts"
+import { createTool } from '@mastra/core/tools'
+import { z } from 'zod'
+
+const weatherTool = createTool({
+  id: 'weather-tool',
+  description: 'Fetches weather for a city',
+  inputSchema: z.object({
+    city: z.string(),
+  }),
+  outputSchema: z.object({
+    weather: z.string(),
+  }),
+  suspendSchema: z.object({
+    message: z.string(),
+  }),
+  resumeSchema: z.object({
+    city: z.string(),
+  }),
+  execute: async (inputData, context) => {
+    const { resumeData, suspend } = context?.agent ?? {}
+
+    // If no city provided, ask the user
+    if (!inputData.city && !resumeData?.city) {
+      return suspend?.({ message: 'What city do you want to know the weather for?' })
+    }
+
+    const city = resumeData?.city ?? inputData.city
+    const response = await fetch(`https://wttr.in/${city}?format=3`)
+    const weather = await response.text()
+
+    return { weather: `${city}: ${weather}` }
+  },
+})
+```
+
+```typescript
+const stream = await agent.stream("What's the weather like?")
+
+for await (const chunk of stream.fullStream) {
+  if (chunk.type === 'tool-call-suspended') {
+    console.log(chunk.payload.suspendPayload)
+  }
+}
+
+// User sends follow-up on the same thread
+const resumedStream = await agent.stream('San Francisco')
+for await (const chunk of resumedStream.textStream) {
+  process.stdout.write(chunk)
+}
+```
+
+```text title="Console output"
+User: "What's the weather like?"
+Agent: "What city do you want to know the weather for?"
+
+User: "San Francisco"
+Agent: "The weather in San Francisco is: San Francisco: ☀️ +72°F"
+```
+
+第二条消息会自动恢复暂停的Tool。Agent提取`{ city: "San Francisco" }` from the user's message and passes it as `resumeData`.
+
+### 要求 {/* #requirements */}
+
+要使Tool自动恢复工作：
+
+* **内存配置**：Agent需要内存来跨消息跟踪挂起的Tool
+* **同一线程**：后续消息必须使用相同的内存线程和资源标识符
+* **`resumeSchema`定义的**：该Tool必须定义一个`resumeSchema` so the agent knows what data structure to extract from the user's message
+
+### 手动恢复与自动恢复 {/* #manual-vs-automatic-resumption */}
+
+|方法|使用案例|
+| - | - |
+|手动的 （`resumeStream()`) | Programmatic control, webhooks, button clicks, external triggers |
+| Automatic (`autoResumeSuspendedTools`) | Conversational flows where users provide resume data in natural language |
+
+两种方法都使用相同的Tool定义。仅当消息历史记录中存在挂起的Tool并且用户在同一线程上发送新消息时，才会触发自动恢复。
+
+## 重启后恢复 {/* #resuming-after-a-restart */}
+
+上面的例子坚持`stream.runId` between suspension and approval. That works while the process stays alive, but in production the approval often arrives later, after a page refresh, a server restart, or on a different server instance behind a load balancer.
+
+使用[`listSuspendedRuns()`](/reference/agents/listSuspendedRuns) to rediscover the pending run for a conversation from storage:
+
+```typescript
+// In the request handler that receives the user's decision
+const { runs } = await agent.listSuspendedRuns({
+  threadId: 'thread-123',
+  resourceId: 'user-456',
+})
+
+const run = runs[0]
+const toolCall = run?.toolCalls[0]
+
+if (run && toolCall) {
+  let stream
+  if (toolCall.requiresApproval) {
+    // Suspended by requireApproval — approve or decline the tool call
+    stream = await agent.approveToolCall({ runId: run.runId, toolCallId: toolCall.toolCallId })
+  } else {
+    // Suspended by suspend() — resume with the data the tool asked for
+    console.log('Tool asked:', toolCall.suspendPayload)
+    stream = await agent.resumeStream({ name: 'San Francisco' }, { runId: run.runId })
+  }
+  for await (const chunk of stream.textStream) process.stdout.write(chunk)
+}
+```
+
+每个返回的运行都包含暂停的Tool调用（`toolCallId`, `toolName`, `args`, and `requiresApproval`). Approval suspensions (`requiresApproval: true`) are answered with `approveToolCall()` / `declineToolCall()`, while `suspend()`-based suspensions carry their `suspendPayload` and expect `resumeStream()` with resume data, so you can rebuild the right UI for either flow without keeping any state in memory.
+
+`sendToolApproval()`自动使用相同的存储支持的发现。如果内存不包含该线程的活动运行，它将在失败之前搜索存储以查找挂起的运行。通过一个`toolCallId` when several suspended runs match the thread.
+
+通过 HTTP 可以获得相同的发现`GET /agents/:agentId/suspended-runs` and in the client SDK as [`agent.listSuspendedRuns()`](/reference/client-js/agents#listsuspendedruns), so browser-based approval UIs can rediscover pending runs directly.
+
+：：：笔记
+
+当您的 Mastra 实例配置了持久性时，挂起的运行只能在重新启动后继续运行。[storage provider](/docs/storage). The default in-memory store loses snapshots when the process exits.
+
+:::
+
+### 崩溃后恢复决策 {/* #recovering-a-decision-after-a-crash */}
+
+什么时候`approveToolCall()`, `declineToolCall()`, or `resumeStream()` runs, the run is claimed in storage together with the decision or resume data and the targeted `toolCallId`. If the process handling the resume stops before the run finishes, call `recoverResume()` from any process to finish the run with that stored decision:
+
+```typescript
+const stream = await agent.recoverResume({ runId })
+
+for await (const chunk of stream.textStream) process.stdout.write(chunk)
+```
+
+`recoverResume()`一旦声明被放弃，则接管该声明：已声明但在 60 秒内未启动，或者在具有运行防护的存储上已启动且其租约在 60 秒内未续订。在此之前，它拒绝`AGENT_RESUME_ALREADY_CLAIMED`. For a run that no resume has claimed, it rejects with `AGENT_RESUME_NOTHING_TO_RECOVER`.
+
+：：：警告
+
+恢复的Tool调用再次运行。声明根据其存在时间被视为放弃，因此当恢复运行该Tool时，停滞 60 秒的进程可能仍在运行该Tool。使具有副作用的Tool可以安全地重复使用，例如使用幂等性密钥。
+
+:::
+
+## Tool审批：主管Agent {/* #tool-approval-supervisor-agents */}
+
+一个[supervisor agent](/docs/subagents) coordinates multiple subagents using `.stream()` or `.generate()`. When a subagent calls a tool that requires approval, the request propagates up through the delegation chain and surfaces at the supervisor level:
+
+1. 主管将任务委托给子Agent。
+2. 子Agent调用一个Tool，该Tool具有`requireApproval: true` or uses `suspend()`.
+3. 批准请求向上级传达。
+4. 您在主管级别批准或拒绝。
+5. 该决策会向下传播回子Agent。
+
+Tool批准还通过多个级别的授权进行传播。如果主管委派给子Agent A，子Agent A 又委派给具有Tool的子Agent B`requireApproval: true`, the approval request still surfaces at the top-level supervisor.
+
+### 确定哪个子AgentTool已暂停 {/* #identify-which-subagent-tool-paused */}
+
+主管在其自己的委托调用中引发了子Agent的暂停，因此`toolCallId` on the `tool-call-approval` or `tool-call-suspended` chunk is the supervisor's call to the subagent. Always pass that `toolCallId` when you approve, decline, or resume.
+
+要显示暂停的子AgentTool调用，请从同一负载中读取这些字段：
+
+* `delegatedToolCallId`：暂停的子AgentTool调用的 ID。使用它来区分同一代表团的两次停顿，例如先提出问题，然后提出批准。
+* `delegatedToolName`：暂停的子AgentTool的名称。
+
+通过多个级别的委派，这两个字段都会命名最深的Tool调用，即实际暂停的Tool调用。内存会在暂停时保存它们，因此当您重新加载对话时它们仍然存在，并且`generate()` returns them on `suspendPayload`.
+
+```typescript
+const stream = await supervisorAgent.stream('Draft and publish the report')
+
+for await (const chunk of stream.fullStream) {
+  if (chunk.type === 'tool-call-approval' || chunk.type === 'tool-call-suspended') {
+    // Label the pause with the subagent tool call that caused it
+    console.log('Paused:', chunk.payload.delegatedToolName, chunk.payload.delegatedToolCallId)
+
+    // Pass the supervisor's delegation call when you approve, decline, or resume
+    console.log('Resume with:', chunk.payload.toolCallId)
+  }
+}
+```
+
+### 主管Agent的批准和拒绝 {/* #approve-and-decline-in-supervisor-agents */}
+
+下面的示例使用需要批准的Tool创建一个子Agent。当该Tool触发批准请求时，它会在主管的信息流中显示为`tool-call-approval` chunk:
+
+```typescript
+import { Agent } from '@mastra/core/agent'
+import { createTool } from '@mastra/core/tools'
+import { Memory } from '@mastra/memory'
+import { z } from 'zod'
+
+const findUserTool = createTool({
+  id: 'find-user',
+  description: 'Finds user by ID in the database',
+  inputSchema: z.object({
+    userId: z.string(),
+  }),
+  outputSchema: z.object({
+    user: z.object({
+      id: z.string(),
+      name: z.string(),
+      email: z.string(),
+    }),
+  }),
+  // highlight-next-line
+  requireApproval: true,
+  execute: async input => {
+    const user = await database.findUser(input.userId)
+    return { user }
+  },
+})
+
+const dataAgent = new Agent({
+  id: 'data-agent',
+  name: 'Data Agent',
+  description: 'Handles database queries and user data retrieval',
+  model: '__GATEWAY_OPENAI_MODEL_LUNA__',
+  tools: { findUserTool },
+})
+
+const supervisorAgent = new Agent({
+  id: 'supervisor',
+  name: 'Supervisor Agent',
+  instructions: `You coordinate data retrieval tasks.
+    Delegate to data-agent for user lookups.`,
+  model: '__GATEWAY_OPENAI_MODEL__',
+  agents: { dataAgent },
+  memory: new Memory(),
+})
+
+const stream = await supervisorAgent.stream('Find user with ID 12345')
+
+for await (const chunk of stream.fullStream) {
+  // highlight-next-line
+  if (chunk.type === 'tool-call-approval') {
+    console.log('Tool requires approval:', chunk.payload.toolName)
+    console.log('Arguments:', chunk.payload.args)
+
+    // Approve the tool call
+    // highlight-start
+    const resumeStream = await supervisorAgent.approveToolCall({
+      runId: stream.runId,
+      toolCallId: chunk.payload.toolCallId,
+    })
+    //highlight-end
+
+    for await (const resumeChunk of resumeStream.textStream) {
+      process.stdout.write(resumeChunk)
+    }
+
+    // To decline instead, use:
+    const declineStream = await supervisorAgent.declineToolCall({
+      runId: stream.runId,
+      toolCallId: chunk.payload.toolCallId,
+    })
+  }
+}
+```
+
+### 使用`suspend()` in supervisor agents {/* #use-suspend-in-supervisor-agents */}
+
+Tool也可以使用[`suspend()`](#approval-using-suspend) to pause execution and return context to the user. This approach works through the supervisor delegation chain the same way `requireApproval` does: the suspension surfaces at the supervisor level:
+
+```typescript title="src/mastra/tools/conditional-tool.ts"
+import { createTool } from '@mastra/core/tools'
+import { z } from 'zod'
+
+const conditionalTool = createTool({
+  id: 'conditional-operation',
+  description: 'Performs an operation that may require confirmation',
+  inputSchema: z.object({
+    operation: z.string(),
+  }),
+  suspendSchema: z.object({
+    message: z.string(),
+  }),
+  resumeSchema: z.object({
+    confirmed: z.boolean(),
+  }),
+  execute: async (input, context) => {
+    const { resumeData } = context?.agent ?? {}
+
+    if (!resumeData?.confirmed) {
+      return context?.agent?.suspend({
+        message: `Confirm: ${input.operation}?`,
+      })
+    }
+
+    // Proceed with operation
+    return await performOperation(input.operation)
+  },
+})
+```
+
+```typescript
+// When using this tool through a subagent in supervisor agents
+for await (const chunk of stream.fullStream) {
+  if (chunk.type === 'tool-call-suspended') {
+    console.log('Tool suspended:', chunk.payload.suspendPayload.message)
+
+    // Resume with confirmation
+    const resumeStream = await supervisorAgent.resumeStream(
+      { confirmed: true },
+      { runId: stream.runId },
+    )
+
+    for await (const resumeChunk of resumeStream.textStream) {
+      process.stdout.write(resumeChunk)
+    }
+  }
+}
+```
+
+### 主管批准`generate()` {/* #supervisor-approval-with-generate */}
+
+Tool批准传播也适用于`generate()` in supervisor agents:
+
+```typescript
+const output = await supervisorAgent.generate('Find user with ID 12345', {
+  maxSteps: 10,
+})
+
+if (output.finishReason === 'suspended') {
+  console.log('Tool requires approval:', output.suspendPayload.toolName)
+
+  // Approve
+  const result = await supervisorAgent.approveToolCallGenerate({
+    runId: output.runId,
+    toolCallId: output.suspendPayload.toolCallId,
+  })
+
+  console.log('Final result:', result.text)
+}
+```
+
+## 有关的 {/* #related */}
+
+* [Tool](./tools)
+* [Agent概览](./overview)
+* [MCP概述](../connections/mcp)
+* [记忆](/docs/memory/overview)
+* [请求上下文](/docs/server/request-context)

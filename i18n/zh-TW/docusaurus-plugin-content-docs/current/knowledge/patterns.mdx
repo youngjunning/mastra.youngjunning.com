@@ -1,0 +1,178 @@
+---
+title: "What you can build with Knowledge"
+description: "What you can build with Knowledge: a docs agent, one agent for many customers, pinned policies, coding conventions, organizing pages, runbooks, department scopes, personal notes and agent hand-offs."
+packages:
+  - "@mastra/core"
+---
+
+# 您可以用知識建構什麼
+
+這些模式展示了你可以用知識建構什麼。每個人都說Agent是誰，哪些範圍包含什麼，以及使其工作的配置或Tool調用。知識沒有內建的範圍類型。僅有的`resource:`和`thread:`來自記憶，並且[`knowledgeMemoryScopes()`](/reference/knowledge/knowledge-memory-scopes)聲明它們加上租戶範圍。
+
+：：：阿爾法
+
+知識處於阿爾法階段。其 API 可能會在不同版本之間變更。
+
+:::
+
+：：：警告
+
+每次Tool呼叫時都會檢查存取權限，但 Knowledge 尚不能保證資料永遠不會到達保存它的範圍之外的運行，或者Agent永遠不會跨範圍重複某些內容。請按照 Knowledge 的設計目的來理解這些模式，並且暫時不要依賴它來隔離敏感資料。
+
+:::
+
+## 從您自己的文件中回答 {/* #answer-from-your-own-docs */}
+
+您的伺服器將您的文件同步到`product-docs:` scope with [`upsertPage()`](/docs/knowledge/load-your-content), and a docs agent gets only the read tools. It lists the tree, reads the lines of a long page that match what it's looking for, and says it doesn't know when search comes back empty:
+
+```typescript
+const knowledge = new Knowledge({
+  id: 'docs',
+  storage,
+  tools: { read: true },
+  scopes: {
+    ...knowledgeMemoryScopes({ org: 'workspace:$workspaceId' }),
+    'product-docs:$workspaceId': {
+      belongsTo: 'workspace:$workspaceId',
+      access: [{ principal: 'workspace:$workspaceId', role: 'viewer' }],
+    },
+  },
+})
+```
+
+要回答有關某個區域的問題，Agent會詢問匹配的線以及每條線周圍的一條線：
+
+```json
+{ "page": "product-docs:initech#billing/refunds", "match": "region 42", "context": 1 }
+```
+
+## 一名Agent商，多名客戶 {/* #one-agent-many-customers */}
+
+一名支援Agent為每位客戶提供服務。每個客戶的頁面都有自己的頁面`tenant:` scope, declared as the tenant scope of `knowledgeMemoryScopes()`:
+
+```typescript oxfmt:false
+scopes: { ...knowledgeMemoryScopes({ org: 'tenant:$tenantId' }) },
+```
+
+
+
+```typescript
+await agent.generate(message, {
+  scopes: ['tenant:globex', `resource:${userId}`, `thread:${threadId}`],
+})
+```
+
+Globex 用戶搜尋「續訂」沒有返回`tenant:acme#renewals`, because the run doesn't hold `tenant:acme`. The prompt has nothing to do with it. With Memory on the agent, the `resource:` and `thread:` scopes also tell Memory which user and thread the run is. Test the rules with [`explainAccess()`](/docs/knowledge/scopes-and-access#test-access-with-explainaccess). As the warning at the top says, Knowledge doesn't yet guarantee this isolation, so don't rely on it for sensitive customer data.
+
+## 每個Agent都遵循的政策 {/* #a-policy-every-agent-follows */}
+
+您的合規團隊擁有每個帳戶的資料處理規則。每個處理帳戶的Agent，無論是處理銷售、支援或計費，每次都需要這些規則，而不僅僅是在需要搜尋時。只有遵守才能改變它們。
+
+在帳戶範圍上聲明頁面並將其固定在配置中。僅當`Knowledge` instance sets `pinnedContext: true` and the agent has Memory, which the pin examples on this page assume:
+
+```typescript oxfmt:false
+'account:$accountId': {
+  access: [
+    { principal: 'self', role: 'viewer' },
+    { principal: 'desk:$accountId:compliance', role: 'editor' },
+  ],
+  pages: [{ key: 'data-handling', name: 'Data handling rules' }],
+  pinnedContext: ['account:$accountId#data-handling'],
+},
+```
+
+一旦合規性寫入頁面，每次運行都會保持`account:umbrella` starts with it in context. When compliance edits the page, agents that are already running get only the change on their next turn.
+
+該政策保留合規規定的內容：
+
+* **Agent可以讀取它，但不能更改它。**&#x8A72;帳戶的運作是觀眾。嘗試編輯頁面的銷售Agent會被拒絕，因為運行的只是查看者。
+* **特工無法取消固定。**&#x914D;置中的 pin 來自您的聲明，而不是來自存儲，因此 pin Tool無法刪除它。
+* **它無法移動或刪除。**&#x8072;明的頁面`pages` belong to the config.
+* **它僅到達可以讀取它的運行。**&#x5728;另一個帳戶上運行不會得到任何結果，並且固定永遠不會擴大可以閱讀頁面的範圍。
+
+看[Pinned context](/docs/knowledge/pinned-context).
+
+## 延續的編碼約定 {/* #coding-conventions-that-carry-over */}
+
+開發人員的編碼Agent程式對每個儲存庫共用一個範圍。約定頁面已固定，決策以註釋形式顯示在其上，並附有指向其所關注頁面的連結：
+
+```typescript oxfmt:false
+'repo:$repo': {
+  access: [{ principal: 'self', role: 'editor' }],
+  pages: [{ key: 'conventions', name: 'Conventions' }, { key: 'tooling', name: 'Tooling' }],
+  pinnedContext: ['repo:$repo#conventions'],
+},
+```
+
+Agent程式記錄一個決定，例如“pnpm Workspace，而不是 npm”，作為約定頁面上的註釋，並帶有`[[repo:api#tooling]]` link to the page it concerns.
+
+下一次會議在`repo:api` sees the conventions with "1 note" beside them. A session in `repo:web` sees none of it.
+
+## 改進隨叫隨到的操作手冊 {/* #runbooks-that-improve-on-call */}
+
+待命工程師是其服務範圍的貢獻者：他們的Agent將註釋添加到固定的運行手冊中，但無法重寫它。 SRE 領導者是編輯，並將註釋折疊在：
+
+```typescript oxfmt:false
+'oncall:$orgId:$service': {
+  belongsTo: 'org:$orgId',
+  access: [
+    { principal: 'self', role: 'contributor' },
+    { principal: 'role:$orgId:sre-lead', role: 'editor' },
+  ],
+  pages: [{ key: 'runbook', name: 'Incident runbook' }],
+  pinnedContext: ['oncall:$orgId:$service#runbook'],
+},
+```
+
+嘗試編輯頁面的值班Agent會被拒絕，因為它只是貢獻者。它仍然可以添加註釋。
+
+## 像資料夾一樣組織頁面 {/* #organize-pages-like-folders */}
+
+頁面嵌套在範圍內。一本手冊宣稱`refunds` with `damaged-items` under it, and an agent that doesn't know the exact name lists the tree and reads what it needs:
+
+```json
+{ "from": "handbook:acme", "depth": 2 }
+```
+
+它會傳回每個頁面的引用、名稱和子頁面的數量，例如`handbook:acme#refunds/damaged-items`, and reads the one it needs.
+
+## 每個部門一個範圍 {/* #one-scope-per-department */}
+
+每個部門在全公司範圍內都有自己的職責範圍。人力資源部的入職清單位於`dept:initech:hr`. Your server passes each employee's runs `firm:initech` and their department's scope. An engineer's search finds nothing in HR's scope, while every run holding `firm:initech` finds the firm-wide holidays page:
+
+```typescript
+const scopes = {
+  ...knowledgeMemoryScopes({ org: 'firm:$firmId', orgRole: 'contributor' }),
+  'dept:$firmId:$dept': {
+    belongsTo: 'firm:$firmId',
+    access: [{ principal: 'self', role: 'editor' }],
+  },
+}
+```
+
+您可以透過更改伺服器傳遞的配置和範圍來更改誰看到什麼，而不是透過重寫提示。
+
+## 給有需要的人的注意事項 {/* #notes-for-the-people-who-need-them */}
+
+一個註釋的`scope` lists its stamps, and a run sees the note when it can read the page and holds any one of them. Dana's agent stamps a note with her own scope only, and another with hers and her squad's:
+
+```json
+{
+  "op": "add",
+  "page": "office:hooli#coverage",
+  "scope": ["resource:dana", "squad:hooli:support"],
+  "text": "Dana is out Nov 10 to 14; Bea covers her queue."
+}
+```
+
+支持小組的 Bea 看到了第二張紙條，而不是第一張紙條。從事銷售工作的薩姆兩者都看不到，而且他的經紀人也無法為無法聯繫的團隊蓋章。
+
+## Agent之間的手工工作 {/* #hand-work-between-agents */}
+
+一項計劃的研究、規劃和編碼Agent共享一個範圍。研究編寫一個頁面，規劃編寫嵌套在其下的計劃，編碼Agent讀取該計劃並在完成步驟時向其中添加註釋，例如“PR 412 中的第 1 步已完成”。
+
+沒有一個Agent互相交談。他們在相同的存取規則下共享頁面。
+
+## 後續步驟 {/* #next-steps */}
+
+要開始其中任何一個，請聲明您需要的範圍[Scopes and access](/docs/knowledge/scopes-and-access).

@@ -1,13 +1,13 @@
 ---
-title: "參考：Mastra.getMCPServer() | Core"
-description: "Mastra 中 `Mastra.getMCPServer()` 方法的文件，此方法會按 ID 及選用版本擷取指定的 MCP 伺服器執行個體。"
+title: "Reference: Mastra.getMCPServer() | Core"
+description: "The .getMCPServer() method retrieves an MCP server instance by its registry key (the key used when registering the server in the mcpServers configuration)."
 packages:
   - "@mastra/core"
 ---
 
 # Mastra.getMCPServer()
 
-`.getMCPServer()` 方法會按註冊表鍵（在 `mcpServers` 設定中註冊伺服器時使用的鍵）擷取 MCP 伺服器執行個體。如要按伺服器本身的 `id` 屬性擷取，請改用 `.getMCPServerById()`。
+這`.getMCPServer()`方法透過其登錄機碼（在註冊伺服器時使用的金鑰）檢索 MCP 伺服器實例`mcpServers`配置）。用於透過伺服器固有的檢索`id`財產、使用`.getMCPServerById()`反而。
 
 ## 使用範例 {/* #usage-example */}
 
@@ -37,33 +37,76 @@ const serverById = mastra.getMCPServerById('my-mcp-server')
 
 <PropertiesTable
   content={[
-  {
-    name: 'registryKey',
-    type: 'string',
-    description:
-      '在 mcpServers 設定物件中註冊 MCP 伺服器時使用的註冊表鍵。這是鍵值配對中的設定鍵，而不是伺服器本身的 id 屬性。',
-  },
+{
+  name: 'registryKey',
+  type: 'string',
+  description:
+    "The registry key used when registering the MCP server in the mcpServers configuration object. It is the configuration key in the key-value pair, not the server's intrinsic id property.",
+},
 ]}
 />
 
-## 傳回值 {/* #returns */}
+## 退貨 {/* #returns */}
 
 <PropertiesTable
   content={[
-  {
-    name: 'server',
-    type: 'MCPServerBase | undefined',
-    description: '具有指定註冊表鍵的 MCP 伺服器執行個體；如找不到，則為 undefined。',
-  },
+{
+  name: 'server',
+  type: 'MCPServerBase | undefined',
+  description: 'The MCP server instance with the specified registry key, or undefined if not found.',
+},
 ]}
 />
 
+## 這`MCPServerBase` contract {/* #the-mcpserverbase-contract */}
+
+每個註冊的伺服器都會擴展`MCPServerBase` from `@mastra/core/mcp`. The `MCPServer` class in `@mastra/mcp` implements it for the MCP `2026-07-28` protocol and sets `mcpVersion` to `2`。Tool執行、暫停和`context.mcp`[遷移指南](/reference/migrations/mcp-v2).
+
+### 要求輸入的Tool {/* #tools-that-ask-for-input */}
+
+MCP伺服器運行普通`createTool` definitions. A tool that needs something from the user before it can finish declares `suspendSchema` and `resumeSchema` and calls `suspend()`, exactly as it would for an agent or a workflow. Core reports the suspension as `{ status: 'suspended', suspendPayload, resumeSchema }` from `executeTool`. `MCPServer` turns that into an `input_required` round on the wire, and resumes the tool with the answer in `resumeData`.
+
+```typescript
+import { createTool } from '@mastra/core/tools'
+import { z } from 'zod'
+
+const confirm = createTool({
+  id: 'confirm',
+  description: 'Ask for confirmation before charging',
+  inputSchema: z.object({ amount: z.number() }),
+  outputSchema: z.boolean(),
+  suspendSchema: z.object({ phase: z.literal('confirm'), amount: z.number() }),
+  resumeSchema: z.object({ confirmed: z.boolean() }),
+  execute: async ({ amount }, context) => {
+    if (!context.resumeData) {
+      await context.suspend?.({ phase: 'confirm', amount })
+      return
+    }
+    return context.resumeData.confirmed
+  },
+})
+```
+
+在 MCP 伺服器上並直接執行，`suspend`, `resumeData` and `suspendPayload` sit at the top level of the tool context. Agents and workflows still nest them under `context.agent` and `context.workflow` until the next major release of `@mastra/core`. `resumeSchema` must be a flat object of primitive fields so it can be presented as an input form.
+
+每輪都是單獨的請求。`resumeData` carries only the current round's answer, validated against `resumeSchema`, and `suspendPayload` carries what the tool last suspended with. Because the framework never replays earlier rounds, handlers branch on explicit named phases, every round is re-authorized, and writes rely on domain-owned idempotency. `suspendPayload` is also handed back to tools resumed by agents and workflows.
+
+### 這`mcp` context {/* #the-mcp-context */}
+
+Tool接收`context.mcp` (`MCPToolExecutionContext`): `extra` with the request's `signal`, `requestId`, `authInfo` and `_meta`, plus `log(level, message, data?)`, `progress({ progress, total?, message? })` and `protocolVersion` (`'2026-07-28'`). To ask the user for input, call `context.suspend()` and read `context.resumeData`。協定中不存在伺服器發起的請求，因此不建議使用`elicitation.sendRequest`, `extra.sendRequest`和`extra.sendNotification`成員拋出一則訊息，指定替代者。
+
+### 登記及執行 {/* #registration-and-execution */}
+
+註冊伺服器時，Tool會在 Mastra 實例上註冊。`executeTool(toolId, args, context?)` returns `{ status: 'completed', output }` or, when the tool suspended, `{ status: 'suspended', suspendPayload, resumeSchema }` with `resumeSchema` as JSON Schema. The result has no failure variant: a tool that throws, or input or resume data that fails its schema, rejects the promise. The REST execution endpoint returns the suspended shape instead of pretending the tool finished, and accepts `resumeData` plus the echoed `suspendPayload` on the next call to continue the tool.
+
+在佔用的登錄項目下註冊另一台伺服器會保留現有實例。註冊表項和內部伺服器 ID 保持不同。
+
 ## 相關方法 {/* #related-methods */}
 
-- [Mastra.getMCPServerById()](/reference/core/getMCPServerById)：按 MCP 伺服器本身的 `id` 屬性擷取伺服器
-- [Mastra.listMCPServers()](/reference/core/listMCPServers)：列出所有已註冊的 MCP 伺服器
+* [Mastra.getMCPServerById()](/reference/core/getMCPServerById)：透過其內在檢索 MCP 伺服器`id` property
+* [Mastra.listMCPServers()](/reference/core/listMCPServers)：列出所有已註冊的MCP伺服器
 
-## 另請參閱 {/* #see-also */}
+## 參見 {/* #see-also */}
 
-- [MCP 概覽](/docs/mcp/overview)
-- [MCP 伺服器參考](/reference/tools/mcp-server)
+* [MCP概述](/docs/connections/mcp)
+* [MCP 伺服器參考](/reference/tools/mcp-server)

@@ -1,0 +1,129 @@
+---
+title: "Agents and tools"
+description: "Turn on the Knowledge tools for an agent, and what agents can do with them."
+packages:
+  - "@mastra/core"
+---
+
+# Agent商和Tool
+
+Agent以兩種方式使用知識。透過Tool，Agent可以在決定時搜尋、讀取和寫入頁面。和[pinned context](/docs/knowledge/pinned-context)，所選頁面每次都位於Agent的上下文中，無需Tool呼叫。本頁介紹了這些Tool。您可以選擇Agent程式獲得哪些Tool。你的[範圍聲明](/docs/knowledge/scopes-and-access)決定每個Tool呼叫可以做什麼。
+
+：：：阿爾法
+
+知識處於阿爾法階段。其 API 可能會在不同版本之間變更。
+
+:::
+
+## 開啟Tool {/* #turn-on-the-tools */}
+
+閱讀Tool允許Agent瀏覽、搜尋和閱讀頁面。書寫Tool可以建立和更改頁面和註釋。每個Tool的描述都在[Knowledge tools reference](/reference/knowledge/knowledge-tools).
+
+Tool預設為關閉狀態。放`tools: true` to turn on the read and write tools:
+
+```typescript title="src/mastra/knowledge.ts"
+import { Knowledge, knowledgeMemoryScopes } from '@mastra/core/knowledge'
+
+export const knowledge = new Knowledge({
+  id: 'company',
+  scopes: knowledgeMemoryScopes(),
+  tools: true,
+})
+```
+
+僅從 Knowledge 進行回答的Agent（例如文檔Agent）僅需要讀取Tool：
+
+```typescript
+const knowledge = new Knowledge({
+  id: 'docs',
+  scopes: knowledgeMemoryScopes(),
+  tools: { read: true },
+})
+```
+
+固定Tool附帶固定上下文。要打開它，請設置`pinnedContext: true`, as described in [Pinned context](/docs/knowledge/pinned-context).
+
+## 將Tool附加到Agent {/* #attach-the-tools-to-an-agent */}
+
+將知識實例傳遞到Agent的`knowledge` option. The agent gets the tools you turned on. It also gets short instructions on how to use them, so you don't need to describe the tools in your own instructions:
+
+```typescript title="src/mastra/agents/support-agent.ts"
+import { Agent } from '@mastra/core/agent'
+import { knowledge } from '../knowledge'
+
+export const supportAgent = new Agent({
+  id: 'support-agent',
+  name: 'Support agent',
+  instructions: 'Help customers with their orders.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  knowledge,
+})
+```
+
+若要變更這些說明，請參閱[Tool instructions](/reference/knowledge/tool-instructions).
+
+### 自己添加Tool {/* #add-the-tools-yourself */}
+
+`tools`, next to its other tools. Use [`createTools()`](/reference/knowledge/knowledge-class#createtools) for the tools and [`getInstructions()`](/reference/knowledge/knowledge-class#getinstructions) for their instructions. Pass the same options to both:
+
+```typescript title="src/mastra/agents/docs-agent.ts"
+import { Agent } from '@mastra/core/agent'
+import { knowledge } from '../knowledge'
+
+export const docsAgent = new Agent({
+  id: 'docs-agent',
+  name: 'Docs agent',
+  instructions: `Answer from the company docs.\n\n${knowledge.getInstructions({ write: false, pinnedContext: false })}`,
+  model: '__GATEWAY_OPENAI_MODEL__',
+  tools: {
+    ...knowledge.createTools({ write: false, pinnedContext: false }),
+  },
+})
+```
+
+這些選項會覆寫該Agent程式的實例設定。這裡，`{ write: false, pinnedContext: false }` gives the agent only the read tools. Without `pinnedContext: false`, it would also get `knowledge_pin` when the instance has pinned context on. Access checks work the same either way.
+
+## 閱讀頁面 {/* #read-pages */}
+
+借助讀取Tool，Agent程式可以：
+
+* 瀏覽範圍的組織方式。
+* 按關鍵字或按含義搜尋頁面和註釋[add semantic search](/docs/knowledge/search#add-search-by-meaning).
+* 閱讀一個頁面，包括其註釋以及提及該頁面的其他頁面上的註釋。
+
+一頁很長的頁面會分成幾個部分回來。第一次閱讀會顯示頁面的標題。然後，Agent程式讀取所需的部分，從一行繼續，或僅讀取與術語相符的行。
+
+當沒有任何匹配時，結果就是這樣的。然後，Agent可以告訴用戶它不知道，而不是猜測。
+
+預設情況下，一次讀取最多返回一頁的 1,000 個令牌。對於具有大上下文視窗的模型提高此上限，或對於小模型降低此上限：
+
+```typescript
+const knowledge = new Knowledge({
+  id: 'docs',
+  scopes: knowledgeMemoryScopes(),
+  tools: { read: { maxTokens: 3000 }, write: true },
+})
+```
+
+## 寫入頁面 {/* #write-pages */}
+
+
+
+* 建立和編輯頁面，以及移動、合併或刪除它們。
+* 新增和刪除註釋。註釋是頁面上的簡短事實，歸因於其作者。它可以連結到其他頁面，並且它的[stamps](/docs/knowledge/scopes-and-access#note-visibility) decide who sees it.
+
+Agent商將每個頁面放入與其受眾相符的範圍內。整個團隊的事實屬於團隊的範圍。一個用戶的事實存在於該用戶的`resource:` scope.
+
+
+
+## 訪問檢查 {/* #access-checks */}
+
+開啟Tool並不授予存取權限。Agent只能使用其運行所擁有的範圍以及規則賦予其角色的範圍。其他一切對它來說都是不可見的。
+
+知识会根据运行在其涉及的范围内的角色来检查每个Tool调用。這[roles table](/docs/knowledge/scopes-and-access#access-rules-and-roles) lists what each role can do.
+
+
+
+## 後續步驟 {/* #next-steps */}
+
+下一個，[pin the pages](/docs/knowledge/pinned-context) an agent should see on every turn. Size caps for reads and writes are in [Limits](/reference/knowledge/limits).

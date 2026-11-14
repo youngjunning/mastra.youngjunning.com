@@ -1,25 +1,52 @@
 ---
-title: "参考：存储保留（prune）| 存储"
-description: "Mastra 存储中保留策略和 prune() 的 API 参考。"
+title: 'Reference: Storage retention (prune) | Storage'
+description: 'prune() deletes rows. It caps growth and is safe to run against large tables (batched, bounded, resumable, cancellable).'
 packages:
-  - "@mastra/core"
-  - "@mastra/libsql"
-  - "@mastra/pg"
+  - '@mastra/core'
 ---
 
 # 存储保留
 
-默认情况下，存储会无限增长。保留是一种可选的、基于时间的清理机制：你可在 `retention` 配置中声明每张表的 `maxAge` 策略，然后调用 `storage.prune()` 删除超过配置保留时间的行。未配置的内容会永久保留，因此在你启用前不会有任何行为变化。
+由于存储默认情况下无限增长，Mastra 提供了一个可选择加入的、基于年龄的保留系统。声明每个表`maxAge`的政策`retention`配置，然后调用`storage.prune()`删除早于其配置年龄的行。未配置的数据将永久保留，因此在您选择加入之前，行为不会改变。
 
-`prune()` 会删除行。它能限制增长，并可安全地在大型表上运行（支持分批、有界、可恢复和可取消）。它绝不会回收磁盘空间：在 SQLite/libSQL 上，释放的页会由后续写入复用，因此文件不再增长；但将磁盘空间返还给操作系统（例如通过 `VACUUM`）则由底层数据库和操作人员负责管理。
+`prune()`删除有界批次中的行。运行是可恢复和取消的，因此您可以限制每个维护时段执行的工作量。修剪本身不会回收磁盘空间。当您需要将释放的空间返回给操作系统时，请使用下面特定于数据库的维护指南。
 
-保留机制仅涵盖**增长表**：这些表会作为正常操作的副作用无限累积行（对话历史、遥测数据、任务与运行记录、计划触发历史、事件源）。由用户创建的产物和配置（Agent、Skill、Workspace、提示词块、数据集、计划定义、频道安装配置等）会随用户意图增长，并由用户显式编辑或删除，因此不能用作有效的保留键。
+固定盖**growth tables** only: tables that accumulate rows unbounded as a side effect of normal operation (conversation history, telemetry, job and run records, schedule fire history, event feeds). User-authored artifacts and config (agents, skills, workspaces, prompt blocks, datasets, schedule definitions, channel installations, and so on) grow with user intent and are edited or deleted explicitly, so they're not valid retention keys.
 
-[libSQL](/reference/storage/libsql)、[PostgreSQL](/reference/storage/postgresql) 和 [MongoDB](/reference/storage/mongodb) 是参考实现。其他适配器在实现保留机制前会永久保留行。
+存储适配器使用共享核心保留合同`prune()`, or a database-native mechanism when that better matches the backend.
+
+|适配器|机制|保留支持|
+| - | - | - |
+| libSQL |`prune()` | All supported growth domains |
+| PostgreSQL | `prune()` | All supported growth domains. vNext observability drops expired partitions or chunks |
+| MongoDB | `prune()` or native TTL | All supported growth domains. Native TTL indexes are also available |
+| DuckDB | `prune()` | Observability spans, metrics, logs, scores, and feedback |
+| MySQL | `prune()` | Observability spans, durable agent run fencing (`runOwnership`, `runFences`)|
+|微软 SQL Server |`prune()`|可观察性跨度，持久的Agent运行围栏（`runOwnership`, `runFences`)|
+| Oracle 数据库 |`prune()`|可观察性跨度和日志，持久Agent运行围栏（`runOwnership`, `runFences`)|
+|亚马逊 Aurora DSQL |`prune()`|可观察性跨度，持久的Agent运行围栏（`runOwnership`, `runFences`)|
+|谷歌云扳手 |`prune()`|可观察性范围，以及启用指标存储时的指标。耐用的Agent跑击剑（`runOwnership`, `runFences`)|
+| DynamoDB |`prune()`|耐用的Agent跑击剑（`runOwnership`, `runFences`)|
+|凸|`prune()`|耐用的Agent跑击剑（`runOwnership`, `runFences`）。升级后重新部署您的凸函数 |
+| Cloudflare D1 和耐用对象 |`prune()`|耐用的Agent跑击剑（`runOwnership`, `runFences`)|
+|点击屋 |本机 TTL |可观察性范围、指标、日志、分数和反馈。当所有五个信号都具有有限保留时，删除请求记录将在最长信号保留加上 30 天后过期 |
+
+## 存储特定维护 {/* #storage-specific-maintenance */}
+
+|适配器|维修指导|
+| - | - |
+| SQLite 和 libSQL |释放的页面可供将来的写入重用，从而阻止数据库文件增长。回收磁盘空间需要数据库级维护。 |
+|鸭数据库 |对于文件支持的存储，运行`CHECKPOINT` after pruning to reclaim deleted rows in storage. DuckDB's `VACUUM` doesn't reclaim deleted rows. |
+
+## 时间表修剪 {/* #schedule-pruning */}
+
+跑步`prune()` from a scheduler or maintenance worker, not from application startup or shutdown hooks. For deployments that share a database, prefer a single active scheduler or worker for pruning.
+
+修剪大型表时优先选择流量较低的时段。使用`maxBatches`, `maxRows`, and `pauseMs` to bound each run, and pass an `AbortSignal` when the maintenance process needs to stop promptly. These recommendations apply to adapters that expose `prune()`. ClickHouse applies its native time to live (TTL) policy within the database.
 
 ## 使用示例 {/* #usage-example */}
 
-在任意 `MastraCompositeStore`（或扩展它的适配器，例如 `LibSQLStore`）上声明 `retention`，然后从你自己的调度器调用 `prune()`。
+宣布`retention` on any `MastraCompositeStore` (or an adapter that extends it, such as `LibSQLStore`), then call `prune()` from your own scheduler.
 
 ```typescript title="src/mastra/index.ts"
 import { LibSQLStore } from '@mastra/libsql'
@@ -42,7 +69,7 @@ const storage = new LibSQLStore({
 const results = await storage.prune()
 ```
 
-`retention` 具有完整的类型定义。键必须是真实的域键，每个表键必须是该域声明为符合保留条件的键。直接将对象传入存储配置即可进行类型检查；如果单独构建它，请使用 `satisfies RetentionConfig`，以便未知的域或表会产生编译错误：
+`retention`已完全键入。域键必须存在，并且它们的表键必须声明为具有保留资格。存储配置类型检查直接传递的对象。单独构建对象时，使用`satisfies RetentionConfig` so unknown domains or tables produce compile errors:
 
 ```typescript
 import type { RetentionConfig } from '@mastra/core/storage'
@@ -58,99 +85,105 @@ const retention = {
 
 ## 保留配置 {/* #retention-config */}
 
-在存储配置上设置 `retention` 字段。
+设置`retention` field on the store config.
 
 <PropertiesTable
   content={[
-  {
-    name: 'retention',
-    type: 'RetentionConfig',
-    isOptional: true,
-    description: '按域、按表配置的保留时间策略。未设置的域和表会永久保留。',
-    properties: [
-      {
-        type: 'RetentionConfig',
-        parameters: [
-          {
-            name: '[domain]',
-            type: 'Record<TableKey, TableRetentionPolicy>',
-            isOptional: true,
-            description: '真实的存储域键（例如 `memory`、`observability`）。将该域中符合保留条件的表键映射到其策略。',
-          },
-        ],
-      },
-    ],
-  },
+{
+  name: 'retention',
+  type: 'RetentionConfig',
+  isOptional: true,
+  description: 'Per-domain, per-table age policies. Unset domains and tables are kept forever.',
+  properties: [
+    {
+      type: 'RetentionConfig',
+      parameters: [
+        {
+          name: '[domain]',
+          type: 'Record<TableKey, TableRetentionPolicy>',
+          isOptional: true,
+          description:
+            "A real storage domain key (e.g. `memory`, `observability`). Maps that domain's retention-eligible table keys to their policies.",
+        },
+      ],
+    },
+  ],
+},
 ]}
 />
 
-### TableRetentionPolicy {/* #tableretentionpolicy */}
+### 表保留策略 {/* #tableretentionpolicy */}
 
 <PropertiesTable
   content={[
-  {
-    name: 'maxAge',
-    type: 'Duration',
-    description:
-      "要保留行的最长时间。锚点时间戳严格早于 `Date.now() - maxAge` 的行符合删除条件。数字单位为毫秒；也可以使用带单位后缀的字符串：`ms`、`s`、`m`、`h`、`d`、`w`（例如 `'30d'`、`'12h'`）。",
-  },
-  {
-    name: 'batchSize',
-    type: 'number',
-    isOptional: true,
-    defaultValue: '1000',
-    description: '每批删除的行数。每个批次都是独立事务，可限制大型表上的锁定时长和 WAL 增长。',
-  },
+{
+  name: 'maxAge',
+  type: 'Duration',
+  description:
+    "Maximum age to keep rows. Rows whose anchor timestamp is strictly older than `Date.now() - maxAge` are eligible for deletion. A number is milliseconds, or a string with a unit suffix: `ms`, `s`, `m`, `h`, `d`, `w` (e.g. `'30d'`, `'12h'`).",
+},
+{
+  name: 'batchSize',
+  type: 'number',
+  isOptional: true,
+  defaultValue: '1000',
+  description:
+    'Rows deleted per batch. Each batch is its own transaction, which bounds lock duration and WAL growth on large tables.',
+},
 ]}
 />
 
-### 符合 retention 条件的表 {/* #retention-eligible-tables */}
+### 符合保留资格的表 {/* #retention-eligible-tables */}
 
-每个域都会声明其中哪些表可按时间清理，以及哪一列时间戳作为比较锚点。选择锚点是为了让 `maxAge` 对应数据符合直觉的含义。只追加的日志使用创建时间，实时状态使用最后活动时间。任务和运行使用完成时间，因此进行中的工作绝不会被清理。
+每个域指定其年龄可修剪表和锚定比较的时间戳列，如此选择`maxAge` matches the meaning of the data. Append-only logs use creation time, live state uses last activity, and jobs or runs use completion time so in-flight work isn't pruned.
 
-| 域 | 表键 | 锚点列 | `maxAge` 衡量的内容 |
+|域名 |表键|锚柱|`maxAge` measures |
 | - | - | - | - |
-| `memory` | `threads` | `createdAt` | 线程存在时间 |
-| `memory` | `messages` | `createdAt` | 消息存在时间 |
-| `memory` | `resources` | `createdAt` | 资源存在时间 |
-| `threadState` | `threadState` | `updatedAt` | 非活动时间：仍处于活动状态的线程状态会保留 |
-| `observability` | `spans` | `startedAt` | Span 存在时间 |
-| `observability` | `metrics` | `timestamp` | 指标事件存在时间（仅限 v-next） |
-| `observability` | `logs` | `timestamp` | 日志事件存在时间（仅限 v-next） |
-| `observability` | `scores` | `timestamp` | 分数事件存在时间（仅限 v-next） |
-| `observability` | `feedback` | `timestamp` | 反馈事件存在时间（仅限 v-next） |
-| `scores` | `scorers` | `createdAt` | 分数记录存在时间 |
-| `workflows` | `workflowSnapshot` | `updatedAt` | 非活动时间：已暂停或长时间运行的 Workflow 会保留 |
-| `backgroundTasks` | `backgroundTasks` | `completedAt` | 自完成后的时间；进行中的任务（`NULL`）绝不会被清理 |
-| `experiments` | `experiments` | `completedAt` | 自完成后的时间；正在运行的实验绝不会被清理 |
-| `notifications` | `notifications` | `createdAt` | 通知存在时间 |
-| `harness` | `sessions` | `createdAt` | 会话记录存在时间 |
-| `schedules` | `triggers` | `actual_fire_at` | 触发历史存在时间（epoch-ms 列） |
+| `memory` | `threads` | `createdAt` | Thread age |
+| `memory` | `messages` | `createdAt` | Message age |
+| `memory` | `resources` | `createdAt` | Resource age |
+| `memory` | `runFences` | `retiredAt` | Time since the durable agent execution holding the fence settled. Fences of running executions (`NULL`) are never pruned |
+| `threadState` | `threadState` | `updatedAt` | Inactivity: state for still-active threads survives |
+| `observability` | `spans` | `startedAt` | Span age |
+| `observability` | `metrics` | `timestamp` | Metric event age (vNext only) |
+| `observability` | `logs` | `timestamp` | Log event age (vNext only) |
+| `observability` | `scores` | `timestamp` | Score event age (vNext only) |
+| `observability` | `feedback` | `timestamp` | Feedback event age (vNext only) |
+| `scores` | `scorers` | `createdAt` | Score record age |
+| `workflows` | `workflowSnapshot` | `updatedAt`|不活动、暂停或长时间运行的Workflow程仍然存在 |
+|`workflows` | `runOwnership` | `updatedAt`|不活动。正在运行的持久Agent执行每 10 秒更新一次其声明，因此请保持`maxAge`远高于其 30 秒租约 |
+|`backgroundTasks` | `backgroundTasks` | `completedAt`|完成后的时间，正在进行的任务（`NULL`) 永远不会被修剪 |
+|`experiments` | `experiments` | `completedAt`|自完成以来，正在运行的实验从未被删减|
+|`notifications` | `notifications` | `createdAt`|通知年龄 |
+|`harness` | `sessions` | `createdAt`|会话记录年龄 |
+|`schedules` | `triggers` | `actual_fire_at`|火史年代（epoch-ms专栏）|
 
-:::note
+：：：笔记
 
-- Memory 的 `observational_memory` 表没有时间戳锚点，因此无法按时间清理，也不是有效的保留键。
-- 实验会作为整体清理：过期实验的结果行会随实验一并删除（结果会随其父项级联删除），因此运行记录绝不会只被部分删除。保留机制没有单独的 `results` 键。
-- 对于 `schedules`，增长表是触发历史（`schedule_triggers`，每次触发一行）；计划定义属于配置，不会被清理。
-- 在 PostgreSQL 上，时间戳锚点使用带时区的镜像列（例如 `createdAtZ`、`completedAtZ`）。
-- LibSQL 和 PostgreSQL 支持上述所有域，`harness` 除外，因为 PostgreSQL 未实现它。MongoDB 支持除 `threadState` 和 `harness` 以外的所有域。
-- v-next PostgreSQL Observability 域将信号事件存储在按天分区的表中（`spans`、`metrics`、`logs`、`scores`、`feedback`）。对于它，`prune()` 会删除完全早于截止时间的整日分区（或 TimescaleDB chunk），而非删除行：有效粒度为一天，且仅当分区的整天均超过 `maxAge` 后才会删除。`PruneResult.deleted` 会报告已删除分区中的行数。
+* 记忆`observational_memory` table has no timestamp anchor, so it can't be age-pruned and isn't a valid retention key.
+* 实验作为整个单元进行修剪：老化实验的结果行将与其一起删除（结果与其父级级联），因此运行永远不会被部分删除。保留没有单独的`results` key.
+* `runOwnership`和`runFences` hold the run fencing records of durable agents, one small record per run in each. If the `runOwnership` `maxAge` is too short, a running execution can lose its run, but an execution that lost a run still can't write. A fence is retired only when its execution settles, so the fence of a run that crashed and was never recovered is never pruned.
+* 为了`schedules`, the growth table is the fire history (`schedule_triggers`, one row per fire): schedule definitions are config and aren't pruned.
+* 在 PostgreSQL 上，时间戳锚点使用时区感知镜像列（例如`createdAtZ`, `completedAtZ`).
+* DuckDB 可观察性存储所有五个信号的仅附加事件。它是`spans` policy uses the event `timestamp` column rather than `startedAt`.
+* LibSQL 和 PostgreSQL 支持上述所有域，除了`harness`, which PostgreSQL doesn't implement. MongoDB supports all except `threadState` and `harness`. DuckDB, MySQL, Microsoft SQL Server, Oracle Database, Amazon Aurora DSQL, and Google Cloud Spanner currently support retention only in their `observability` domains, with the signal coverage shown in the support matrix.
+* vNext PostgreSQL Observability域将信号事件存储在按天分区的表中（`spans`, `metrics`, `logs`, `scores`, `feedback`). For it, `prune()` drops whole day partitions (or TimescaleDB chunks) that are entirely older than the cutoff instead of deleting rows: effective level of detail is one day, and a partition is only dropped once its entire day is past `maxAge`. `PruneResult.deleted` reports the number of rows in the dropped partitions.
 
 :::
 
 ## 方法 {/* #methods */}
 
-### Retention {/* #retention */}
+### 保留 {/* #retention */}
 
 #### `prune(options?)` {/* #pruneoptions */}
 
-删除所有在 `retention` 中配置了策略的域内、超过所配置 `maxAge` 的行。每个受影响的表返回一个 `PruneResult`。未配置 `retention` 时，此操作不会执行任何操作并返回 `[]`。
+删除早于其配置的行`maxAge` across every domain that has a policy in `retention`. Returns one `PruneResult` per table touched. With no `retention` configured it's a no-op returning `[]`.
 
-`prune()` 旨在安全地用于包含数百万行的表。它以有界的分批块进行删除（每个批次都是独立事务），因此不会长时间锁定表或使事务日志膨胀。它绝不会运行 `VACUUM`。
+`prune()`设计为在具有数百万行的表上是安全的。它以有界的、批量的块进行删除（每个批次都是它自己的事务），因此它永远不会需要长时间的锁定或使事务日志膨胀。它从不运行`VACUUM`.
 
-传入 `options.retention` 可仅替换本次调用的已配置策略：例如跳过某个域（保留聊天记录），或比现有配置更积极地清理。存储已配置的 `retention` 不会改变。
+经过`options.retention` to replace the configured policies for that call only: for example to skip a domain (keep chat history) or prune more aggressively than the standing config. The store's configured `retention` is unchanged.
 
-对于配置了策略的每张表，锚点列索引会在第一次调用 `prune()` 时按需创建（绝不会在 `init()` 时创建），因此未配置保留机制的部署无需承担额外的索引写入或磁盘开销。首次清理现有大型表时需要一次性构建索引，后续清理会复用该索引。
+使用锚列索引的适配器在第一个索引上延迟创建它们`prune()` call for each table with a policy (never at `init()`) so deployments that don't configure retention pay no extra index write or disk overhead. The first prune of an existing large table pays a one-time index build. Subsequent prunes reuse the index. DuckDB uses its built-in zone maps instead of creating retention indexes.
 
 ```typescript
 const results = await storage.prune({
@@ -170,48 +203,52 @@ await storage.prune({
 })
 ```
 
-返回值：`Promise<PruneResult[]>`
+返回：`Promise<PruneResult[]>`
 
-##### PruneOptions {/* #pruneoptions-1 */}
+##### 修剪选项 {/* #pruneoptions-1 */}
 
 <PropertiesTable
   content={[
-  {
-    name: 'maxBatches',
-    type: 'number',
-    isOptional: true,
-    description: '每次调用中每张表最多执行的删除批次数。达到上限时，该表的结果将以 `done: false` 返回。',
-  },
-  {
-    name: 'maxRows',
-    type: 'number',
-    isOptional: true,
-    description: '每次调用中每张表最多删除的行数。达到上限时，该表的结果将以 `done: false` 返回。',
-  },
-  {
-    name: 'pauseMs',
-    type: 'number',
-    isOptional: true,
-    description: '批次之间的延迟时间（以毫秒为单位），以避免阻塞实时流量。',
-  },
-  {
-    name: 'signal',
-    type: 'AbortSignal',
-    isOptional: true,
-    description: '协作式取消。批处理循环会在批次之间检查它，并干净地停止，返回 `done: false` 的部分结果。',
-  },
-  {
-    name: 'retention',
-    type: 'RetentionConfig',
-    isOptional: true,
-    description: '仅替换本次调用的存储保留策略，例如跳过某个域或更积极地清理。已配置的 `retention` 不会改变。',
-  },
+{
+  name: 'maxBatches',
+  type: 'number',
+  isOptional: true,
+  description:
+    "Maximum delete batches per table per call. When reached, that table's result is returned with `done: false`.",
+},
+{
+  name: 'maxRows',
+  type: 'number',
+  isOptional: true,
+  description:
+    "Maximum rows deleted per table per call. When reached, that table's result is returned with `done: false`.",
+},
+{
+  name: 'pauseMs',
+  type: 'number',
+  isOptional: true,
+  description: 'Delay in milliseconds between batches, to avoid starving live traffic.',
+},
+{
+  name: 'signal',
+  type: 'AbortSignal',
+  isOptional: true,
+  description:
+    'Cooperative cancellation. The batch loop checks it between batches and stops cleanly, returning partial results with `done: false`.',
+},
+{
+  name: 'retention',
+  type: 'RetentionConfig',
+  isOptional: true,
+  description:
+    "Replaces the store's configured retention policies for this call only — e.g. to skip a domain or prune more aggressively. The configured `retention` is unchanged.",
+},
 ]}
 />
 
-##### PruneResult {/* #pruneresult */}
+##### 修剪结果 {/* #pruneresult */}
 
-每个结果描述一张表的处理进度：
+每个结果描述一个表的进度：
 
 ```typescript
 interface PruneResult {
@@ -222,9 +259,9 @@ interface PruneResult {
 }
 ```
 
-## 按计划运行 prune {/* #running-prune-on-a-schedule */}
+## 按计划运行修剪 {/* #running-prune-on-a-schedule */}
 
-`prune()` 没有内置调度器：何时运行由你决定。由于它是有界的，一次调用可能无法删除所有内容。当任何结果的 `done: false` 时，仍有符合条件的行，需要在下一次 tick 时再次调用。这能使每次调用保持简短，并让大量积压通过多次运行逐步清理。
+`prune()`没有内置调度程序，因此您可以决定它何时运行。有界调用可能会留下符合条件的行，由任何结果指示`done: false`. Call it again on the next tick. Short invocations let a large backlog drain over several runs.
 
 ```typescript
 // Runs on your own cron (node-cron, a workflow schedule, an external job, etc.).
@@ -241,33 +278,60 @@ async function retentionTick() {
 }
 ```
 
-你还可以使用 `AbortSignal` 取消长时间运行的清理：循环会在批次之间停止，并返回 `done: false` 的部分结果，因此下一次运行可顺利继续。
+您还可以使用以下命令取消长时间运行的修剪`AbortSignal`: the loop stops between batches and returns partial results with `done: false`. The next run resumes cleanly.
 
-## MongoDB TTL 索引（prune 的替代方案） {/* #mongodb-ttl-indexes-alternative-to-prune */}
+## ClickHouse 原生 TTL {/* #clickhouse-native-ttl */}
 
-MongoDB 提供原生的 [TTL（Time-To-Live）索引](https://www.mongodb.com/docs/manual/core/index-ttl/)，可自动删除过期文档，无需手动调用 `prune()`。这是一项以后台线程运行的数据库级功能。
+ClickHouse 可观察性存储使用本机表 TTL，而不是`prune()`. Configure retention as days per signal. `init()` applies the TTLs to new and existing tables and skips `ALTER TABLE` statements when the configured TTL is already present.
 
-:::note[何时使用 TTL 或 prune()]
+省略的信号以及设置为零或更低的信号不会获得 TTL。当您从以下位置移除信号时`retention`, the next `init()` or `applyRetention()` removes that table's TTL. If Mastra can't read the current TTLs from `system.tables`, it applies the configured TTLs and leaves the others unchanged.
 
-**适合使用 MongoDB TTL 索引的情形：**
+对于需要更新 TTL 配置而不运行完整初始化路径的部署，请调用`applyRetention()` on the vNext observability store:
 
-- 希望自动删除，无需维护
-- 保留期固定（例如“始终为 30 天”）
-- 更倾向于数据库原生方案
+```typescript
+import { ObservabilityStorageClickhouseVNext } from '@mastra/clickhouse'
 
-**适合使用 `prune()` 的情形：**
+const observability = new ObservabilityStorageClickhouseVNext({
+  client,
+  retention: {
+    tracing: 30,
+    logs: 7,
+    metrics: 14,
+    scores: 90,
+    feedback: 60,
+  },
+})
 
-- 需要细粒度控制删除时机
-- 希望在营业时间限制删除速率
-- 需要可恢复、可取消的清理操作
-- 正在使用包含多个数据库的复合存储
+await observability.applyRetention()
+```
 
-两种方案都有效。TTL 更简单，`prune()` 则提供更多控制能力。
+删除请求会保留足够长的时间，以便在信号行过期后继续执行擦除操作。 Mastra 将 TTL 应用到`mastra_deletion_requests` only when tracing, logs, metrics, scores, and feedback all have finite retention. The deletion-request TTL is the longest of those periods plus 30 days. For example, if score retention is the longest period at 90 days, deletion requests expire after 120 days. When any signal is unbounded, deletion requests remain unbounded because trace deletion requests cover rows across all five signals.
+
+## MongoDB TTL 索引（修剪的替代方案） {/* #mongodb-ttl-indexes-alternative-to-prune */}
+
+MongoDB 提供原生[TTL (Time-To-Live) indexes](https://www.mongodb.com/docs/manual/core/index-ttl/) that automatically delete expired documents without requiring manual `prune()` calls. This is a database-level feature that runs as a background thread.
+
+:::注意\[何时使用 TTL 与 prune()]
+
+**在以下情况下使用 MongoDB TTL 索引：**
+
+* 您想要自动、零维护的删除
+* 您的保留期是固定的（例如“始终 30 天”）
+* 您更喜欢数据库本机解决方案
+
+**使用`prune()` when:**
+
+* 您需要对删除时间进行细粒度控制
+* 您想要限制工作时间内的删除率
+* 您需要可恢复、可取消的清理操作
+* 您正在使用具有多个数据库的复合存储
+
+两种方法都是有效的。 TTL 更简单。`prune()` gives more control.
 :::
 
 ### 在 MongoDB 上设置 TTL 索引 {/* #setting-up-ttl-indexes-on-mongodb */}
 
-TTL 索引作用于日期字段。MongoDB 每 60 秒检查一次索引，并删除日期字段加上 TTL 时长早于当前时间的文档。
+TTL 索引适用于日期字段。 MongoDB 每 60 秒检查一次索引，并删除日期字段 + TTL 持续时间 \< 当前时间的文档。
 
 ```typescript
 import { MongoDBStore } from '@mastra/mongodb'
@@ -299,25 +363,24 @@ const storage = new MongoDBStore({
 })
 ```
 
-:::tip
-TTL 索引会在文档过期后不久删除它们（后台线程约每 60 秒运行一次），但无法保证确切时间。如需精确、即时的清理，请改用 `prune()`。
+:::提示
+TTL 索引会在文档过期后不久删除文档（后台线程每约 60 秒运行一次），但不能保证确切的时间。为了精确、立即清理，请使用`prune()` instead.
 :::
 
-## 回收磁盘空间 {/* #reclaiming-disk */}
+## 回收磁盘 {/* #reclaiming-disk */}
 
-`prune()` 会删除行，但不会缩小数据库文件。在 SQLite/libSQL 上，释放的页会进入空闲列表并由后续写入复用，因此文件不再增长：对大多数用户而言，仅此便可解决无限增长问题。
+`prune()`删除行但不收缩数据库文件。在 SQLite/libSQL 上，释放的页面会进入空闲列表以供将来的写入重用。对于大多数用户来说，重复使用这些页面可以防止文件无限增长。
 
-将这些空闲空间返还给操作系统是 Mastra 不管理的另一项工作。如果确实需要缩小文件，请在维护窗口中自行运行底层数据库的压缩操作（例如自托管 libSQL 上的 `VACUUM`）。完整的 `VACUUM` 会锁定文件，并需要约为文件大小两倍的可用磁盘空间。在 PostgreSQL 上，autovacuum 会自动回收死元组以供复用；仅在必须将磁盘空间返还给操作系统时，才需要手动运行 `VACUUM FULL`。
+将可用空间交还给操作系统是 Mastra 无法管理的另一个问题。如果您特别需要收缩文件，请运行底层数据库的压缩（例如`VACUUM` on self-hosted libSQL) yourself in a maintenance window. A full `VACUUM` locks the file and needs roughly twice the file size in free disk. On PostgreSQL, autovacuum reclaims dead tuples for reuse automatically. A manual `VACUUM FULL` is only needed if you must return disk to the OS.
 
-对于 MongoDB，已删除的文档会由后续插入复用。要回收磁盘空间，请在维护窗口中运行 [`db.runCommand({ compact: "collection_name" })`](https://www.mongodb.com/docs/manual/reference/command/compact/)。
+对于 MongoDB，已删除的文档可在以后的插入中重用。要回收磁盘空间，请运行[`db.runCommand({ compact: "collection_name" })`](https://www.mongodb.com/docs/manual/reference/command/compact/) during a maintenance window.
 
-:::note[libSQL 和 Turso]
-[Turso Cloud](/reference/storage/libsql) 会为你管理存储压缩，因此无需手动回收任何空间。这仅适用于自托管的 libSQL 文件。
+:::注意\[libSQL 和 Turso][Turso Cloud](/integrations/databases/libsql) manages storage compaction for you, so there's nothing to reclaim manually. This applies only to self-hosted libSQL files.
 :::
 
-## 相关内容 {/* #related */}
+## 有关的 {/* #related */}
 
-- [libSQL 存储](/reference/storage/libsql)
-- [PostgreSQL 存储](/reference/storage/postgresql)
-- [复合存储](/reference/storage/composite)
-- [存储概览](/reference/storage/overview)
+* [libSQL 存储](/integrations/databases/libsql)
+* [PostgreSQL 存储](/integrations/databases/postgresql)
+* [复合存储](/reference/storage/composite)
+* [存储概览](/reference/storage/overview)

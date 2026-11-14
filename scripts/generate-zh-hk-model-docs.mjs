@@ -856,8 +856,8 @@ function localize(content) {
 }
 
 const files = await listMdxFiles(sourceRoot)
-if (files.length !== 188) {
-  throw new Error(`Expected 188 English model files, found ${files.length}`)
+if (files.length < 188) {
+  throw new Error(`Expected at least 188 English model files, found ${files.length}`)
 }
 
 for (const relativePath of files) {

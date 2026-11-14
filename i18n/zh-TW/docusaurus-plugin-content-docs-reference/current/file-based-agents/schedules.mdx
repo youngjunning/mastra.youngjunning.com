@@ -1,21 +1,21 @@
 ---
-title: "Schedule | 檔案式 Agent"
-description: 在 schedules/ 下為檔案式 Agent 宣告週期性 cron 任務。
+title: "Schedules | File-based Agents"
+description: "A file-based agent discovers schedules from its schedules/ directory. Each file declares one recurring task: a cron expression plus what the agent should do when it fires."
 packages:
   - "@mastra/core"
 ---
 
-# Schedule
+# 時間表
 
-檔案式 Agent 會從 `schedules/` 目錄探索 **Schedule**。每個檔案宣告一項週期性任務：cron expression，以及觸發時 Agent 應執行的工作。Mastra 會在啟動時將它們註冊至 Schedule Storage，因此排程的 Agent 不需要執行階段註冊程式碼。
+基於文件的Agent發現**schedules**從它的`schedules/`目錄。每個檔案都聲明一個重複任務：一個 cron 表達式以及Agent程式在觸發時應該執行的操作。 Mastra 在啟動時將它們註冊到計劃存儲中。計劃Agent不需要運行時註冊代碼。
 
-本頁說明檔案式慣例。若要改在執行階段建立 Schedule，請參閱 [Schedule](/reference/schedules/overview)。
+使用此頁面進行基於文件的約定。若要在運行時建立計劃，請參閱[Schedules](/reference/schedules/overview).
 
-`defineSchedule` 會從 `@mastra/core/agent` 重新 export，讓檔案式 Agent 只需使用一個匯入路徑。`@mastra/core/schedules` 也會 export 此函式。
+`defineSchedule`重新出口自`@mastra/core/agent` so file-based agents need one import path. `@mastra/core/schedules` exports it too.
 
-## 快速開始 {/* #quickstart */}
+## 快速入門 {/* #quickstart */}
 
-在 Agent 的 `schedules/` 目錄下新增檔案：
+在agent下方新增一個文件`schedules/` directory:
 
 ```typescript title="src/mastra/agents/support/schedules/heartbeat.ts"
 import { defineSchedule } from '@mastra/core/agent'
@@ -26,11 +26,11 @@ export default defineSchedule({
 })
 ```
 
-Mastra 每五分鐘會以該 prompt 執行 `support` Agent。
+每五分鐘，Mastra 運行一次`support` agent with that prompt.
 
-## Schedule 身分 {/* #schedule-identity */}
+## 時間表身份 {/* #schedule-identity */}
 
-Schedule id 是檔案相對於 `schedules/` 的路徑，並移除副檔名，因此可以使用巢狀目錄來分組相關 Schedule：
+時間表的 id 是其相對路徑`schedules/` with the extension stripped, so nested directories are a way to group related schedules:
 
 ```text title="Schedule layout"
 src/mastra/agents/
@@ -44,17 +44,17 @@ src/mastra/agents/
             └── sweep.ts      # id: billing/sweep
 ```
 
-此 id 在不同建置之間保持穩定，因此 Mastra 能分辨編輯過的 Schedule 與新 Schedule。重新命名或移動檔案會視為刪除一項 Schedule，並建立另一項 Schedule。
+該 ID 在各個版本中都是穩定的，這讓 Mastra 可以區分編輯後的時間表和新的時間表。重新命名或移動檔案被視為刪除一個計劃並建立另一個計劃。
 
-`heartbeat.ts` 與 `heartbeat.md` 會解析為相同 id，因此同時宣告兩者會造成建置錯誤。
+`heartbeat.ts`和`heartbeat.md` resolve to the same id, so declaring both is a build error.
 
 ## 執行模式 {/* #execution-modes */}
 
-Schedule 只能設定一種執行模式。同時設定兩種，或兩者都未設定，都會造成建置失敗。
+時間表恰好設定一種執行模式。設定兩者或都不設定都會導致建置失敗。
 
-### Prompt 模式 {/* #prompt-mode */}
+### 提示方式 {/* #prompt-mode */}
 
-`prompt` 會使用固定訊息執行所屬 Agent。此模式採 fire-and-forget，不會等待結果。
+`prompt`使用固定訊息運行所屬Agent程式。當調度以執行緒為目標時，火災會發送喚醒訊號並返回而不等待運行，因為執行緒流運行時驅動運行完成，而無執行緒調度則等待`agent.generate` and doesn't finish until the run does.
 
 ```typescript title="src/mastra/agents/support/schedules/digest.ts"
 import { defineSchedule } from '@mastra/core/agent'
@@ -66,9 +66,9 @@ export default defineSchedule({
 })
 ```
 
-### Handler 模式 {/* #handler-mode */}
+### 處理程序模式 {/* #handler-mode */}
 
-Schedule 觸發時，`handler` 會計算該次觸發的參數。prompt 取決於目前 state、某些觸發應略過，或 run 需要 Channel 傳遞 context 時，請使用此模式。
+`handler`當計劃觸發時計算火災參數。當提示取決於目前狀態、應跳過某些觸發或執行需要通道傳遞上下文時，請使用它。
 
 ```typescript title="src/mastra/agents/support/schedules/billing/sweep.ts"
 import { defineSchedule } from '@mastra/core/agent'
@@ -91,15 +91,15 @@ export default defineSchedule({
 })
 ```
 
-handler 的傳回值會覆蓋並合併 Schedule 儲存的欄位。傳回 `undefined` 不會套用 override，因此該次觸發會改用儲存的欄位。handler 模式的 Schedule 不能宣告 `prompt`，所以該次觸發會因缺少 prompt 而失敗。若要執行，請傳回 `prompt`；若要略過，請傳回 `null`。
+處理程序的傳回值合併到計畫的儲存欄位。返回`undefined` applies no overrides. The fire falls back to those stored fields. Since a handler-mode schedule can't declare a `prompt`, that fire then fails for a missing prompt. Return a `prompt` to run, or `null` to skip.
 
-handler 是函式，因此無法持久化至已儲存的 Schedule row。Schedule 觸發時，Mastra 會在 process 內解析 handler。未提供 prompt（且未宣告）的 handler 模式 Schedule 會使該次觸發以原因失敗，而不會向 Agent 傳送空白訊息。
+處理程序是函數，因此它們無法保留在儲存的計劃行上。當計劃觸發時，Mastra 會在進程中解決這些問題。不提供提示（且聲明不提示）的處理程序模式計畫會因原因而失敗，而不是向Agent程式發送空訊息。
 
-由於需要在 process 內查詢，執行 scheduler 的 process 必須註冊所屬 Agent。一般部署會啟動單一進入點，自動符合此需求。獨立 worker 必須使用與 server 相同的進入點。若從精簡進入點啟動，便沒有可呼叫的 handler，因此觸發會失敗，而不會執行。
+進程內查找意味著執行調度程序的進程必須註冊擁有Agent程式。正常部署會啟動單一條目並免費取得該條目。獨立工作人員需要與伺服器相同的條目。從修剪過的條目啟動一個，它沒有可呼叫的處理程序。它的火不是熄滅而是熄滅。
 
-### Markdown Schedule {/* #markdown-schedules */}
+### 降價時間表 {/* #markdown-schedules */}
 
-`.md` Schedule 使用 frontmatter 定義 cron，並以文件本文作為 prompt。這是有更多撰寫空間的 prompt 模式：
+一個`.md` schedule uses frontmatter for the cron and the document body as the prompt. This is prompt mode with more room to write:
 
 ```markdown title="src/mastra/agents/support/schedules/cleanup.md"
 ---
@@ -113,116 +113,117 @@ Review tickets untouched for 30 days.
 Close the ones that are clearly resolved and summarize the rest.
 ```
 
-務必以引號包住 cron。開頭的 `*` 是 YAML alias，因此 `cron: */5 * * * *` 會造成解析錯誤，而 `cron: "*/5 * * * *"` 可以正常運作。
+始終引用 cron。領先的`*` is a YAML alias, so `cron: */5 * * * *` is a parse error while `cron: "*/5 * * * *"` is fine.
 
-frontmatter 接受下列所有選項，但不接受 `handler`，因為函式需要 `.ts` 或 `.js` Schedule 模組。也不能設定 `prompt`，因為本文就是 prompt。未知的 frontmatter 欄位會造成建置失敗，而不會靜默忽略，因此 `ifIdel` 等拼字錯誤可在建置時發現。
+Frontmatter 接受以下所有選項，除了`handler`, which needs a function and so needs a `.ts` or `.js` schedule module. `prompt` isn't settable either, because the body is the prompt. Unknown frontmatter fields fail the build rather than being silently ignored, so a typo like `ifIdel` is caught at build time.
 
 ## 選項 {/* #options */}
 
 <PropertiesTable
   content={[
-  {
-    name: 'cron',
-    type: 'string',
-    description:
-      '標準五欄 cron expression。必填。scheduler 會在 tick loop 上評估 Schedule，因此有效精細度為一分鐘。不支援小於一分鐘的欄位。',
-  },
-  {
-    name: 'prompt',
-    type: 'string',
-    description: '每次觸發時 Agent 執行的訊息。設定此欄位或 `handler`，不可同時設定。',
-    isOptional: true,
-  },
-  {
-    name: 'handler',
-    type: '(ctx) => ScheduleOverrides | null | undefined',
-    description:
-      '在觸發時計算該次執行。傳回要套用的 override，或傳回 `null` 略過該次觸發。未傳回內容不會套用 override，而 handler 模式沒有已儲存的 prompt，因此會造成觸發失敗。設定此欄位或 `prompt`，不可同時設定。',
-    isOptional: true,
-  },
-  {
-    name: 'timezone',
-    type: 'string',
-    description:
-      '評估 cron 時使用的 IANA timezone，例如 `America/New_York`。預設為 host process timezone，可能因部署而異，因此任何對時刻敏感的工作都應明確設定。timezone 規則會處理 DST 轉換，所以 `0 9 * * *` 在轉換前後都維持當地時間上午 9 點。',
-    isOptional: true,
-  },
-  {
-    name: 'name',
-    type: 'string',
-    description: '顯示於 Studio，且可透過 `mastra.schedules.list({ name })` 篩選的自由格式 label。',
-    isOptional: true,
-  },
-  {
-    name: 'threadId',
-    type: 'string',
-    description: '將觸發以 signal 形式傳入現有 thread，而不啟動新的 run。需要 `resourceId`。',
-    isOptional: true,
-  },
-  {
-    name: 'resourceId',
-    type: 'string',
-    description: '目標 thread 的擁有者。設定 `threadId` 時必填。',
-    isOptional: true,
-  },
-  {
-    name: 'signalType',
-    type: "'user' | 'state' | 'reactive' | 'notification' | 'user-message' | 'system-reminder'",
-    description: '該次觸發的 signal category。只適用於 thread 型 Schedule。',
-    isOptional: true,
-    defaultValue: "'notification'",
-  },
-  {
-    name: 'tagName',
-    type: 'string',
-    description: 'signal render 使用的 XML tag，因此觸發會以 `<schedule>…</schedule>` 形式送達 Agent。',
-    isOptional: true,
-    defaultValue: "'schedule'",
-  },
-  {
-    name: 'attributes',
-    type: 'Record<string, string | number | boolean | null>',
-    description: 'render 至 signal XML tag 的 attribute。',
-    isOptional: true,
-  },
-  {
-    name: 'providerOptions',
-    type: 'Record<string, unknown>',
-    description: '每次觸發時合併至 Schedule signal payload 的 Provider 選項。必須可安全轉換為 JSON。',
-    isOptional: true,
-  },
-  {
-    name: 'ifActive',
-    type: 'ScheduleIfActive',
-    description: '目標 thread 已在串流時的處理方式：`deliver`、`persist` 或 `discard`。只適用於 thread 型 Schedule。',
-    isOptional: true,
-  },
-  {
-    name: 'ifIdle',
-    type: 'ScheduleIfIdle',
-    description: '目標 thread 閒置時的處理方式：`wake`、`persist` 或 `discard`。只適用於 thread 型 Schedule。',
-    isOptional: true,
-  },
-  {
-    name: 'status',
-    type: "'active' | 'paused'",
-    description:
-      '建立 row 時使用的狀態。只在首次建立時套用，因為同步永遠不會 patch `status`，讓透過 API 暫停的狀態可在重新部署後保留。日後在程式碼中變更此值，不會影響現有 Schedule。',
-    isOptional: true,
-    defaultValue: "'active'",
-  },
-  {
-    name: 'metadata',
-    type: 'Record<string, unknown>',
-    description: '與 Schedule row 一起儲存、可安全轉換為 JSON 的任意資料。',
-    isOptional: true,
-  },
+{
+  name: 'cron',
+  type: 'string',
+  description: 'A 5-, 6-, or 7-part cron expression. Required.',
+},
+{
+  name: 'prompt',
+  type: 'string',
+  description: 'Message the agent runs on each fire. Set this or `handler`, not both.',
+  isOptional: true,
+},
+{
+  name: 'handler',
+  type: '(ctx) => AgentScheduleHandlerResult | null | undefined | void | Promise<AgentScheduleHandlerResult | null | undefined | void>',
+  description:
+    'Computes the fire at trigger time and can be `async`. Return overrides to apply as an `AgentScheduleHandlerResult` (`Partial<ScheduleEffective>`), or `null` to skip this fire. Returning nothing applies no overrides, which fails the fire because handler mode has no stored prompt. Set this or `prompt`, not both.',
+  isOptional: true,
+},
+{
+  name: 'timezone',
+  type: 'string',
+  description:
+    'IANA timezone the cron is evaluated in (e.g. `America/New_York`). Defaults to the host process timezone, which varies by deployment, so set this explicitly for anything time-of-day sensitive. DST transitions are handled by the timezone rules, so `0 9 * * *` stays 9am local across the shift.',
+  isOptional: true,
+},
+{
+  name: 'name',
+  type: 'string',
+  description: 'Free-form label shown in Studio and filterable via `mastra.schedules.list({ name })`.',
+  isOptional: true,
+},
+{
+  name: 'threadId',
+  type: 'string',
+  description:
+    'Sends the fire as a signal into an existing thread instead of starting a fresh run. Requires `resourceId`.',
+  isOptional: true,
+},
+{
+  name: 'resourceId',
+  type: 'string',
+  description: 'Owner of the target thread. Required when `threadId` is set.',
+  isOptional: true,
+},
+{
+  name: 'signalType',
+  type: "'user' | 'state' | 'reactive' | 'notification' | 'user-message' | 'system-reminder'",
+  description: 'Signal category for the fire. Threaded schedules only.',
+  isOptional: true,
+  defaultValue: "'notification'",
+},
+{
+  name: 'tagName',
+  type: 'string',
+  description: 'XML tag the signal renders as, so a fire reaches the agent as `<schedule>…</schedule>`.',
+  isOptional: true,
+  defaultValue: "'schedule'",
+},
+{
+  name: 'attributes',
+  type: 'Record<string, string | number | boolean | null>',
+  description: 'Attributes rendered onto the signal XML tag.',
+  isOptional: true,
+},
+{
+  name: 'providerOptions',
+  type: 'Record<string, unknown>',
+  description: 'Provider options merged into the schedule signal payload on every fire. Must be JSON-safe.',
+  isOptional: true,
+},
+{
+  name: 'ifActive',
+  type: 'ScheduleIfActive',
+  description:
+    'What to do when the target thread is already streaming: `deliver`, `persist`, or `discard`. Threaded schedules only.',
+  isOptional: true,
+},
+{
+  name: 'ifIdle',
+  type: 'ScheduleIfIdle',
+  description: 'What to do when the target thread is idle: `wake`, `persist`, or `discard`. Threaded schedules only.',
+  isOptional: true,
+},
+{
+  name: 'status',
+  type: "'active' | 'paused'",
+  description:
+    'Status the row is created with. Applies on first create, because a redeploy that leaves the cadence unchanged never patches `status`, so pausing through the API survives it. Changing this value in code later has no effect on an existing schedule. A cadence with no future occurrence is registered as `completed`, and a later cadence edit that can fire reactivates a completed row.',
+  isOptional: true,
+  defaultValue: "'active'",
+},
+{
+  name: 'metadata',
+  type: 'Record<string, unknown>',
+  description: 'Arbitrary JSON-safe data stored alongside the schedule row.',
+  isOptional: true,
+},
 ]}
 />
 
-## 在開發環境測試 Schedule {/* #testing-a-schedule-in-development */}
+## 測試開發中的時間表 {/* #testing-a-schedule-in-development */}
 
-Schedule 依 cron cadence 觸發，在迭代期間並不實用。請改為依 id 隨選觸發：
+安排在其 cron 節奏上觸發，這在迭代時是不切實際的。而是根據 id 按需觸發一個：
 
 ```bash
 # List schedules to find the id
@@ -232,38 +233,38 @@ curl http://localhost:4111/api/schedules
 curl -X POST http://localhost:4111/api/schedules/<scheduleId>/run
 ```
 
-這會記錄一個 `triggerKind: "manual"` 的 trigger，且不會推進 `nextFireAt`，因此不會影響一般 cadence。Studio 會列出相同 Schedule 及其 trigger 歷史記錄。
+這記錄了一個觸發器`triggerKind: "manual"` and doesn't advance `nextFireAt`, so the regular cadence is unaffected. Studio lists the same schedules and their trigger history.
 
-儲存的 id 具有 namespace 且經 URL encode。`support` Agent 上的 `billing/sweep` 會變成 `fsa_support__billing%2Fsweep`，因此請從清單回應複製 id，不要自行組合。
+儲存的 ID 是命名空間和 URL 編碼的。`billing/sweep` on the `support` agent becomes `fsa_support__billing%2Fsweep`, so copy the id from the list response rather than assembling it by hand.
 
-## 註冊與生命週期 {/* #registration-and-lifecycle */}
+## 註冊和生命週期 {/* #registration-and-lifecycle */}
 
-Mastra 啟動時會將已宣告的 Schedule 同步至 Schedule Storage；之後每次註冊 Agent 時也會再次同步。只要宣告 Schedule 即可啟動 scheduler，不需要 `scheduler: { enabled: true }`。
+Mastra 在啟動時將聲明的時間表同步到時間表儲存中，並在Agent註冊後再次同步。聲明一個調度就足以啟動調度程序，無需`scheduler: { enabled: true }` needed.
 
-同步會比較每個已宣告 Schedule 與儲存的 row，只寫入變更內容：
+同步將每個聲明的計劃與其儲存的行進行比較，並僅寫入更改的內容：
 
-- 新 Schedule 檔案會建立 row。
-- 編輯 `cron` 或 `timezone` 會 patch row 並重新計算下次觸發時間，因此修改後的 Schedule 絕不會依舊 cadence 觸發。
-- 刪除或重新命名 Schedule 檔案會刪除其 row。
-- 透過 API 暫停的 Schedule 可在重新部署後保留。同步會刻意保留 `status` 不變。
+* 新的計劃文件建立一行。
+* 編輯`cron` or `timezone` patches the row and recomputes the next fire time, so an edited schedule never fires on its old cadence.
+* 刪除或重新命名計劃檔案會刪除其行。
+* 透過 API 暫停計畫在重新部署後仍然有效。同步故意離開`status` alone.
 
-同步只會移除屬於目前 process 所註冊 Agent 的 row，因此只包含部分 Agent 的 process 絕不會刪除其他 Agent 的 Schedule。從專案完全移除 Agent 後，剩餘的 row 會在下次觸發時清理，因為 scheduler 會發現沒有可執行的 Agent。
+同步僅刪除屬於目前進程中已註冊的Agent程式的行，因此保存Agent子集的程序永遠不會刪除其他Agent程式的計劃。當Agent從專案中完全刪除時，當調度程序發現沒有Agent可以運行時，其剩餘行將在下次觸發時被清理。
 
-透過 `mastra.schedules.create(...)` 在執行階段建立的 Schedule 位於不同 namespace，絕不會受到此同步影響。
+運行時創建的時間表通過`mastra.schedules.create(...)` live in a separate namespace and are never touched by this sync.
 
 ## 限制 {/* #limits */}
 
-**只限根 Agent。** Schedule 必須宣告在頂層 Agent 上。`subagents/` 下的 `schedules/` 目錄會造成建置錯誤，因為 subagent 會接入父 Agent，而不會註冊至 Mastra instance，所以 scheduler 無法解析為目標。請將 Schedule 提供給父 Agent，再由父 Agent 委派。
+**僅限根Agent。**&#x5411;頂級Agent聲明時間表。一個`schedules/` directory under `subagents/` causes a build error because subagents are wired into their parent instead of being registered on the Mastra instance, leaving the scheduler unable to resolve them as targets. Give the parent the schedule and let it delegate.
 
-**需要 Storage。** Schedule 是持久化 row，因此 instance 必須設定 [Storage](/reference/file-based-agents/storage)。記憶體內 store 中的 row 無法在重新啟動後保留。
+**需要存儲。**&#x7531;於計劃是持久化的行，並且記憶體儲存中的行在重新啟動後無法繼續存在，因此實例需要[storage](/reference/file-based-agents/storage) configured.
 
-**託管。** scheduler 會以背景 worker 形式在 Mastra process 中執行，因此 host 必須讓該 process 持續存活。長時間執行的 Node server 與 container 可以正常運作。在 request 之間凍結或回收 process 的環境（包括大多數 serverless function 平台）會錯過觸發。請改用平台自己的 cron 呼叫 run endpoint。
+**主持。**&#x8ABF;度程序作為 Mastra 進程內的後台工作程序運行，因此它需要一個主機來保持該進程處於活動狀態。長時間運行的節點伺服器和容器可以工作。凍結或回收請求之間的進程的環境（包括大多數無伺服器功能平台）將錯過火災。使用平台自己的 cron 來呼叫那裡的運行端點。
 
-**以程式碼定義的 Agent。** `config.ts` export `new Agent({...})` 的 Agent 目錄會直接使用，因此其 `schedules/` 目錄會被忽略，並顯示警告。這類 Agent 請使用 `mastra.schedules.create(...)`。
+**代碼定義的Agent。**&#x4E00;個Agent目錄，其`config.ts` exports `new Agent({...})` is used verbatim, so its `schedules/` directory is ignored with a warning. Use `mastra.schedules.create(...)` for those.
 
-## 範例 {/* #example */}
+## 例子 {/* #example */}
 
-以下 support Agent 有兩項 Schedule：固定的每週摘要，以及只在有工作時才執行的每晚 sweep。
+支援Agent有兩個時間表：固定的每週摘要，以及僅在有事情要做時運行的夜間清理。
 
 ```text title="Scheduled support agent"
 src/mastra/agents/

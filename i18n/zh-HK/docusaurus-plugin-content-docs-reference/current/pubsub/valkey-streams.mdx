@@ -1,0 +1,143 @@
+---
+title: 'Reference: ValkeyStreamsPubSub | PubSub'
+description: 'ValkeyStreamsPubSub is a PubSub and LeaseProvider implementation backed by Valkey Streams through Valkey GLIDE.'
+packages:
+  - '@mastra/core'
+  - '@mastra/valkey-streams'
+---
+
+# ValkeyStreamsPubSub
+
+`ValkeyStreamsPubSub`是一個[`PubSub`](/reference/pubsub/base)和[`LeaseProvider`](/reference/pubsub/lease-provider)由 Valkey Streams 支持的實施[](https://github.com/valkey-io/valkey-glide)。它提供持久的跨進程交付、消費者群組、重新交付、主題清理和分散式租賃。
+
+將其用於 Valkey 部署。使用[`RedisStreamsPubSub`](/reference/pubsub/redis-streams) for Redis deployments that use the official `redis` client. Both integrations implement the same Mastra behavior, with independent tests running against Valkey and Redis.
+
+## 安裝 {/* #installation */}
+
+```bash npm2yarn
+npm install @mastra/valkey-streams
+```
+
+## 使用範例 {/* #usage-example */}
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { ValkeyStreamsPubSub } from '@mastra/valkey-streams'
+
+export const mastra = new Mastra({
+  pubsub: new ValkeyStreamsPubSub({
+    url: 'valkey://localhost:6379',
+  }),
+})
+```
+
+## 建構函數參數 {/* #constructor-parameters */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'url',
+  type: 'string',
+  description:
+    'Valkey connection URL. Falls back to `valkeyOptions.url`. `rediss://` and `valkeys://` URLs enable TLS unless `valkeyOptions.useTLS` is set.',
+  isOptional: true,
+  defaultValue: 'valkey://localhost:6379',
+},
+{
+  name: 'valkeyOptions',
+  type: 'ValkeyClientOptions',
+  description: 'GLIDE connection options, including native client configuration.',
+  isOptional: true,
+},
+{
+  name: 'keyPrefix',
+  type: 'string',
+  description: 'Prefix for stream keys.',
+  isOptional: true,
+  defaultValue: 'mastra:topic',
+},
+{
+  name: 'blockMs',
+  type: 'number',
+  description: 'How long each read blocks while waiting for events.',
+  isOptional: true,
+  defaultValue: '1000',
+},
+{
+  name: 'maxStreamLength',
+  type: 'number',
+  description: 'Approximate maximum entries retained per stream. Set to 0 to disable trimming.',
+  isOptional: true,
+  defaultValue: '10000',
+},
+{
+  name: 'streamIdleTtlMs',
+  type: 'number',
+  description:
+    'Sliding idle expiry in milliseconds, refreshed on every write to a stream. A stream left idle for the full duration is deleted with its entries and consumer groups. Keep it above the longest time a grouped worker may be offline while still expecting to replay its backlog. Set to 0 to disable expiry; streams that never reach `clearTopic` then stay in Valkey forever.',
+  isOptional: true,
+  defaultValue: '604800000 (7 days)',
+},
+{
+  name: 'reclaimIntervalMs',
+  type: 'number',
+  description:
+    "Interval for reclaiming unacknowledged events. Set to 0 to disable. While it's enabled, workflow recovery leaves evented runs to this reclaim instead of restarting them. With 0, the pubsub no longer redelivers a stopped worker's events, so workflow recovery restarts evented runs when an instance boots, as it does without a broker.",
+  isOptional: true,
+  defaultValue: '30000',
+},
+{
+  name: 'reclaimIdleMs',
+  type: 'number',
+  description:
+    'Minimum idle time before an event can be reclaimed. Keep it at 30000 or more for evented workflows: a step event reclaimed sooner can be dropped as a duplicate.',
+  isOptional: true,
+  defaultValue: '60000',
+},
+{
+  name: 'maxDeliveryAttempts',
+  type: 'number',
+  description: 'Maximum nack redeliveries. Pass `Infinity` to disable the cap.',
+  isOptional: true,
+  defaultValue: '5',
+},
+{
+  name: 'inFlightTimeoutMs',
+  type: 'number',
+  description:
+    'How long a handler may hold an event without acking or nacking before the reclaim loop nacks it on its behalf. The event is republished with an incremented `deliveryAttempt`, so `maxDeliveryAttempts` still applies. Set this to recover hung handlers in single-consumer groups. `0` disables it.',
+  isOptional: true,
+  defaultValue: '0',
+},
+{
+  name: 'logger',
+  type: '{ debug?: Function; warn?: Function }',
+  description: 'Optional diagnostic logger.',
+  isOptional: true,
+},
+]}
+/>
+
+## 配送行為 {/* #delivery-behavior */}
+
+`ValkeyStreamsPubSub`支援拉式交付，但不支援數位重播偏移量。分組訂閱者透過共享消費者群組競爭事件。沒有群組的訂閱者透過私人消費者群組接收扇出交付。
+
+使用`startFrom: "latest"` to skip retained entries when a group is first created. The default, `"earliest"`, reads retained entries first.
+
+當訂戶呼叫時`nack`, the event is republished with an incremented `deliveryAttempt` and the original is acknowledged. Once an event reaches `maxDeliveryAttempts`, it's dropped instead of redelivered. Separately, each subscription periodically reclaims events that an earlier consumer in the group read but never acknowledged, controlled by `reclaimIntervalMs` and `reclaimIdleMs`.
+
+訂閱永遠不會回收自己的處理程序仍在處理的事件，因此不會為相同事件呼叫兩次慢速處理程序。如果處理程序掛起，則該群組中的另一個使用者會在該事件閒置一段時間後回收該事件`reclaimIdleMs`. In a single-consumer group there's no sibling to do that, so set `inFlightTimeoutMs` to have the subscription nack the event itself after that long.
+
+## 伺服器配置 {/* #server-configuration */}
+
+放`maxmemory-policy` to `noeviction`. Consumer groups, unacknowledged entries, and lease keys are live state, and any evicting policy deletes them when the server reaches `maxmemory`, dropping events and leases. When `maxmemory` is set and the policy isn't `noeviction`, `ValkeyStreamsPubSub` logs a warning once after it first connects. To reclaim streams created without a TTL, follow the [Redis Streams runbook](/reference/pubsub/redis-streams#reclaim-streams-created-without-a-ttl) with `valkey-cli`.
+
+## 清理和關閉 {/* #cleanup-and-shutdown */}
+
+`clearTopic(topic)`刪除主題流及其消費者群組。`flush()` waits for in-flight publishes, and `close()` stops subscriptions and closes GLIDE connections.
+
+```typescript
+await pubsub.clearTopic('workflow.events.run-123')
+await pubsub.flush()
+await pubsub.close()
+```

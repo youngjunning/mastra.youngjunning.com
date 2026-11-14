@@ -1,21 +1,21 @@
 ---
-title: "参考：UnixSocketPubSub | PubSub"
-description: UnixSocketPubSub 的 API 参考；这是用于单一主机上跨进程投递的 Unix socket pub/sub 实现。
+title: "Reference: UnixSocketPubSub | PubSub"
+description: "UnixSocketPubSub is a PubSub implementation that delivers events across processes on a single host using a Unix domain socket."
 packages:
   - "@mastra/core"
 ---
 
 # UnixSocketPubSub
 
-`UnixSocketPubSub` 是一种 [`PubSub`](/reference/pubsub/base) 实现，使用 Unix domain socket 在单个主机上的进程间投递事件。它选举一个进程作为 broker，其他进程作为 client 连接。如果 broker 退出，剩余 client 会自动选举新的 broker。
+`UnixSocketPubSub`是一个[`PubSub`](/reference/pubsub/base)使用 Unix 域套接字在单个主机上跨进程传递事件的实现。它选择一个进程作为Agent，其他进程作为客户端连接到它。如果经纪人退出，剩余的客户端会自动选择新的经纪人。
 
-当多个本地进程需要共享流时使用它，例如在 Mastra Code 终端界面中协调 thread stream。对于单进程投递，请使用 [`EventEmitterPubSub`](/reference/pubsub/event-emitter)。对于跨主机的分布式投递，请使用 [`RedisStreamsPubSub`](/reference/pubsub/redis-streams) 或 [`GoogleCloudPubSub`](/reference/pubsub/google-cloud-pubsub)。
+当多个本地进程需要共享流时使用它，例如跨 Mastra Code 终端接口协调线程流。对于单进程交付，请使用[`EventEmitterPubSub`](/reference/pubsub/event-emitter). For distributed delivery across hosts, use [`RedisStreamsPubSub`](/reference/pubsub/redis-streams) or [`GoogleCloudPubSub`](/reference/pubsub/google-cloud-pubsub).
 
-`UnixSocketPubSub` 是 push transport：事件无需读取循环即可到达，因此 Mastra 不会为其运行 pull Worker。
+`UnixSocketPubSub`是推送传输：事件到达时没有读取循环，因此 Mastra 不会为其运行拉取工作程序。
 
 ## 使用示例 {/* #usage-example */}
 
-传入所有参与进程共享的 socket 路径。
+传递每个参与进程共享的套接字路径。
 
 ```typescript title="src/mastra/index.ts"
 import { Mastra } from '@mastra/core'
@@ -30,57 +30,90 @@ export const mastra = new Mastra({
 
 <PropertiesTable
   content={[
-  {
-    name: 'socketPath',
-    type: 'string',
-    description: 'Unix domain socket 的路径。共享流的所有进程必须使用相同路径。',
-    isOptional: false,
-  },
-  {
-    name: 'options',
-    type: 'UnixSocketPubSubOptions',
-    description: '可选配置。',
-    isOptional: true,
-    properties: [
-      {
-        name: 'maxRemoteClientQueuedBytes',
-        type: 'number',
-        description: '缓冲慢速远程 client 的最大字节数，超过后将丢弃其 frame，从而防止一个卡住的订阅者阻塞其他订阅者。',
-        isOptional: true,
-        defaultValue: '67108864',
-      },
-    ],
-  },
+{
+  name: 'socketPath',
+  type: 'string',
+  description: 'Path to the Unix domain socket. All processes that share a stream must use the same path.',
+  isOptional: false,
+},
+{
+  name: 'options',
+  type: 'UnixSocketPubSubOptions',
+  description: 'Optional configuration.',
+  isOptional: true,
+  properties: [
+    {
+      name: 'maxRemoteClientQueuedBytes',
+      type: 'number',
+      description:
+        'Maximum bytes buffered for a slow remote client before its frames are dropped, which keeps one stuck subscriber from blocking others.',
+      isOptional: true,
+      defaultValue: '67108864',
+    },
+    {
+      name: 'maxInboundFrameBytes',
+      type: 'number',
+      description:
+        'Maximum size in bytes of a single incoming frame. Must be a positive finite number. A connection that sends a larger frame, or an unterminated partial frame beyond this size, is disconnected so one peer cannot exhaust process memory.',
+      isOptional: true,
+      defaultValue: '67108864',
+    },
+    {
+      name: 'brokerPathCheckIntervalMs',
+      type: 'number',
+      description:
+        'How often in milliseconds the broker checks that the socket path still points at its own socket. Must be a positive finite number. If the file was deleted or replaced, the broker steps down and rejoins as a client, so it never keeps serving clients that new processes can no longer reach.',
+      isOptional: true,
+      defaultValue: '2000',
+    },
+  ],
+},
 ]}
 />
 
-## 属性 {/* #properties */}
+## 特性 {/* #properties */}
 
 <PropertiesTable
   content={[
-  { name: 'socketPath', type: 'string', description: '传入构造函数的 socket 路径。' },
-  { name: 'supportedModes', type: 'ReadonlyArray<"pull" | "push">', description: '返回 `["push"]`。' },
-  { name: 'isBroker', type: 'boolean', description: '此实例当前是否充当 broker。' },
-  {
-    name: 'remoteClientCount',
-    type: 'number',
-    description: '连接到此 broker 的远程 client 数量。当该实例不是 broker 时始终为 0。',
-  },
+{
+  name: 'socketPath',
+  type: 'string',
+  description: 'The socket path passed to the constructor.',
+},
+{
+  name: 'supportedModes',
+  type: 'ReadonlyArray<"pull" | "push">',
+  description: 'Returns `["push"]`.',
+},
+{
+  name: 'isBroker',
+  type: 'boolean',
+  description: 'Whether this instance currently acts as the broker.',
+},
+{
+  name: 'remoteClientCount',
+  type: 'number',
+  description: 'Number of remote clients connected to this broker. Always 0 when this instance is not the broker.',
+},
 ]}
 />
 
 ## 方法 {/* #methods */}
 
-`UnixSocketPubSub` 实现 [`PubSub`](/reference/pubsub/base) contract。以下方法是此实现特有的。
+`UnixSocketPubSub`实施[`PubSub`](/reference/pubsub/base) contract. The method below is specific to this implementation.
 
 ### `close()` {/* #close */}
 
-关闭 socket 连接；当此实例是 broker 时，释放 broker 角色。在优雅关闭期间调用此方法。
+关闭套接字连接，并且当该实例是Agent时，释放Agent角色。在正常关闭期间调用此方法。`close()` waits up to one second for lease releases that started before it. A release still blocked on another process's lock after that rejects with `UnixSocketPubSub is closed`. Lease operations started after `close()` throw.
 
 ```typescript
 await pubsub.close()
 ```
 
-## Broker 选举 {/* #broker-election */}
+## 经纪商选举 {/* #broker-election */}
 
-第一个绑定 socket 的进程成为 broker，并在所有已连接 client 之间路由事件。其他进程作为 client 连接。当 broker 退出时，独占锁文件会串行化下一次选举。恰好一个 client 成为新 broker，其余 client 重新订阅它。这避免了两个进程同时作为 broker 的 split-brain 状态。
+Agent是第一个将其套接字链接到共享路径的进程。它在所有连接的客户端之间路由事件，并且其他进程作为客户端连接到它。每个候选者都以私有名称绑定一个套接字，并将其硬链接到共享路径。如果套接字已经存在，则链接会失败，从而防止候选者意外替换活动Agent。
+
+当Agent完全退出时，它会删除共享路径。然后客户端重新连接，第一个将其套接字链接到位的客户端将成为新的Agent。其余客户重新订阅它。
+
+被拒绝的连接本身不会触发接管。客户端首先进行退避重试。仅当套接字不断拒绝连接时，客户端才会获取独占锁定文件并替换它。仅当共享路径仍指向其自己的套接字时，Agent才会删除该共享路径。如果Agent发现其路径被删除或替换，它将退出并作为客户端重新加入。因此，最终位于不同套接字上的进程会再次汇聚到一个Agent上，而不是保持分裂状态。

@@ -1,0 +1,225 @@
+---
+title: "GraphRAG | RAG"
+description: "Graph-based retrieval enhances traditional vector search by following relationships between chunks of information."
+packages:
+  - "@mastra/core"
+  - "@mastra/rag"
+---
+
+# 图RAG
+
+基于图的检索通过跟踪信息块之间的关系来增强传统的矢量搜索。当信息分布在多个文档中或文档相互引用时，此方法非常有用。
+
+## 何时使用 GraphRAG {/* #when-to-use-graphrag */}
+
+GraphRAG 在以下情况下特别有效：
+
+* 信息分布在多个文档中
+* 文档相互引用
+* 你需要遍历关系才能找到完整的答案
+* 理解概念之间的联系很重要
+* 简单的向量相似性错过了重要的上下文关系
+
+对于无需关系遍历的直接语义搜索，请使用[standard retrieval methods](/reference/rag/retrieval).
+
+## GraphRAG 的工作原理 {/* #how-graphrag-works */}
+
+GraphRAG 将向量相似度与知识图遍历结合起来：
+
+1. 初始向量搜索根据语义相似性检索相关块
+2. 当检索找到块时，该Tool会根据该请求的块构建知识图。该图不会在请求之间重复使用
+3. 遍历该图以查找关联信息
+4. 结果包括直接相关的块和相关的内容
+
+如果检索没有找到块，该Tool将返回空上下文和源，而不构建图表。
+
+此过程有助于显示语义上可能与查询不相似但通过连接在上下文中相关的信息。
+
+## 创建图形查询Tool {/* #creating-a-graph-query-tool */}
+
+图查询Tool为Agent提供了执行基于图的检索的能力：
+
+```ts
+import { createGraphRAGTool } from '@mastra/rag'
+import { ModelRouterEmbeddingModel } from '@mastra/core/llm'
+
+const graphQueryTool = createGraphRAGTool({
+  vectorStoreName: 'pgVector',
+  indexName: 'embeddings',
+  model: new ModelRouterEmbeddingModel('openai/text-embedding-3-small'),
+  graphOptions: {
+    threshold: 0.7,
+  },
+})
+```
+
+### 配置选项 {/* #configuration-options */}
+
+这`graphOptions` parameter controls how the knowledge graph is built and traversed:
+
+* `threshold`：用于确定哪些块相关的相似度阈值（0-1）。较高的值会创建具有更强连接的稀疏图形。较低的值会创建具有更多潜在关系的密集图形。
+* `dimension`：向量嵌入维度。必须匹配嵌入模型的输出维度（例如，OpenAI 的 text-embedding-3-small 为 1536）。
+
+```ts
+const graphQueryTool = createGraphRAGTool({
+  vectorStoreName: 'pgVector',
+  indexName: 'embeddings',
+  model: new ModelRouterEmbeddingModel('openai/text-embedding-3-small'),
+  graphOptions: {
+    dimension: 1536,
+    threshold: 0.7,
+  },
+})
+```
+
+## 将 GraphRAG 与Agent一起使用 {/* #using-graphrag-with-agents */}
+
+将图形查询Tool与Agent集成以实现基于图形的检索：
+
+```ts
+import { Agent } from '@mastra/core/agent'
+
+const ragAgent = new Agent({
+  id: 'rag-agent',
+  name: 'GraphRAG Agent',
+  instructions: `You are a helpful assistant that answers questions based on the provided context.
+When answering questions, use the graph query tool to find relevant information and relationships.
+Base your answers on the context provided by the tool, and clearly state if the context doesn't contain enough information.`,
+  model: '__GATEWAY_OPENAI_MODEL__',
+  tools: {
+    graphQueryTool,
+  },
+})
+```
+
+## 文档处理和存储 {/* #document-processing-and-storage */}
+
+在使用基于图的检索之前，将文档处理成块并存储它们的嵌入：
+
+```ts
+import { MDocument } from '@mastra/rag'
+import { embedMany } from 'ai'
+import { ModelRouterEmbeddingModel } from '@mastra/core/llm'
+
+// Create and chunk document
+const doc = MDocument.fromText('Your document content here...')
+
+const chunks = await doc.chunk({
+  strategy: 'recursive',
+  size: 512,
+  overlap: 50,
+  separator: '\n',
+})
+
+// Generate embeddings
+const { embeddings } = await embedMany({
+  model: new ModelRouterEmbeddingModel('openai/text-embedding-3-small'),
+  values: chunks.map(chunk => chunk.text),
+})
+
+// Store in vector database
+const vectorStore = mastra.getVector('pgVector')
+await vectorStore.createIndex({
+  indexName: 'embeddings',
+  dimension: 1536,
+})
+await vectorStore.upsert({
+  indexName: 'embeddings',
+  vectors: embeddings,
+  metadata: chunks?.map(chunk => ({ text: chunk.text })),
+})
+```
+
+## 使用 GraphRAG 查询 {/* #querying-with-graphrag */}
+
+配置完成后，Agent可以执行基于图形的查询：
+
+```ts
+const query = 'What are the effects of infrastructure changes on local businesses?'
+const response = await ragAgent.generate(query)
+console.log(response.text)
+```
+
+Agent使用图形查询Tool来：
+
+1. 将查询转换为嵌入
+2. 在向量存储中查找语义相似的块
+3. 从相关块构建知识图
+4. 遍历图表以查找关联信息
+5. 返回用于生成响应的完整上下文
+
+## 选择正确的阈值 {/* #choosing-the-right-threshold */}
+
+阈值参数显着影响检索质量：
+
+* **高阈值（0.8-0.9）**：严格的联系和较少的关系，加上更精确但可能不完整的结果
+* **中等阈值（0.6-0.8）**：平衡的方法，适合大多数用例
+* **低阈值（0.4-0.6）**：更多的联系和更广泛的背景，加上包含不太相关的信息的风险
+
+从 0.7 开始，然后根据您的具体用例进行调整：
+
+```ts
+// Strict connections for precise answers
+const strictGraphTool = createGraphRAGTool({
+  vectorStoreName: 'pgVector',
+  indexName: 'embeddings',
+  model: new ModelRouterEmbeddingModel('openai/text-embedding-3-small'),
+  graphOptions: {
+    threshold: 0.85,
+  },
+})
+
+// Broader connections for exploratory queries
+const broadGraphTool = createGraphRAGTool({
+  vectorStoreName: 'pgVector',
+  indexName: 'embeddings',
+  model: new ModelRouterEmbeddingModel('openai/text-embedding-3-small'),
+  graphOptions: {
+    threshold: 0.5,
+  },
+})
+```
+
+## 与其他检索方法结合 {/* #combining-with-other-retrieval-methods */}
+
+GraphRAG 可以与其他检索方法一起使用：
+
+```ts
+import { createVectorQueryTool } from '@mastra/rag'
+
+const vectorQueryTool = createVectorQueryTool({
+  vectorStoreName: 'pgVector',
+  indexName: 'embeddings',
+  model: new ModelRouterEmbeddingModel('openai/text-embedding-3-small'),
+})
+
+const graphQueryTool = createGraphRAGTool({
+  vectorStoreName: 'pgVector',
+  indexName: 'embeddings',
+  model: new ModelRouterEmbeddingModel('openai/text-embedding-3-small'),
+  graphOptions: {
+    threshold: 0.7,
+  },
+})
+
+const agent = new Agent({
+  id: 'rag-agent',
+  name: 'RAG Agent',
+  instructions: `Use vector search for simple fact-finding queries.
+Use graph search when you need to understand relationships or find connected information.`,
+  model: '__GATEWAY_OPENAI_MODEL__',
+  tools: {
+    vectorQueryTool,
+    graphQueryTool,
+  },
+})
+```
+
+这使得Agent可以根据查询灵活地选择适当的检索方法。
+
+## 参考 {/* #reference */}
+
+详细API文档请参见：
+
+* [GraphRAG 类](/reference/rag/graph-rag)
+* [创建GraphRAGTool()](/reference/tools/graph-rag-tool)

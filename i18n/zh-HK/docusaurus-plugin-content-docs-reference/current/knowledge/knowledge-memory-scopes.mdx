@@ -1,0 +1,142 @@
+---
+title: 'Reference: knowledgeMemoryScopes() | Knowledge'
+description: 'Declarations for Memory thread and resource scopes and a tenant scope, for the Knowledge scopes option.'
+packages:
+  - '@mastra/core'
+---
+
+# 知識記憶體範圍()
+
+`knowledgeMemoryScopes()`回傳範圍聲明`resource:`和`thread:`每個記憶體運行所持有的範圍，以及租戶範圍。將其傳播到知識中`scopes`選項，以便具有記憶力的Agent可以使用知識。看[範圍聲明](/reference/knowledge/scope-declarations)了解聲明的工作原理。
+
+：：：阿爾法
+
+知識處於阿爾法階段。其 API 可能會在不同版本之間變更。
+
+:::
+
+## 使用範例 {/* #usage-example */}
+
+```typescript title="src/mastra/knowledge.ts"
+import { Knowledge, knowledgeMemoryScopes } from '@mastra/core/knowledge'
+
+export const knowledge = new Knowledge({
+  tools: true,
+  scopes: {
+    ...knowledgeMemoryScopes(),
+    'team:$orgId:$teamId': { access: [{ principal: 'self', role: 'editor' }] },
+  },
+})
+```
+
+## 參數 {/* #parameters */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'org',
+  type: 'string | false',
+  description:
+    'The tenant scope pattern. Rename it, for example `workspace:$workspaceId`, or pass `false` to leave the tenant out. With `false`, `resource:` has no `belongsTo`.',
+  isOptional: true,
+  defaultValue: "'org:$orgId'",
+},
+{
+  name: 'orgRole',
+  type: "'editor' | 'contributor'",
+  description:
+    "The role a run holding the tenant scope gets on it. `contributor` makes the tenant append-only: runs add pages and notes but can't edit them.",
+  isOptional: true,
+  defaultValue: "'editor'",
+},
+]}
+/>
+
+## 退貨 {/* #returns */}
+
+`KnowledgeScopeDeclarations`包含三個條目，或兩個條目`org` is `false`:
+
+|關鍵|存取 |`belongsTo` | `pinnedContextPriority` |
+| - | - | - | - |
+| `thread:$threadId` | `self` `owner` | `resource:$resourceId` | `2` |
+| `resource:$resourceId` | `self` `owner` | `org:$orgId` | `1` |
+| `org:$orgId` | `self` `editor`|無 |`0` |
+
+租戶行使用`org` and `orgRole` options. Stored pins aimed at a scope with a higher `pinnedContextPriority` come first. A run gets its thread pins, then its resource pins, then tenant pins.
+
+```typescript oxfmt:false
+knowledgeMemoryScopes({ org: 'workspace:$workspaceId', orgRole: 'contributor' })
+// {
+//   'thread:$threadId': { access: [{ principal: 'self', role: 'owner' }], belongsTo: 'resource:$resourceId', pinnedContextPriority: 2 },
+//   'resource:$resourceId': { access: [{ principal: 'self', role: 'owner' }], belongsTo: 'workspace:$workspaceId', pinnedContextPriority: 1 },
+//   'workspace:$workspaceId': { access: [{ principal: 'self', role: 'contributor' }], pinnedContextPriority: 0 },
+// }
+```
+
+## `knowledgeScopeAddress()` {/* #knowledgescopeaddress */}
+
+```typescript oxfmt:false
+knowledgeScopeAddress(pattern: string, params: Record<string, string>): string
+```
+
+從模式和原始參數值建立規範範圍位址。在Agent范围、知识 API 的主机代码中使用它，`pinnedContext` entries and page references.
+
+在每一個價值觀裡面，`%`, `/`, `#` and `:` are encoded as `%25`, `%2F`, `%23` and `%3A`. Each value fills exactly one segment. It throws when a parameter is missing or empty.
+
+```typescript
+import { knowledgeScopeAddress } from '@mastra/core/knowledge'
+
+knowledgeScopeAddress('resource:$resourceId', { resourceId: 'acme/dana' })
+// 'resource:acme%2Fdana'
+
+knowledgeScopeAddress('team:$orgId:$teamId', { orgId: 'a:b', teamId: 'c:d' })
+// 'team:a%3Ab:c%3Ad'
+```
+
+## `encodeKnowledgeScopeId()` {/* #encodeknowledgescopeid */}
+
+```typescript oxfmt:false
+encodeKnowledgeScopeId(id: string): string
+```
+
+為範圍位址的一段編碼一個 ID，例如租用戶或使用者 ID。它應用與以下相同的編碼`knowledgeScopeAddress()`. Use it when you build an address with a template string:
+
+```typescript
+import { encodeKnowledgeScopeId } from '@mastra/core/knowledge'
+
+const scope = `org:${encodeKnowledgeScopeId('auth0|a:b')}`
+// 'org:auth0|a%3Ab'
+```
+
+## `decodeKnowledgeScopeId()` {/* #decodeknowledgescopeid */}
+
+```typescript oxfmt:false
+decodeKnowledgeScopeId(segment: string): string | null
+```
+
+傳回範圍位址的一個段中的 ID。它返回`null` when the segment isn't canonically encoded, for example when it holds a raw `:` or a lowercase escape such as `%3a`.
+
+```typescript
+import { decodeKnowledgeScopeId } from '@mastra/core/knowledge'
+
+decodeKnowledgeScopeId('slack%3AU123') // 'slack:U123'
+decodeKnowledgeScopeId('a:b') // null
+```
+
+## Agent範圍 {/* #agent-scopes */}
+
+Agent範圍是規範位址。對包含以下內容的任何 ID 進行編碼`:`, `/`, `#` or `%`, with `encodeKnowledgeScopeId()` or `knowledgeScopeAddress()`. A raw ID, such as `org:a:b` for org `a:b`, fails at run start:
+
+```text
+Knowledge run scope "org:a:b" does not match a declared scope type. Declare it in Knowledge `scopes` (for Memory's resource:/thread: scopes, spread `...knowledgeMemoryScopes()`), and encode ids containing ":", "/", "#" or "%" with encodeKnowledgeScopeId.
+```
+
+`resource:`和`thread:` agent scopes are the exception. They set the run's Memory resource and thread, so they take Memory's raw IDs, and Knowledge encodes them. A run with Memory resource `slack:U123` holds `resource:slack%3AU123`. See [set a run's scopes](/docs/knowledge/scopes-and-access#set-a-runs-scopes).
+
+早期 alpha 版本使用原始儲存的範圍`:` in their last segment aren't moved to the encoded address. See [Patterns and params](/reference/knowledge/scope-declarations#patterns-and-params).
+
+## 有關的 {/* #related */}
+
+* [知識課](/reference/knowledge/knowledge-class)
+* [範圍聲明](/reference/knowledge/scope-declarations)
+* [固定上下文](/docs/knowledge/pinned-context)

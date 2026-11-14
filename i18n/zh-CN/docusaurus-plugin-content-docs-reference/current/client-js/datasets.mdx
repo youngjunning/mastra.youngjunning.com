@@ -1,0 +1,412 @@
+---
+title: "Reference: Datasets API | Client SDK"
+description: "The Datasets API exposes Mastra's dataset and experiment routes from MastraClient."
+packages:
+  - "@mastra/client-js"
+---
+
+# 数据集API
+
+数据集 API 公开了 Mastra 的数据集和实验路线`MastraClient`。它包括调用者驱动的实验方法和实验删除方法。调用者驱动的方法让您拥有的编排器（例如临时Workflow程）驱动实验循环，而 Mastra 充当记录系统。创建实验，然后让 Mastra 在服务器端执行每个项目`runExperimentItem`或摄取您自己计算的结果`submitExperimentResult`，并在运行完成后调用 Finalize。
+
+项目运行、结果提交和最终确定可以安全地重试。仅当请求包含调用者提供的内容时，才能安全地重试创建`id`; without one, each retry creates a new experiment.
+
+* `createDatasetExperiment`在调用者提供的上是幂等的`id`
+* `runExperimentItem`和`submitExperimentResult` upsert on `(experimentId, itemId, attempt)`
+* `finalizeExperiment`如果实验已完成，则返回存储的记录
+
+## 使用示例 {/* #usage-example */}
+
+```typescript
+import { MastraClient } from '@mastra/client-js'
+
+const client = new MastraClient({
+  baseUrl: 'http://localhost:4111',
+})
+
+// 1. Create the experiment. Pass your orchestrator's run ID so a
+//    retried workflow converges on the same experiment.
+const { experimentId, totalItems, datasetVersion } = await client.createDatasetExperiment({
+  datasetId: 'clinical-triage-evals',
+  id: 'temporal-wf-run-42',
+  targetType: 'agent',
+  targetId: 'triage-agent',
+  scorerIds: ['clinical-judge'],
+})
+
+// 2. Run one item per activity. Mastra executes the agent, runs the
+//    scorers, and upserts the result. Retried activities converge on
+//    a single row per (experimentId, itemId, attempt).
+const { result, scores } = await client.runExperimentItem({
+  datasetId: 'clinical-triage-evals',
+  experimentId,
+  itemId: 'item-1',
+})
+
+// 3. Finalize. The server computes succeeded/failed/skipped counts
+//    from the persisted rows.
+const experiment = await client.finalizeExperiment({
+  datasetId: 'clinical-triage-evals',
+  experimentId,
+})
+```
+
+对于纯粹摄取，创建实验时无需`targetType`/`targetId` and replace step 2 with `submitExperimentResult`.
+
+## 创建数据集实验() {/* #createdatasetexperiment */}
+
+创建实验而不开始运行。不会生成任何运行程序，并且数据集版本在创建时固定。当 Mastra 应该通过以下方式执行项目时包括一个目标`runExperimentItem`. Omit the target for pure ingestion via `submitExperimentResult`.
+
+<PropertiesTable
+  content={[
+{
+  name: 'datasetId',
+  type: 'string',
+  description: 'ID of the dataset the experiment runs against.',
+},
+{
+  name: 'id',
+  type: 'string',
+  isOptional: true,
+  description:
+    'Caller-supplied experiment ID (for example a workflow run ID). Makes creation idempotent on retry. Conflicting reuse of an ID returns a 409.',
+},
+{
+  name: 'targetType',
+  type: "'agent' | 'workflow' | 'scorer'",
+  isOptional: true,
+  description: 'Type of target that runExperimentItem executes. Provide together with targetId, or omit both.',
+},
+{
+  name: 'targetId',
+  type: 'string',
+  isOptional: true,
+  description: 'ID of the registered target. Provide together with targetType.',
+},
+{
+  name: 'scorerIds',
+  type: 'string[]',
+  isOptional: true,
+  description: 'Run-level scorer IDs resolved server-side by runExperimentItem. Requires a target.',
+},
+{
+  name: 'name',
+  type: 'string',
+  isOptional: true,
+  description: 'Human-readable experiment name.',
+},
+{
+  name: 'description',
+  type: 'string',
+  isOptional: true,
+  description: 'Experiment description.',
+},
+{
+  name: 'metadata',
+  type: 'Record<string, unknown>',
+  isOptional: true,
+  description: 'Arbitrary metadata stored on the experiment.',
+},
+{
+  name: 'version',
+  type: 'number',
+  isOptional: true,
+  description: 'Dataset version to pin. Defaults to the current dataset version.',
+},
+{
+  name: 'provenance',
+  type: 'object',
+  isOptional: true,
+  description: 'Where the experiment came from (`source`, `sourceId`, `sourceVersion`, `metadata`).',
+},
+{
+  name: 'grouping',
+  type: 'object',
+  isOptional: true,
+  description:
+    'Grouping fields (`experimentSetId`, `comparisonId`, `variantId`, `trialIndex`) for organizing related runs.',
+},
+]}
+/>
+
+退货`Promise<{ experimentId, status, totalItems, datasetVersion }>`.
+
+## 运行实验项() {/* #runexperimentitem */}
+
+在服务器端执行一个实验项目：Mastra 针对该项目运行实验目标，运行解析的记分器，并更新插入由`(experimentId, itemId, attempt)`. Requires an experiment created with a target. Scorers resolve with the same precedence as native runs: experiment `scorerIds` win over item `scorerIds`, which win over dataset `scorerIds`.
+
+<PropertiesTable
+  content={[
+{
+  name: 'datasetId',
+  type: 'string',
+  description: 'ID of the dataset the experiment runs against.',
+},
+{
+  name: 'experimentId',
+  type: 'string',
+  description: 'ID of an experiment created with a target.',
+},
+{
+  name: 'itemId',
+  type: 'string',
+  description: 'Dataset item to execute. Must exist at the pinned dataset version.',
+},
+{
+  name: 'attempt',
+  type: 'number',
+  isOptional: true,
+  description:
+    'Zero-based repetition index for repeated trials. Defaults to 0. Retries of the same attempt converge on one row.',
+},
+{
+  name: 'requestContext',
+  type: 'Record<string, unknown>',
+  isOptional: true,
+  description: "Request context merged with the item's own request context (item values win).",
+},
+]}
+/>
+
+退货`Promise<{ result, scores }>` with the persisted result row and the scores produced for the item.
+
+在无目标实验中调用它会返回`400`. Calling it after finalization returns a `409`.
+
+## 提交实验结果() {/* #submitexperimentresult */}
+
+提交（或重新提交）无目标实验的一项外部计算项目结果。提交相同的`(experimentId, itemId, attempt)` key again updates the existing row instead of creating a duplicate. Use a different `attempt` value to record deliberate repeated trials as separate rows.
+
+<PropertiesTable
+  content={[
+{
+  name: 'datasetId',
+  type: 'string',
+  description: 'ID of the dataset the experiment runs against.',
+},
+{
+  name: 'experimentId',
+  type: 'string',
+  description: 'ID of the target-less experiment.',
+},
+{
+  name: 'itemId',
+  type: 'string',
+  description: 'Dataset item this result belongs to. Must exist at the pinned dataset version.',
+},
+{
+  name: 'attempt',
+  type: 'number',
+  isOptional: true,
+  description:
+    'Zero-based repetition index for repeated trials. Defaults to 0. Retries of the same attempt converge on one row.',
+},
+{
+  name: 'input',
+  type: 'unknown',
+  isOptional: true,
+  description: 'Input replayed by the external runner. Defaults to the dataset item input.',
+},
+{
+  name: 'output',
+  type: 'unknown',
+  isOptional: true,
+  description: 'Output produced by the external runner.',
+},
+{
+  name: 'groundTruth',
+  type: 'unknown',
+  isOptional: true,
+  description: 'Ground truth. Defaults to the dataset item groundTruth.',
+},
+{
+  name: 'error',
+  type: '{ message: string; stack?: string; code?: string } | null',
+  isOptional: true,
+  description: 'Failure info when the item run failed. Counted as failed at finalization.',
+},
+{
+  name: 'startedAt',
+  type: 'Date',
+  isOptional: true,
+  description: 'When the item run started.',
+},
+{
+  name: 'completedAt',
+  type: 'Date',
+  isOptional: true,
+  description: 'When the item run completed.',
+},
+{
+  name: 'traceId',
+  type: 'string',
+  isOptional: true,
+  description: 'Trace ID linking the result to observability data.',
+},
+{
+  name: 'scores',
+  type: 'Array<{ scorerId: string; scorerName?: string; score: number; reason?: string; metadata?: Record<string, unknown> }>',
+  isOptional: true,
+  description:
+    'Externally computed scores. Persisted keyed by `runId = experimentId`, so they appear in comparisons like scorer-produced scores.',
+},
+]}
+/>
+
+退货`Promise<DatasetExperimentResult>`, the persisted result row.
+
+提交有目标的实验会返回`400`. Submitting after finalization returns a `409`.
+
+## 完成实验（） {/* #finalizeexperiment */}
+
+标记调用者驱动的实验已完成。服务器通过计算持久结果行中的每个项目计数来为调用者处理簿记：`succeededCount` (at least one attempt without an error), `failedCount` (every attempt errored), and `skippedCount` (never submitted). Idempotent: finalizing an already-completed experiment returns the stored record.
+
+<PropertiesTable
+  content={[
+{
+  name: 'datasetId',
+  type: 'string',
+  description: 'ID of the dataset the experiment runs against.',
+},
+{
+  name: 'experimentId',
+  type: 'string',
+  description: 'ID of the experiment to finalize.',
+},
+]}
+/>
+
+退货`Promise<DatasetExperiment>`, the updated experiment record.
+
+## 删除数据集实验() {/* #deletedatasetexperiment */}
+
+通过其数据集删除实验。服务器删除实验的Observability跟踪，包括其跨度和跟踪链接信号，然后删除实验及其结果记录。不受支持的存储会留下痕迹，并且服务器会记录警告。如果由于任何其他原因删除痕迹失败，则承诺将被拒绝，并且 Mastra 会保留实验及其结果记录，尽管某些痕迹可能已被删除。
+
+```typescript
+await client.deleteDatasetExperiment('dataset-id', 'experiment-id', {
+  organizationId: 'organization-id',
+  projectId: 'project-id',
+})
+```
+
+<PropertiesTable
+  content={[
+{
+  name: 'datasetId',
+  type: 'string',
+  description: 'ID of the dataset that owns the experiment.',
+},
+{
+  name: 'experimentId',
+  type: 'string',
+  description: 'ID of the experiment to delete.',
+},
+{
+  name: 'tenancy.organizationId',
+  type: 'string',
+  isOptional: true,
+  description: 'Organization ID used to scope the dataset lookup.',
+},
+{
+  name: 'tenancy.projectId',
+  type: 'string',
+  isOptional: true,
+  description: 'Project ID used to scope the dataset lookup.',
+},
+]}
+/>
+
+退货`Promise<{ success: boolean }>`. A missing experiment, an experiment associated with another dataset, or a dataset outside the supplied tenancy returns a `404` response.
+
+## 获取实验() {/* #getexperiment */}
+
+通过 ID 获取实验，无需数据集引用。响应包括实验的`datasetId`, which is `null` for experiments orphaned by dataset deletion.
+
+```typescript
+const experiment = await client.getExperiment('experiment-id', {
+  organizationId: 'organization-id',
+  projectId: 'project-id',
+})
+```
+
+<PropertiesTable
+  content={[
+{
+  name: 'experimentId',
+  type: 'string',
+  description: 'ID of the experiment to get.',
+},
+{
+  name: 'options.organizationId',
+  type: 'string',
+  isOptional: true,
+  description: 'Organization ID used to scope the lookup.',
+},
+{
+  name: 'options.projectId',
+  type: 'string',
+  isOptional: true,
+  description: 'Project ID used to scope the lookup.',
+},
+]}
+/>
+
+返回实验。缺失的实验或在提供的租赁范围之外的实验将返回`404` response.
+
+## 删除实验() {/* #deleteexperiment */}
+
+按 ID 删除实验，无需数据集引用。将此方法用于因数据集删除而孤立的实验。服务器删除实验的Observability痕迹，然后删除实验及其结果记录。不受支持的存储会留下痕迹，并且服务器会记录警告。如果由于任何其他原因删除痕迹失败，则承诺将被拒绝，并且 Mastra 会保留实验及其结果记录，尽管某些痕迹可能已被删除。
+
+```typescript
+await client.deleteExperiment('experiment-id', {
+  organizationId: 'organization-id',
+  projectId: 'project-id',
+})
+```
+
+<PropertiesTable
+  content={[
+{
+  name: 'experimentId',
+  type: 'string',
+  description: 'ID of the experiment to delete.',
+},
+{
+  name: 'options.organizationId',
+  type: 'string',
+  isOptional: true,
+  description: 'Organization ID used to scope the deletion.',
+},
+{
+  name: 'options.projectId',
+  type: 'string',
+  isOptional: true,
+  description: 'Project ID used to scope the deletion.',
+},
+]}
+/>
+
+退货`Promise<{ success: boolean }>`. An unscoped request returns a `404` response when the experiment doesn't exist. A tenancy-scoped request that doesn't match the experiment returns success without deleting it.
+
+## 清除数据集项() {/* #purgedatasetitem */}
+
+从现有数据集历史记录和链接的实验结果中擦除项目的内容，包括结果标签和注释，同时保留版本历史记录、实验计数器和审核状态。稍后提交的项目结果将与经过编辑的内容一起存储，并且稍后的数据集项目更新将被拒绝。
+
+```typescript
+await client.purgeDatasetItem('dataset-id', 'item-id', {
+  organizationId: 'organization-id',
+  projectId: 'project-id',
+})
+```
+
+可选的第三个参数将清除范围限定为租户组织和项目。服务器返回`404` when the dataset doesn't belong to that scope or the item has no history in the dataset.
+
+退货`Promise<{ success: boolean }>`. The operation is idempotent and can't be undone. Purge serializes or conflicts with concurrent dataset item writers without guaranteeing which operation completes first. If a mutating item update loses the race, storage re-reads the purge marker and rejects it with `DATASET_ITEM_PURGED`. Deletes remain idempotent, and any deletion tombstone created during the race stays redacted. MongoDB storage requires a replica set or sharded deployment with transaction support. See [`dataset.purgeItem()`](/reference/datasets/purgeItem) for the complete purge behavior.
+
+## 有关的 {/* #related */}
+
+* [运行实验](/docs/evals/experiments#caller-driven-experiments)
+* [数据集.createExperiment()](/reference/datasets/createExperiment)
+* [数据集.runExperimentItem()](/reference/datasets/runExperimentItem)
+* [数据集.submitExperimentResult()](/reference/datasets/submitExperimentResult)
+* [数据集.finalizeExperiment()](/reference/datasets/finalizeExperiment)
+* [服务器路由](/reference/server/routes)

@@ -1,24 +1,24 @@
 ---
-title: "日誌 | 可觀測性"
-description: 了解如何在 Mastra 中使用日誌來監察執行、擷取應用程式行為，並提升 AI 應用程式的準確度。
+title: "Logging | Observability"
+description: "Configure structured Mastra logging with PinoLogger, trace correlation, observability storage, custom logger adapters, log levels, and query APIs."
 packages:
   - "@mastra/loggers"
   - "@mastra/observability"
 ---
 
-# 日誌
+# 記錄
 
-Mastra 的日誌系統會以結構化格式擷取函數執行、輸入資料和輸出回應。
+Mastra 的日誌系統以結構化格式擷取函數執行、輸入資料和輸出響應。
 
-部署至 Mastra 平台時，日誌會顯示在控制台中。在自行託管或自訂環境中，視乎已設定的傳輸方式，日誌可導向文件或外部服務。
+部署到 Mastra 平台時，日誌會顯示在儀表板中。在自架或自訂環境中，日誌可以根據配置的傳輸定向到檔案或外部服務。
 
 <Inject>
-  **給 AI Agent：** 執行 `npx mastra api log list '{"level":"error","page":0,"perPage":50}'`，直接檢查最近的錯誤日誌，而毋須開啟 Studio 或編寫臨時腳本。此命令需要正在運行且已設定可觀測性日誌的 Mastra 伺服器；可使用 `npx mastra dev` 啟動本機伺服器，或透過 `--url` 傳入可連線伺服器的基礎 URL。建立其他篩選條件前，請執行 `npx mastra api log list --schema`。使用 `npx skills add mastra-ai/skills --skill mastra` 安裝 Mastra 的 Skill，以取得完整的 API CLI 探索、目標指定、schema、驗證及錯誤處理指引。
+  **對於人工智慧Agent：**&#x8DD1;步`npx mastra api log list '{"level":"error","page":0,"perPage":50}'` to inspect recent error logs directly instead of opening Studio or writing a temporary script. The command requires a running Mastra server with observability logging configured; start the local server with `npx mastra dev`，或傳遞可存取伺服器的基本 URL`--url`。跑步`npx mastra api log list --schema`在建造不同的過濾器之前。安裝 Mastra 的技能`npx skills add mastra-ai/skills --skill mastra`取得完整的 API CLI 發現、定位、架構、驗證和錯誤處理指南。
 </Inject>
 
-## 使用 `PinoLogger` 設定日誌 {/* #configuring-logs-with-pinologger */}
+## 配置日誌`PinoLogger` {/* #configuring-logs-with-pinologger */}
 
-使用 CLI [初始化新的 Mastra 項目](/guides/getting-started/quickstart)時，預設會包含 `PinoLogger`。
+什麼時候[initializing a new Mastra project](/docs) using the CLI, `PinoLogger` is included by default.
 
 ```typescript title="src/mastra/index.ts"
 import { Mastra } from '@mastra/core/mastra'
@@ -32,17 +32,110 @@ export const mastra = new Mastra({
 })
 ```
 
-請參閱 [PinoLogger](/reference/logging/pino-logger)，了解所有可用的設定選項。
+訪問[PinoLogger](/reference/logging/pino-logger) for all available configuration options.
 
-## 將日誌寫入可觀測性儲存空間 {/* #logging-to-observability-storage */}
+## 記錄到可觀察性存儲 {/* #logging-to-observability-storage */}
 
-設定[可觀測性](/docs/observability/overview)後，所有 logger 呼叫都會自動轉送至你的可觀測性儲存空間。這代表來自應用程式及 Mastra 內部元件的每個 `debug`、`info`、`warn`、`error` 和 `trackException` 呼叫，都會與 Trace 一併儲存。
+什麼時候[observability](/docs/observability/overview) is configured, logger calls are automatically forwarded to your observability storage. Every `debug`, `info`, `warn`, `error`, and `trackException` call from your application and from Mastra's internal components is stored alongside your traces, subject to `logging.level`, which filters out anything below the configured minimum level.
 
-毋須修改任何程式碼。Mastra 會包裝已設定的 logger，讓它同時寫入原有 logger（控制台、文件或自訂傳輸方式）及可觀測性系統。
+無需更改程式碼。带适配器支持的记录仪（`PinoLogger` and `ConsoleLogger`) write each record to their own destinations and derive the exported log from that same record. Custom loggers without adapter support are wrapped so they write to both the original logger and the observability system simultaneously.
 
-### 設定可觀測性日誌級別 {/* #configuring-observability-log-level */}
+### 追蹤相關的日誌輸出 {/* #trace-correlated-log-output */}
 
-你可以獨立於控制台 logger，控制哪些日誌級別會送達可觀測性儲存空間。在可觀測性實例設定中加入 `logging` 選項：
+當追蹤操作（Agent程式運行、Workflow步驟或Tool呼叫）內發生日誌呼叫時，Mastra 會注入`trace_id` and `span_id` into the logger's native output. The fields use W3C trace context format and match the trace shown in Studio, so you can correlate a stdout log line with its trace directly.
+
+若要在標準輸出上取得機器可解析的 JSON，請配置`PinoLogger` with `prettyPrint: false`, pretty printing is enabled by default and produces human-readable text instead of JSON:
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core/mastra'
+import { PinoLogger } from '@mastra/loggers'
+
+export const mastra = new Mastra({
+  logger: new PinoLogger({ name: 'Mastra', level: 'info', prettyPrint: false }),
+})
+```
+
+記錄如下圖所示：
+
+```json
+{
+  "level": 30,
+  "time": 1755522000000,
+  "name": "Mastra",
+  "trace_id": "0af7651916cd43dd8448eb211c80319c",
+  "span_id": "b7ad6b7169203331",
+  "msg": "tool executed"
+}
+```
+
+在追蹤操作之外，欄位將被省略。`ConsoleLogger` appends the same fields as an object argument to its console output instead. With `PinoLogger`, the fields reach every destination: stdout, files, and custom transports. If you supply your own pino `mixin`, its fields are preserved, but `trace_id` and `span_id` win on conflicts.
+
+相關和導出可以獨立控制`loggerOptions` configuration:
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core/mastra'
+import { PinoLogger } from '@mastra/loggers'
+
+export const mastra = new Mastra({
+  logger: new PinoLogger({ name: 'Mastra', level: 'info' }),
+  loggerOptions: {
+    correlation: true, // inject trace_id/span_id into native log output (default: true)
+    export: false, // keep trace-correlated output without storing logs in observability (default: true)
+  },
+})
+```
+
+### 自訂記錄器 {/* #custom-loggers */}
+
+風俗`IMastraLogger` implementations keep working: Mastra uses a deprecated dual-write fallback that forwards log calls to observability without adding `trace_id` or `span_id` to the logger's native output. To get trace-correlated output, implement the `__attachObservability()` adapter hook from `@mastra/core/logger`:
+
+```typescript
+import { MastraLogger, buildLogRecordData } from '@mastra/core/logger'
+import type { LoggerAdapterContext } from '@mastra/core/logger'
+
+class MyLogger extends MastraLogger {
+  #adapterContext?: LoggerAdapterContext
+
+  __attachObservability(ctx: LoggerAdapterContext): void {
+    this.#adapterContext = ctx
+  }
+
+  #log(level: 'debug' | 'info' | 'warn' | 'error', message: string, args: unknown[]): void {
+    const ctx = this.#adapterContext
+    // Inject trace fields into your native record when correlation is enabled
+    const traceFields = ctx?.options.correlation ? ctx.resolveTraceFields() : undefined
+    console[level === 'debug' ? 'info' : level](
+      message,
+      ...args,
+      ...(traceFields ? [traceFields] : []),
+    )
+    // Export the same record to observability when export is enabled
+    if (ctx?.options.export) {
+      ctx.getLogSink()?.[level](message, buildLogRecordData(args))
+    }
+  }
+
+  debug(message: string, ...args: unknown[]): void {
+    this.#log('debug', message, args)
+  }
+
+  info(message: string, ...args: unknown[]): void {
+    this.#log('info', message, args)
+  }
+
+  warn(message: string, ...args: unknown[]): void {
+    this.#log('warn', message, args)
+  }
+
+  error(message: string, ...args: unknown[]): void {
+    this.#log('error', message, args)
+  }
+}
+```
+
+### 配置可觀察性日誌級別 {/* #configuring-observability-log-level */}
+
+您可以獨立於控制台記錄器控制哪些日誌等級到達可觀察性儲存。添加一個`logging` option to your observability instance configuration:
 
 ```typescript {12-15} title="src/mastra/index.ts"
 import { Mastra } from '@mastra/core/mastra'
@@ -66,16 +159,16 @@ export const mastra = new Mastra({
 })
 ```
 
-在此例中，控制台 logger 會輸出由 `debug` 開始的所有級別，但只有 `info` 或以上級別會寫入可觀測性儲存空間。這可保持儲存空間整潔，同時在開發期間保留詳盡的控制台輸出。
+在此範例中，控制台記錄器輸出從下列位置開始的所有級別`debug`, but only `info` and above are written to observability storage. This keeps your storage clean while still having verbose console output during development.
 
-| 選項 | 類型 | 預設值 | 說明 |
+|選項|類型 |預設 |描述 |
 | - | - | - | - |
-| `enabled` | `boolean` | `true` | 設為 `false` 可停用所有轉送至可觀測性儲存空間的日誌。 |
-| `level` | `LogLevel` | `'debug'` | 最低嚴重程度級別。低於此級別的日誌會被捨棄。 |
+|`enabled` | `boolean` | `true` | Set to `false` to disable all log forwarding to observability storage. |
+| `level` | `LogLevel` | `'warn'` | Minimum severity level. Logs below this level are discarded. |
 
 ### 查詢日誌 {/* #querying-logs */}
 
-寫入可觀測性儲存空間的日誌，可透過 Mastra client SDK 查詢：
+寫入可觀察性儲存的日誌可透過 Mastra 用戶端 SDK 進行查詢：
 
 ```typescript
 import { MastraClient } from '@mastra/client-js'
@@ -89,17 +182,17 @@ const logs = await client.listLogsVNext({
 })
 ```
 
-使用 DuckDB 或 ClickHouse 等持久儲存後端時，日誌會在重新啟動後保留，並可供歷史分析。
+當使用 DuckDB 或 ClickHouse 等持久性儲存後端時，日誌在重新啟動後仍可儲存並可用於歷史分析。
 
 ## 自訂日誌 {/* #customizing-logs */}
 
-Mastra 可透過 `mastra.getLogger()` 方法存取 logger 實例，Workflow 步驟和 Tool 均可使用。logger 支援標準嚴重程度級別：`debug`、`info`、`warn` 和 `error`。
+Mastra 透過以下方式提供對記錄器實例的訪問`mastra.getLogger()` method, available inside both workflow steps and tools. The logger supports standard severity levels: `debug`, `info`, `warn`, and `error`.
 
-### 從 Workflow 步驟記錄日誌 {/* #logging-from-workflow-steps */}
+### 從Workflow步驟記錄 {/* #logging-from-workflow-steps */}
 
-在 Workflow 步驟中，可透過 `execute` 函數內的 `mastra` 參數存取 logger。你可以記錄與該步驟執行相關的訊息。
+`mastra` parameter inside the `execute` function. You can log messages relevant to the step's execution.
 
-```typescript {6-7} title="src/mastra/workflows/test-workflow.ts" prettier:false
+```typescript {6-7} title="src/mastra/workflows/test-workflow.ts" oxfmt:false
 import { createWorkflow, createStep } from "@mastra/core/workflows";
 import { z } from "zod";
 
@@ -119,9 +212,9 @@ export const testWorkflow = createWorkflow({...})
   .commit();
 ```
 
-### 從 Tool 記錄日誌 {/* #logging-from-tools */}
+### 從Tool記錄 {/* #logging-from-tools */}
 
-同樣地，Tool 可透過 `mastra` 參數存取 logger 實例。使用此實例記錄執行期間 Tool 特有的活動。
+同樣，Tool可以透過以下方式存取記錄器實例`mastra` parameter. Use this to log tool-specific activity during execution.
 
 ```typescript {6-7} title="src/mastra/tools/test-tool.ts"
 import { createTool } from '@mastra/core/tools'
@@ -139,11 +232,11 @@ export const testTool = createTool({
 })
 ```
 
-### 使用額外資料記錄日誌 {/* #logging-with-additional-data */}
+### 使用附加數據記錄 {/* #logging-with-additional-data */}
 
-Logger 方法接受可選的第二個引數，用於加入額外資料。傳入結構化物件，讓日誌可在可觀測性儲存空間中篩選。
+記錄器方法接受附加資料的可選第二個參數。傳遞結構化物件以使日誌在可觀察性儲存中可過濾。
 
-```typescript {9} title="src/mastra/workflows/test-workflow.ts" prettier:false
+```typescript {9} title="src/mastra/workflows/test-workflow.ts" oxfmt:false
 import { createWorkflow, createStep } from "@mastra/core/workflows";
 import { z } from "zod";
 
@@ -151,7 +244,7 @@ const step1 = createStep({
   execute: async ({ mastra }) => {
     const testAgent = mastra.getAgent("testAgent");
     const logger = mastra.getLogger();
-    
+
     logger.info("workflow info log", { agent: testAgent });
 
     return {

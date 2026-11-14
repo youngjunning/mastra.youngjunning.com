@@ -1,6 +1,6 @@
 ---
-title: "参考：存储概览 | 存储"
-description: Mastra 存储系统的核心数据 schema 和表结构。
+title: "Reference: Storage"
+description: "Mastra storage is organized into domains. Each domain owns a set of tables or collections."
 packages:
   - "@mastra/core"
 ---
@@ -9,434 +9,454 @@ import { SchemaTable } from "@site/src/components/SchemaTable";
 import Tabs from "@theme/Tabs";
 import TabItem from "@theme/TabItem";
 
-# 存储概览
+# 贮存
 
-Mastra 存储按域组织。每个域拥有一组表或集合。根据所用的适配器和配置，你可以使用所有域，也可以只使用其中一部分。
+Mastra 存储被组织成域。每个域都拥有一组表或集合。根据您的适配器和配置，您可以使用所有域或仅使用其中的一个子集。
 
 ## 存储域 {/* #storage-domains */}
 
-`MastraCompositeStore` 可路由以下域键：
+`MastraCompositeStore`可以路由以下域密钥：
 
-并非每个存储适配器都实现了所有域。当适配器包导出对应的域类时，组合存储允许你为不同的域混用适配器。
+并非每个存储适配器都实现每个域。当适配器包导出相应的域类时，复合存储允许您混合每个域的适配器。
 
-| 域 | 描述 |
+|域名 |描述 |
 | - | - |
-| `memory` | 对话持久化：消息、线程和资源（包括工作记忆）。 |
-| `workflows` | 用于暂停和恢复的 Workflow 运行快照。 |
-| `workflowDefinitions` | 持久化的[动态 Workflow](/docs/workflows/dynamic-workflows)定义（Beta）。启动时会加载并实时注册。 |
-| `scores` | 来自评估运行的评分记录。 |
-| `observability` | 供可观测性导出器和 Studio 使用的 Trace 和 Span。 |
-| `datasets` | 供实验使用的数据集记录、版本化条目和数据集版本。 |
-| `experiments` | 实验运行和每个条目的实验结果。 |
+|`memory` | Conversation persistence: messages, threads, and resources (including working memory). |
+| `workflows` | Workflow run snapshots used for suspend and resume. |
+| `workflowDefinitions`|坚持[动态Workflow程](/docs/workflows/dynamic-workflows)定义（测试版）。在启动时加载并实时注册。 |
+|`scores`|评估运行的评估分数记录。 |
+|`observability`|Observability导出器和 Studio 使用的跟踪和跨度。 |
+|`datasets`|实验使用的数据集记录、版本化项目和数据集版本。 |
+|`experiments`|实验运行和每个项目的实验结果。 |
+|`agents`|存储的Agent定义及其版本，供 Mastra 编辑器使用。 |
+|`promptBlocks`|存储的提示块及其版本，供 Mastra 编辑器使用。 |
+|`scorerDefinitions`|存储的记分器定义，供 Mastra 编辑器使用。 |
+|`mcpClients`|存储的 MCP 客户端配置，供 Mastra 编辑器使用。 |
+|`mcpServers`|存储的 MCP 服务器配置，供 Mastra 编辑器使用。 |
+|`workspaces`|存储的Workspace配置，供 Mastra 编辑器使用。 |
+|`skills`|存储的技能及其版本，供 Mastra 编辑器使用。 |
+|`favorites`|每个用户对存储实体的收藏夹。 |
+|`blobs`|由 SHA-256 哈希键控的内容可寻址 blob。存储用于技能版本控制的文件内容。 |
+|`backgroundTasks`|后台任务状态：创建、状态更新和清理。 |
+|`schedules`|由调度程序轮询以触发Workflow和Agent运行的调度。 |
+|`channels`|多平台集成的通道安装和配置。 |
+|`harness`|利用会话记录。 |
+|`toolProviderConnections`|用户为ToolProvider连接分配的名称。 |
+|`notifications`|通知记录。 |
+|`threadState`|持久的每线程状态，例如任务列表和目标。 |
+|`knowledge`|知识图节点和记录（实验）。 |
 
-以下 schema 定义涵盖了为 `memory`、`workflows`、`scores` 和 `observability` 文档所说明的内置数据库支持的表。其他域和非数据库适配器使用特定于实现的存储结构。
+下面的模式定义涵盖了记录的内置数据库支持的表`memory`, `workflows`, `scores`, and `observability`. Other domains, and non-database adapters, use implementation-specific storage structures.
 
-## 核心 schema {/* #core-schema */}
+## 核心架构 {/* #core-schema */}
 
 <Tabs>
-  <TabItem value="messages" label="消息">
-    存储对话消息及其元数据。每条消息都属于一个线程，包含实际内容以及发送者角色和消息类型的元数据。
+  <TabItem value="messages" label="Messages">
+    存储对话消息及其元数据。每条消息都属于一个线程，并包含实际内容以及有关发送者角色和消息类型的元数据。
 
     <SchemaTable
       columns={[
-  {
-    name: 'id',
-    type: 'uuidv4',
-    description: '消息的唯一标识符（格式：`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`）',
-    constraints: [{ type: 'primaryKey' }, { type: 'nullable', value: false }],
-  },
-  {
-    name: 'thread_id',
-    type: 'uuidv4',
-    description: '父线程引用',
-    constraints: [
-      { type: 'foreignKey', value: 'threads.id' },
-      { type: 'nullable', value: false },
-    ],
-  },
-  {
-    name: 'resourceId',
-    type: 'uuidv4',
-    description: '拥有此消息的资源 ID',
-    constraints: [{ type: 'nullable', value: true }],
-  },
-  {
-    name: 'content',
-    type: 'text',
-    description: 'V2 格式的消息内容 JSON。例如：`{ format: 2, parts: [...] }`',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'role',
-    type: 'text',
-    description: '`user | assistant` 枚举值',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'createdAt',
-    type: 'timestamp',
-    description: '用于对线程中的消息排序',
-    constraints: [{ type: 'nullable', value: false }],
-  },
+{
+  name: 'id',
+  type: 'text',
+  description: 'Unique identifier for the message',
+  constraints: [{ type: 'primaryKey' }, { type: 'nullable', value: false }],
+},
+{
+  name: 'thread_id',
+  type: 'text',
+  description: 'Parent thread reference',
+  constraints: [
+    { type: 'foreignKey', value: 'threads.id' },
+    { type: 'nullable', value: false },
+  ],
+},
+{
+  name: 'resourceId',
+  type: 'text',
+  description: 'ID of the resource that owns this message',
+  constraints: [{ type: 'nullable', value: true }],
+},
+{
+  name: 'content',
+  type: 'text',
+  description: 'JSON of the message content in V2 format. Example: `{ format: 2, parts: [...] }`',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'role',
+  type: 'text',
+  description: 'Enum of `user | assistant`',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'createdAt',
+  type: 'timestamp',
+  description: 'Used for thread message ordering',
+  constraints: [{ type: 'nullable', value: false }],
+},
 ]}
     />
 
-    消息的 `content` 列包含符合 `MastraMessageContentV2` 类型的 JSON 对象，该类型旨在与 AI SDK 的 `UIMessage` 消息结构紧密对齐。
+    消息`content` column contains a JSON object conforming to the `MastraMessageContentV2` type, which is designed to align closely with the AI SDK `UIMessage` message shape.
 
     <SchemaTable
       columns={[
-  {
-    name: 'format',
-    type: 'integer',
-    description: '消息格式版本（当前为 2）',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'parts',
-    type: '数组（JSON）',
-    description: '消息部分的数组（文本、工具调用、文件、推理等）。该数组中条目的结构因 `type` 而异。',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'experimental_attachments',
-    type: '数组（JSON）',
-    description: '可选的文件附件数组',
-    constraints: [{ type: 'nullable', value: true }],
-  },
-  {
-    name: 'content',
-    type: 'text',
-    description: '可选的消息主要文本内容',
-    constraints: [{ type: 'nullable', value: true }],
-  },
-  {
-    name: 'toolInvocations',
-    type: '数组（JSON）',
-    description: '汇总工具调用及其结果的可选数组',
-    constraints: [{ type: 'nullable', value: true }],
-  },
-  {
-    name: 'reasoning',
-    type: '对象（JSON）',
-    description: '有关 assistant 响应背后推理过程的可选信息',
-    constraints: [{ type: 'nullable', value: true }],
-  },
-  {
-    name: 'annotations',
-    type: '对象（JSON）',
-    description: '可选的额外元数据或注释',
-    constraints: [{ type: 'nullable', value: true }],
-  },
-]}
-    />
-  </TabItem>
-
-  <TabItem value="threads" label="线程">
-    将相关消息组合在一起，并将其与资源关联。包含有关对话的元数据。
-
-    <SchemaTable
-      columns={[
-  {
-    name: 'id',
-    type: 'uuidv4',
-    description: '线程的唯一标识符（格式：`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`）',
-    constraints: [{ type: 'primaryKey' }, { type: 'nullable', value: false }],
-  },
-  {
-    name: 'resourceId',
-    type: 'text',
-    description: '此线程关联的外部资源的主标识符。用于对相关线程进行分组和检索。',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'title',
-    type: 'text',
-    description: '对话线程的标题',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'metadata',
-    type: 'text',
-    description: '字符串化 JSON 形式的自定义线程元数据。例如：',
-    example: {
-      category: 'support',
-      priority: 1,
-    },
-  },
-  {
-    name: 'createdAt',
-    type: 'timestamp',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'updatedAt',
-    type: 'timestamp',
-    description: '用于线程历史记录排序',
-    constraints: [{ type: 'nullable', value: false }],
-  },
+{
+  name: 'format',
+  type: 'integer',
+  description: 'Message format version (currently 2)',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'parts',
+  type: 'array (JSON)',
+  description:
+    'Array of message parts (text, tool-invocation, file, reasoning, etc.). The structure of items in this array varies by `type`.',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'experimental_attachments',
+  type: 'array (JSON)',
+  description: 'Optional array of file attachments',
+  constraints: [{ type: 'nullable', value: true }],
+},
+{
+  name: 'content',
+  type: 'text',
+  description: 'Optional main text content of the message',
+  constraints: [{ type: 'nullable', value: true }],
+},
+{
+  name: 'toolInvocations',
+  type: 'array (JSON)',
+  description: 'Optional array summarizing tool calls and results',
+  constraints: [{ type: 'nullable', value: true }],
+},
+{
+  name: 'reasoning',
+  type: 'object (JSON)',
+  description: "Optional information about the reasoning process behind the assistant's response",
+  constraints: [{ type: 'nullable', value: true }],
+},
+{
+  name: 'annotations',
+  type: 'object (JSON)',
+  description: 'Optional additional metadata or annotations',
+  constraints: [{ type: 'nullable', value: true }],
+},
 ]}
     />
   </TabItem>
 
-  <TabItem value="resources" label="资源">
-    存储资源范围工作记忆的用户特定数据。每个资源代表一个用户或实体，使工作记忆能够在该用户的所有对话线程之间持久保留。
+  <TabItem value="threads" label="Threads">
+    将相关消息分组在一起并将它们与资源关联。包含有关对话的元数据。
 
     <SchemaTable
       columns={[
-  {
-    name: 'id',
-    type: 'text',
-    description: '资源标识符（用户或实体 ID）：与在线程和 Agent 调用中使用的 resourceId 相同',
-    constraints: [{ type: 'primaryKey' }, { type: 'nullable', value: false }],
+{
+  name: 'id',
+  type: 'text',
+  description: 'Unique identifier for the thread',
+  constraints: [{ type: 'primaryKey' }, { type: 'nullable', value: false }],
+},
+{
+  name: 'resourceId',
+  type: 'text',
+  description:
+    'Primary identifier of the external resource this thread is associated with. Used to group and retrieve related threads.',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'title',
+  type: 'text',
+  description: 'Title of the conversation thread',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'metadata',
+  type: 'jsonb',
+  description: 'Custom thread metadata as JSON. Example:',
+  example: {
+    category: 'support',
+    priority: 1,
   },
-  {
-    name: 'workingMemory',
-    type: 'text',
-    description: 'Markdown 文本形式的持久工作记忆数据。包含跨对话线程持久保留的用户资料、偏好设置和上下文信息。',
-    constraints: [{ type: 'nullable', value: true }],
-  },
-  {
-    name: 'metadata',
-    type: 'jsonb',
-    description: 'JSON 形式的额外资源元数据。例如：',
-    example: {
-      preferences: { language: 'en', timezone: 'UTC' },
-      tags: ['premium', 'beta-user'],
-    },
-    constraints: [{ type: 'nullable', value: true }],
-  },
-  {
-    name: 'createdAt',
-    type: 'timestamp',
-    description: '资源记录首次创建的时间',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'updatedAt',
-    type: 'timestamp',
-    description: '工作记忆上次更新的时间',
-    constraints: [{ type: 'nullable', value: false }],
-  },
+  constraints: [{ type: 'nullable', value: true }],
+},
+{
+  name: 'createdAt',
+  type: 'timestamp',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'updatedAt',
+  type: 'timestamp',
+  description: 'Used for thread ordering history',
+  constraints: [{ type: 'nullable', value: false }],
+},
 ]}
     />
   </TabItem>
 
-  <TabItem value="workflows" label="工作流">
-    在 Workflow 上调用 `suspend()` 时，其状态会按以下格式保存。调用 `resume()` 时，该状态会被重新还原。
+  <TabItem value="resources" label="Resources">
+    存储资源范围工作内存的用户特定数据。每个资源代表一个用户或实体，允许工作记忆在该用户的所有对话线程中持续存在。
 
     <SchemaTable
       columns={[
-  {
-    name: 'workflow_name',
-    type: 'text',
-    description: 'Workflow 的名称',
-    constraints: [{ type: 'nullable', value: false }],
+{
+  name: 'id',
+  type: 'text',
+  description: 'Resource identifier (user or entity ID): same as resourceId used in threads and agent calls',
+  constraints: [{ type: 'primaryKey' }, { type: 'nullable', value: false }],
+},
+{
+  name: 'workingMemory',
+  type: 'text',
+  description:
+    'Persistent working memory data as Markdown text. Contains user profile, preferences, and contextual information that persists across conversation threads.',
+  constraints: [{ type: 'nullable', value: true }],
+},
+{
+  name: 'metadata',
+  type: 'jsonb',
+  description: 'Additional resource metadata as JSON. Example:',
+  example: {
+    preferences: { language: 'en', timezone: 'UTC' },
+    tags: ['premium', 'beta-user'],
   },
-  {
-    name: 'run_id',
-    type: 'uuidv4',
-    description:
-      'Workflow 执行的唯一标识符。用于跟踪暂停/恢复周期中的状态（格式：`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`）',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'snapshot',
-    type: 'text',
-    description: '序列化为 JSON 的 Workflow 状态。例如：',
-    example: {
-      value: { currentState: 'running' },
-      context: {
-        stepResults: {},
-        attempts: {},
-        triggerData: {},
-      },
-      activePaths: [],
-      runId: '550e8400-e29b-41d4-a716-446655440000',
-      timestamp: 1648176000000,
-    },
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'createdAt',
-    type: 'timestamp',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'updatedAt',
-    type: 'timestamp',
-    description: '最后修改时间，用于跟踪 Workflow 执行期间的状态变化',
-    constraints: [{ type: 'nullable', value: false }],
-  },
+  constraints: [{ type: 'nullable', value: true }],
+},
+{
+  name: 'createdAt',
+  type: 'timestamp',
+  description: 'When the resource record was first created',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'updatedAt',
+  type: 'timestamp',
+  description: 'When the working memory was last updated',
+  constraints: [{ type: 'nullable', value: false }],
+},
 ]}
     />
   </TabItem>
 
-  <TabItem value="evals" label="评估">
-    存储针对 Agent 输出运行指标所得的评估结果。
+  <TabItem value="workflows" label="Workflows">
+    什么时候`suspend()` is called on a workflow, its state is saved in the following format. When `resume()` is called, that state is rehydrated.
 
     <SchemaTable
       columns={[
-  {
-    name: 'input',
-    type: 'text',
-    description: '提供给 Agent 的输入',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'output',
-    type: 'text',
-    description: '由 Agent 生成的输出',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'result',
-    type: 'jsonb',
-    description: '包含分数和详细信息的评估结果数据。例如：',
-    example: {
-      score: 0.95,
-      details: {
-        reason: 'Response accurately reflects source material',
-        citations: ['page 1', 'page 3'],
-      },
+{
+  name: 'workflow_name',
+  type: 'text',
+  description: 'Name of the workflow',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'run_id',
+  type: 'text',
+  description: 'Unique identifier for the workflow execution. Used to track state across suspend/resume cycles',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'snapshot',
+  type: 'jsonb',
+  description: 'Workflow state as JSON. Example:',
+  example: {
+    value: { currentState: 'running' },
+    context: {
+      stepResults: {},
+      attempts: {},
+      triggerData: {},
     },
-    constraints: [{ type: 'nullable', value: false }],
+    activePaths: [],
+    runId: '550e8400-e29b-41d4-a716-446655440000',
+    timestamp: 1648176000000,
   },
-  {
-    name: 'agent_name',
-    type: 'text',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'metric_name',
-    type: 'text',
-    description: '例如 Faithfulness、Hallucination 等。',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'instructions',
-    type: 'text',
-    description: 'Agent 的系统提示词或指令',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'test_info',
-    type: 'jsonb',
-    description: '额外的测试元数据和配置',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'global_run_id',
-    type: 'uuidv4',
-    description: '将相关评估运行分组（例如一次 CI 运行中的所有单元测试）',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'run_id',
-    type: 'uuidv4',
-    description: '正在评估的运行的唯一标识符（格式：`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`）',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'created_at',
-    type: 'timestamp',
-    constraints: [{ type: 'nullable', value: false }],
-  },
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'createdAt',
+  type: 'timestamp',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'updatedAt',
+  type: 'timestamp',
+  description: 'Last modification time, used to track state changes during workflow execution',
+  constraints: [{ type: 'nullable', value: false }],
+},
 ]}
     />
   </TabItem>
 
-  <TabItem value="traces" label="追踪">
-    捕获 OpenTelemetry Trace 以用于监控和调试。
+  <TabItem value="evals" label="Evals">
+    存储针对Agent输出运行指标的评估结果。
 
     <SchemaTable
       columns={[
-  {
-    name: 'id',
-    type: 'text',
-    description: 'Trace 的唯一标识符',
-    constraints: [{ type: 'nullable', value: false }, { type: 'primaryKey' }],
-  },
-  {
-    name: 'parentSpanId',
-    type: 'text',
-    description: '父 Span 的 ID。如果 Span 位于顶层，则为 null',
-  },
-  {
-    name: 'name',
-    type: 'text',
-    description: '层级操作名称（例如 `workflow.myWorkflow.execute`、`http.request`、`database.query`）',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'traceId',
-    type: 'text',
-    description: '将相关 Span 分组的根 Trace 标识符',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'scope',
-    type: 'text',
-    description: '创建该 Span 的库、包或服务（例如 `@mastra/core`、`express`、`pg`）',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'kind',
-    type: 'integer',
-    description:
-      '`INTERNAL`（0，进程内）、`CLIENT`（1，传出调用）、`SERVER`（2，传入调用）、`PRODUCER`（3，异步任务创建）、`CONSUMER`（4，异步任务处理）',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'attributes',
-    type: 'jsonb',
-    description: '包含 Span 元数据的用户定义键值对',
-  },
-  {
-    name: 'status',
-    type: 'jsonb',
-    description: '包含 `code`（UNSET=0、ERROR=1、OK=2）和可选 `message` 的 JSON 对象。例如：',
-    example: {
-      code: 1,
-      message: 'HTTP request failed with status 500',
+{
+  name: 'input',
+  type: 'text',
+  description: 'Input provided to the agent',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'output',
+  type: 'text',
+  description: 'Output generated by the agent',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'result',
+  type: 'jsonb',
+  description: 'Eval result data that includes score and details. Example:',
+  example: {
+    score: 0.95,
+    details: {
+      reason: 'Response accurately reflects source material',
+      citations: ['page 1', 'page 3'],
     },
   },
-  {
-    name: 'events',
-    type: 'jsonb',
-    description: 'Span 期间发生的带时间戳事件',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'agent_name',
+  type: 'text',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'metric_name',
+  type: 'text',
+  description: 'e.g Faithfulness, Hallucination, etc.',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'instructions',
+  type: 'text',
+  description: 'System prompt or instructions for the agent',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'test_info',
+  type: 'jsonb',
+  description: 'Additional test metadata and configuration',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'global_run_id',
+  type: 'uuidv4',
+  description: 'Groups related evaluation runs (e.g. all unit tests in a CI run)',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'run_id',
+  type: 'uuidv4',
+  description: 'Unique identifier for the run being evaluated (format: `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`)',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'created_at',
+  type: 'timestamp',
+  constraints: [{ type: 'nullable', value: false }],
+},
+]}
+    />
+  </TabItem>
+
+  <TabItem value="traces" label="Traces">
+    捕获 OpenTelemetry 跟踪以进行监视和调试。
+
+    <SchemaTable
+      columns={[
+{
+  name: 'id',
+  type: 'text',
+  description: 'Unique trace identifier',
+  constraints: [{ type: 'nullable', value: false }, { type: 'primaryKey' }],
+},
+{
+  name: 'parentSpanId',
+  type: 'text',
+  description: 'ID of the parent span. Null if span is top level',
+},
+{
+  name: 'name',
+  type: 'text',
+  description: 'Hierarchical operation name (e.g. `workflow.myWorkflow.execute`, `http.request`, `database.query`)',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'traceId',
+  type: 'text',
+  description: 'Root trace identifier that groups related spans',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'scope',
+  type: 'text',
+  description: 'Library/package/service that created the span (e.g. `@mastra/core`, `express`, `pg`)',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'kind',
+  type: 'integer',
+  description:
+    '`INTERNAL` (0, within process), `CLIENT` (1, outgoing calls), `SERVER` (2, incoming calls), `PRODUCER` (3, async job creation), `CONSUMER` (4, async job processing)',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'attributes',
+  type: 'jsonb',
+  description: 'User defined key-value pairs that contain span metadata',
+},
+{
+  name: 'status',
+  type: 'jsonb',
+  description: 'JSON object with `code` (UNSET=0, ERROR=1, OK=2) and optional `message`. Example:',
+  example: {
+    code: 1,
+    message: 'HTTP request failed with status 500',
   },
-  {
-    name: 'links',
-    type: 'jsonb',
-    description: '指向其他相关 Span 的链接',
+},
+{
+  name: 'events',
+  type: 'jsonb',
+  description: 'Time-stamped events that occurred during the span',
+},
+{
+  name: 'links',
+  type: 'jsonb',
+  description: 'Links to other related spans',
+},
+{
+  name: 'other',
+  type: 'text',
+  description: 'Additional OpenTelemetry span fields as stringified JSON. Example:',
+  example: {
+    droppedAttributesCount: 2,
+    droppedEventsCount: 1,
+    instrumentationLibrary: '@opentelemetry/instrumentation-http',
   },
-  {
-    name: 'other',
-    type: 'text',
-    description: '字符串化 JSON 形式的额外 OpenTelemetry Span 字段。例如：',
-    example: {
-      droppedAttributesCount: 2,
-      droppedEventsCount: 1,
-      instrumentationLibrary: '@opentelemetry/instrumentation-http',
-    },
-  },
-  {
-    name: 'startTime',
-    type: 'bigint',
-    description: 'Span 开始时距 Unix 纪元的纳秒数',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'endTime',
-    type: 'bigint',
-    description: 'Span 结束时距 Unix 纪元的纳秒数',
-    constraints: [{ type: 'nullable', value: false }],
-  },
-  {
-    name: 'createdAt',
-    type: 'timestamp',
-    constraints: [{ type: 'nullable', value: false }],
-  },
+},
+{
+  name: 'startTime',
+  type: 'bigint',
+  description: 'Nanoseconds since Unix epoch when span started',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'endTime',
+  type: 'bigint',
+  description: 'Nanoseconds since Unix epoch when span ended',
+  constraints: [{ type: 'nullable', value: false }],
+},
+{
+  name: 'createdAt',
+  type: 'timestamp',
+  constraints: [{ type: 'nullable', value: false }],
+},
 ]}
     />
   </TabItem>

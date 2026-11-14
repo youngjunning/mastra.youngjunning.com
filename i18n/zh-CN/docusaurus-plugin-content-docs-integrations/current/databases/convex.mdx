@@ -1,0 +1,277 @@
+---
+title: "Convex | Database"
+description: "Store Mastra application data in Convex by defining schemas, deploying storage handlers, configuring the client, and enabling real-time serverless persistence."
+packages:
+  - "@mastra/convex"
+---
+
+# 凸面
+
+Convex 存储实现提供了一种无服务器存储解决方案，使用[Convex](https://convex.dev)，一个具有实时同步和自动缓存功能的全栈 TypeScript 开发平台。
+
+:::警告\[不支持可观察性]
+
+凸面收纳**doesn't support the observability domain**. Traces from the `MastraStorageExporter` can't be persisted to Convex, and [工作室的](/docs/studio/overview)可观察性功能不适用于作为您唯一存储Provider的 Convex。要启用可观察性，请使用[复合存储](/reference/storage/composite#specialized-storage-for-observability)将Observability数据路由到受支持的Provider（例如 ClickHouse）。
+
+:::
+
+:::警告\[记录大小限制]
+凸强制执行**1 MiB maximum record size**. This limit can be exceeded when storing messages with base64-encoded attachments such as images. See [Handling large attachments](/docs/memory/memory-processors#handling-large-attachments) for workarounds including uploading attachments to external storage like S3, Cloudflare R2, or [Convex file storage](https://docs.convex.dev/file-storage).
+:::
+
+## 安装 {/* #installation */}
+
+```bash npm2yarn
+npm install @mastra/convex@latest
+```
+
+## 凸设置 {/* #convex-setup */}
+
+使用前`ConvexStore`, set up the Convex schema and storage handler in your Convex project.
+The schema example below includes the full `ConvexStore` and `ConvexServerCache` setup. If you only use `ConvexStore`, omit `mastraCacheTable` and `mastraCacheListItemsTable`; if you use `ConvexServerCache`，包含这些表并创建缓存处理程序。
+
+### 1. 设置凸模式 {/* #1-set-up-convex-schema */}
+
+在`convex/schema.ts`:
+
+```typescript
+import { defineSchema } from 'convex/server'
+import {
+  mastraThreadsTable,
+  mastraMessagesTable,
+  mastraResourcesTable,
+  mastraWorkflowSnapshotsTable,
+  mastraScoresTable,
+  mastraObservationalMemoryTable,
+  mastraVectorIndexesTable,
+  mastraVectorsTable,
+  mastraCacheTable,
+  mastraCacheListItemsTable,
+  mastraDocumentsTable,
+} from '@mastra/convex/schema'
+
+export default defineSchema({
+  mastra_threads: mastraThreadsTable,
+  mastra_messages: mastraMessagesTable,
+  mastra_resources: mastraResourcesTable,
+  mastra_workflow_snapshots: mastraWorkflowSnapshotsTable,
+  mastra_scorers: mastraScoresTable,
+  mastra_observational_memory: mastraObservationalMemoryTable,
+  mastra_vector_indexes: mastraVectorIndexesTable,
+  mastra_vectors: mastraVectorsTable,
+  mastra_cache: mastraCacheTable,
+  mastra_cache_list_items: mastraCacheListItemsTable,
+  mastra_documents: mastraDocumentsTable,
+})
+```
+
+### 2. 创建存储处理程序 {/* #2-create-the-storage-handler */}
+
+在`convex/mastra/storage.ts`:
+
+```typescript
+import { mastraStorage } from '@mastra/convex/server'
+
+export const handle = mastraStorage
+```
+
+如果你使用`ConvexServerCache`, create `convex/mastra/cache.ts`:
+
+```typescript
+import { mastraCache } from '@mastra/convex/server'
+
+export const handle = mastraCache
+```
+
+### 3. 部署到Convex {/* #3-deploy-to-convex */}
+
+```bash
+npx convex dev
+# or for production
+npx convex deploy
+```
+
+## 用法 {/* #usage */}
+
+```typescript
+import { ConvexServerCache, ConvexStore } from '@mastra/convex'
+
+const storage = new ConvexStore({
+  id: 'convex-storage',
+  deploymentUrl: process.env.CONVEX_URL!,
+  adminAuthToken: process.env.CONVEX_ADMIN_KEY!,
+})
+
+const cache = new ConvexServerCache({
+  deploymentUrl: process.env.CONVEX_URL!,
+  adminAuthToken: process.env.CONVEX_ADMIN_KEY!,
+})
+```
+
+## 凸面存储参数 {/* #convexstore-parameters */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'deploymentUrl',
+  type: 'string',
+  description: 'Convex deployment URL (e.g., https://your-project.convex.cloud)',
+  isOptional: false,
+},
+{
+  name: 'adminAuthToken',
+  type: 'string',
+  description: 'Convex admin authentication token for backend access',
+  isOptional: false,
+},
+{
+  name: 'storageFunction',
+  type: 'string',
+  description: "Path to the storage mutation function (default: 'mastra/storage:handle')",
+  isOptional: true,
+  defaultValue: 'mastra/storage:handle',
+},
+]}
+/>
+
+## ConvexServerCache 参数 {/* #convexservercache-parameters */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'deploymentUrl',
+  type: 'string',
+  description: 'Convex deployment URL (e.g., https://your-project.convex.cloud)',
+  isOptional: false,
+},
+{
+  name: 'adminAuthToken',
+  type: 'string',
+  description: 'Convex admin authentication token for backend access',
+  isOptional: false,
+},
+{
+  name: 'cacheFunction',
+  type: 'string',
+  description: "Path to the cache mutation function for ConvexServerCache (default: 'mastra/cache:handle')",
+  isOptional: true,
+  defaultValue: 'mastra/cache:handle',
+},
+{
+  name: 'requestTimeoutMs',
+  type: 'number',
+  description:
+    'Timeout for Convex cache mutation requests in milliseconds. Set to 0 to disable the client-side timeout.',
+  isOptional: true,
+  defaultValue: 30000,
+},
+{
+  name: 'keyPrefix',
+  type: 'string',
+  description:
+    'Prefix applied to ConvexServerCache keys. clear() removes rows whose stored prefix exactly matches this value.',
+  isOptional: true,
+  defaultValue: 'mastra:cache:',
+},
+{
+  name: 'ttlMs',
+  type: 'number',
+  description: 'Default ConvexServerCache TTL in milliseconds. Set to 0 to disable expiry.',
+  isOptional: true,
+  defaultValue: 300000,
+},
+]}
+/>
+
+## 构造函数示例 {/* #constructor-examples */}
+
+```ts
+import { ConvexServerCache, ConvexStore } from '@mastra/convex'
+
+// Basic configuration
+const store = new ConvexStore({
+  id: 'convex-storage',
+  deploymentUrl: 'https://your-project.convex.cloud',
+  adminAuthToken: 'your-admin-token',
+})
+
+// With custom storage function path
+const storeCustom = new ConvexStore({
+  id: 'convex-storage',
+  deploymentUrl: 'https://your-project.convex.cloud',
+  adminAuthToken: 'your-admin-token',
+  storageFunction: 'custom/path:handler',
+})
+
+// Server cache for durable stream replay and response caching
+const cache = new ConvexServerCache({
+  deploymentUrl: 'https://your-project.convex.cloud',
+  adminAuthToken: 'your-admin-token',
+  cacheFunction: 'mastra/cache:handle',
+})
+```
+
+## 服务器缓存 {/* #server-cache */}
+
+`ConvexServerCache`与 Convex 实现 Mastra 的服务器缓存合约。当您需要可恢复持久Agent流、Workflow流重播或响应缓存等功能的持久缓存状态时，请使用它。
+
+`ConvexServerCache`将列表条目存储为单独的凸文档。这可以避免在一个文档中增加流重播列表，并有助于保持在 Convex 的记录大小限制之内。
+
+每个标量缓存值和每个列表项都存储为一个 Convex 行，并且必须保持在 Convex 的行大小限制内。重播范围时，非常大的列表仍然受到凸查询限制的限制。
+
+缓存清理和`clear()` run in bounded batches. A single client call can loop through up to 1,000 Convex mutations, with each mutation handling up to 25 list items. While `clear()` is cleaning a key, reads for that key can return empty results until cleanup finishes.
+
+对于非常大的缓存命名空间，请逐步清除或使用较窄的前缀以避免长时间运行的清理操作。
+
+在批量清理期间，缓存元数据可以暂时使用内部`deleted` state. The next cleanup pass removes those rows. Avoid writing new values with the same prefix until `clear()` finishes.
+
+`clear()`仅删除已存储的行`keyPrefix` exactly matches the configured `keyPrefix`. It doesn't clear nested prefixes by string prefix matching. Each `listPush()` refreshes the list TTL using the cache's configured `ttlMs`.
+
+使用非空`keyPrefix` unless you intentionally want `clear()` to remove every cache key in the deployment. Expired list rows are reclaimed incrementally during reads and writes. `clear()` removes all rows for the prefix.
+
+`ConvexServerCache`最适合中等频率事件的持久重播。对于高频令牌流，更喜欢批处理事件或使用较低延迟的缓存后端。
+
+`ConvexServerCache`不会取代分布式发布/订阅传输。如果您的应用程序需要实时跨进程事件传递，请单独配置生产发布/订阅后端。
+
+## 附加说明 {/* #additional-notes */}
+
+### 模式管理 {/* #schema-management */}
+
+存储实现对每个 Mastra 域使用类型化凸表：
+
+|域名 |凸表|目的|
+| - | - | - |
+|主题 |`mastra_threads` | Conversation threads |
+| Messages | `mastra_messages` | Chat messages |
+| Resources | `mastra_resources` | User working memory |
+| Observational Memory | `mastra_observational_memory` | Observational memory generations |
+| Workflows | `mastra_workflow_snapshots` | Workflow state |
+| Scorers | `mastra_scorers` | Evaluation data |
+| Cache | `mastra_cache` | Cache values, counters, and list metadata |
+| Cache Items | `mastra_cache_list_items` | Cache list entries |
+| Fallback | `mastra_documents` | Unknown tables |
+
+### 观察记忆 {/* #observational-memory */}
+
+`ConvexStore`支持[observational memory](/docs/memory/observational-memory). Add `mastraObservationalMemoryTable` to your Convex schema and redeploy with `npx convex deploy` to enable it. Existing deployments created before this table was added need the same schema update.
+
+### 建筑学 {/* #architecture */}
+
+所有类型表包括：
+
+* 一个`id` field for Mastra's record ID (distinct from Convex's auto-generated `_id`)
+* 一个`by_record_id` index for efficient lookups by Mastra ID
+
+这种设计确保了与Mastra存储合约的兼容性，同时使用Convex的自动索引和实时功能。
+
+### 环境变量 {/* #environment-variables */}
+
+为您的部署设置这些环境变量：
+
+* `CONVEX_URL`：您的 Convex 部署 URL
+* `CONVEX_ADMIN_KEY`：管理员身份验证令牌（从 Convex 仪表板获取）
+
+## 有关的 {/* #related */}
+
+* [凸向量存储](/integrations/vectors/convex)
+* [凸文档](https://docs.convex.dev/)

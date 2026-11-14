@@ -1,0 +1,707 @@
+---
+title: "Experiments"
+description: "Run Mastra dataset experiments against registered agents or workflows, apply scorers, compare results, and inspect experiment output in Studio."
+packages:
+  - "@mastra/core"
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+# 實驗
+
+**添加於：** `@mastra/core@1.4.0`
+
+實驗透過目標（Agent、Workflow或評分器）運行資料集中的每個項目，然後可以選擇對輸出進行評分。當您想要評估 LLM 法官本身時，請使用記分員作為目標。預設情況下，結果會持久保存到儲存中，以便您可以比較不同提示、模型或程式碼變更之間的運行情況。
+
+<Inject>
+  **對於人工智慧Agent：**&#x8DD1;步`npx mastra api experiment run dataset_123 '{"name":"translation-baseline"}'` to start an experiment directly without opening Studio or writing a temporary script. Replace the sample ID with one returned by `npx mastra api dataset list`. This command needs a running Mastra server that has dataset storage and registered experiment targets. Start a local server with `npx mastra dev`，或使用`--url`傳遞可存取伺服器的基本 URL。在構建不同的輸入之前，請運行`npx mastra api experiment run --schema`。在開始實驗之前獲得用戶批准，因為它可以進行模型呼叫。安裝 Mastra 的技能`npx skills add mastra-ai/skills --skill mastra`有關 API CLI 發現和定位以及架構、身份驗證和錯誤處理的完整指南。
+</Inject>
+
+## 基礎實驗 {/* #basic-experiment */}
+
+稱呼[`startExperiment()`](/reference/datasets/startExperiment) with a target and scorers:
+
+```typescript title="src/mastra/experiments/basic.ts"
+import { mastra } from '../index'
+
+const dataset = await mastra.datasets.get({ id: 'translation-dataset-id' })
+
+const summary = await dataset.startExperiment({
+  name: 'gpt-5.1-baseline',
+  targetType: 'agent',
+  targetId: 'translation-agent',
+  scorers: ['accuracy', 'fluency'],
+})
+
+console.log(summary.status) // 'completed' | 'failed'
+console.log(summary.succeededCount) // items that executed without an error
+console.log(summary.failedCount) // items with execution errors
+```
+
+`startExperiment()`阻塞直到所有項目完成。對於即發即棄執行，請參閱[async experiments](#async-experiments).
+
+## 在 Studio 中運行實驗 {/* #run-experiments-in-studio */}
+
+您也可以在以下位置執行實驗[Studio](/docs/studio/overview). After you've added a dataset item, open it and select **Run Experiment** and configure the target, scorers, and options.
+
+若要為一項配置記分器，請編輯該項目並啟用**Override dataset scorers**. Select one or more scorers, or leave the selection empty to run no scorers for that item.
+
+運行實驗後，**Experiments** tab shows all runs for that dataset (with status, counts, and timestamps). Select an experiment to see per-item results, scores, and execution traces.
+
+在**Experiments** tab, select **Compare** and choose two or more experiments to compare their scores and results side by side.
+
+## 解釋結果 {/* #interpret-results */}
+
+實驗的狀態和計數描述了執行情況。使用分數來評估輸出品質。一個`completed` experiment can contain execution errors, and `failedCount: 0` doesn't mean every answer meets your quality requirements.
+
+|結果 |它告訴你什麼 |
+| - | - |
+|`succeededCount` and `failedCount` | How many items executed without an error or ended with an execution error |
+| Each item's `scores` | How the output performed against each scorer's criteria, with a reason when provided |
+| Average score | Aggregate performance for a scorer, which can hide individual failures |
+
+例如，一項針對某項的實驗要求`2 + 2?` and returns `5`. An accuracy scorer assigns `0`, but the task itself returns without throwing. Its summary contains:
+
+```typescript
+console.log(summary.status) // 'completed'
+console.log(summary.succeededCount) // 1
+console.log(summary.failedCount) // 0
+console.log(summary.results[0].scores[0].score) // 0
+```
+
+在 Studio 中，打開實驗並檢查每個項目的輸出、分數和原因，然後再確定更改是否改進了您的Agent。也要檢查記分器錯誤：缺少的分數不能提供品質證據。
+
+如果每個項目都必須滿足要求，請對照每個項目的分數進行檢查。對於二元記分器，其中`1` means the requirement was met, five scores of `1` and one of `0` average about `0.83`, but one item still fails the requirement.
+
+對於 CI 中的自動化品質檢查，[`runEvals()` gates and verdicts](/docs/evals/gates-and-verdicts) provide explicit pass/fail criteria. Those options belong to `runEvals()`. Dataset experiment status and counts remain execution results.
+
+## 刪除實驗 {/* #delete-experiments */}
+
+在 Studio 中，開啟全域**Experiments** list and select **Delete experiment** on a row, or open the experiment and select **Delete Experiment**. The global list also lets you delete experiments orphaned by dataset deletion, which no longer have a dataset details page.
+
+刪除實驗會永久刪除其結果記錄，以及它產生的可觀察性追蹤及其關聯的跨度、分數、回饋、指標和日誌。不支援追蹤刪除的儲存適配器會將追蹤保留在適當的位置，記錄警告，並且仍然刪除實驗及其結果記錄。
+
+您也可以使用以下命令刪除實驗[Core API](/reference/datasets/deleteExperiment) or [Client SDK](/reference/client-js/datasets#deleteexperiment). The same operation is available through the [server routes](/reference/server/routes#delete-an-experiment).
+
+## 實驗目標 {/* #experiment-targets */}
+
+使用`targetType` and `targetId` to select an agent, workflow, or scorer registered on your Mastra instance. The target processes each dataset item. The experiment's `scorers` evaluate the target's output afterward.
+
+對於自訂執行，請傳遞內聯`task` function instead. See [dataset experiments with an inline task](/docs/evals/evals-with-memory#dataset-experiments-with-an-inline-task) for an example that controls each item's memory thread.
+
+### 註冊Agent {/* #registered-agent */}
+
+指向在您的 Mastra 實例上註冊的Agent：
+
+```typescript title="src/mastra/experiments/agent-target.ts"
+const summary = await dataset.startExperiment({
+  name: 'agent-v2-eval',
+  targetType: 'agent',
+  targetId: 'translation-agent',
+  scorers: ['accuracy'],
+})
+```
+
+每個項目的`input` is passed directly to the agent. Use a supported message format, such as a prompt string, a message object, or an array of messages. See the [`agent.generate()` reference](/reference/agents/generate) for accepted inputs.
+
+#### 支援記憶體的Agent {/* #memory-enabled-agents */}
+
+當目標Agent程式擁有自己的記憶體時，實驗運行器會為每個專案注入一個新的記憶體執行緒並重試。如果請求上下文中沒有資源 ID，每個執行緒都會獲得一個獨立的、實驗擁有的資源。
+
+若要針對現有資源運行，請設定`MASTRA_RESOURCE_ID_KEY` in the experiment's `requestContext` or in an item's `requestContext`. Item values override experiment values. The runner still creates a fresh thread for each item and retry, but all threads using the same resource id share that resource's memory.
+
+注入的執行緒被標記，以便您可以將它們映射回運行：線程元資料攜帶`experimentId` and the dataset item's id as `experimentItemId`. No thread title is generated for them.
+
+當專案共享資源時，資源範圍的記憶體功能可以讀取和寫入相同的狀態：
+
+* 資源範圍的工作記憶體更新會持續到資源中並可能影響其他項目。預設情況下，項目同時運行，因此不要依賴執行順序。
+* 資源範圍內的語意回憶可以將資源先前的對話呈現給實驗，並且實驗記錄可以在該資源的後續對話中被回憶起來。
+
+使用此方法根據真實用戶累積的上下文來評估Agent。為了防止實驗運行接觸真實的使用者狀態，請改用專用的評估資源 ID。
+
+在以下情況下會跳過執行緒注入：
+
+* 如果請求上下文設置`MASTRA_THREAD_ID_KEY`, the runner uses that thread as-is. Items and retries using the same thread id share a conversation.
+* 如果Agent沒有內存，或請求上下文明確地將資源 id 設為空字串或`null`, the runner skips thread injection.
+
+### 註冊Workflow {/* #registered-workflow */}
+
+指向在您的 Mastra 實例上註冊的Workflow：
+
+```typescript title="src/mastra/experiments/workflow-target.ts"
+const summary = await dataset.startExperiment({
+  name: 'workflow-eval',
+  targetType: 'workflow',
+  targetId: 'translation-workflow',
+  scorers: ['accuracy'],
+})
+```
+
+Workflow接收每個專案的`input` as `inputData` in `run.start()`. Structure the input to match the workflow's input schema.
+
+### 註冊得分手 {/* #registered-scorer */}
+
+以記分員為目標來評價裁判本身。跑者呼叫`scorer.run(item.input)`, so the dataset item's `input` must contain the full payload the scorer expects.
+
+此範例假設已註冊`accuracy` scorer that accepts string `input`, `output`, and `groundTruth` fields. Adapt those fields to your scorer's expected shape:
+
+```typescript title="src/mastra/experiments/scorer-target.ts"
+await dataset.addItem({
+  input: {
+    input: 'What is the capital of France?',
+    output: 'Paris',
+    groundTruth: 'Paris',
+  },
+  groundTruth: { score: 1 },
+})
+
+const summary = await dataset.startExperiment({
+  name: 'judge-accuracy-eval',
+  targetType: 'scorer',
+  targetId: 'accuracy',
+})
+```
+
+兩人`groundTruth` fields serve different purposes:
+
+* `input.groundTruth`是傳遞給法官的參考答案：`'Paris'`.
+* 頂層`groundTruth` is the expected result from the judge: `{ score: 1 }`. It isn't passed to the target scorer.
+
+目標的輸出包含其`score` and `reason`. To evaluate that output against the top-level ground truth, add another scorer through the experiment's `scorers` option. Without an additional scorer, the experiment records the judge's output but doesn't score its agreement with the expected result.
+
+## 評分結果 {/* #scoring-results */}
+
+計分器在每個專案的目標執行後自動運作。透過記分員實例或註冊記分員 ID：
+
+<Tabs>
+  <TabItem value="ids" label="Scorer IDs">
+    ```typescript
+    // Reference scorers registered on the Mastra instance
+    const summary = await dataset.startExperiment({
+      name: 'with-registered-scorers',
+      targetType: 'agent',
+      targetId: 'translation-agent',
+      scorers: ['accuracy', 'fluency'],
+    })
+    ```
+  </TabItem>
+
+  <TabItem value="instances" label="Scorer instances">
+    ```typescript
+    import { createAnswerRelevancyScorer } from '@mastra/evals/scorers/prebuilt'
+
+    const relevancy = createAnswerRelevancyScorer({ model: '__GATEWAY_OPENAI_MODEL_LUNA__' })
+
+    const summary = await dataset.startExperiment({
+      name: 'with-scorer-instances',
+      targetType: 'agent',
+      targetId: 'translation-agent',
+      scorers: [relevancy],
+    })
+    ```
+  </TabItem>
+</Tabs>
+
+每個項目的結果包括每個評分者的分數：
+
+```typescript
+for (const item of summary.results) {
+  console.log(item.itemId, item.output)
+  for (const score of item.scores) {
+    console.log(`  ${score.scorerName}: ${score.score} — ${score.reason}`)
+  }
+}
+```
+
+參觀[Scorers overview](/docs/evals/overview) for details on available and custom scorers.
+
+## 選擇每個項目的評分者 {/* #select-scorers-per-item */}
+
+將註冊的記分器 ID 新增至資料集項目以覆寫附加到其資料集的記分器：
+
+```typescript title="src/mastra/datasets/items.ts"
+await dataset.addItem({
+  input: 'Translate "hello" to French.',
+  scorerIds: ['accuracy', 'fluency'],
+})
+```
+
+實驗對每個項目僅使用一個評分器來源，依下列順序：
+
+1. 實驗的`scorers` option, when provided
+2. `scorerIds` field, when provided
+3. 數據集的`scorerIds` field
+4. 沒有得分手
+
+Mastra 不會合併這些來源。運行或專案層級的顯式空數組不會選擇任何記分器並防止回退到下一個來源。空的分類運行等級配置具有相同的效果。重複的項目或資料集 ID 會依照首次出現的順序運行一次。
+
+以下更新在顯式空覆蓋和資料集繼承之間切換：
+
+```typescript title="src/mastra/datasets/items.ts"
+// Run no scorers for this item
+await dataset.updateItem({
+  itemId: 'translation-item-id',
+  scorerIds: [],
+})
+
+// Remove the item override and inherit the dataset's scorers
+await dataset.updateItem({
+  itemId: 'translation-item-id',
+  scorerIds: null,
+})
+```
+
+省略`scorerIds` from an update preserves its current value. Each item version stores its scorer ID list, including an empty list. Scorer definitions aren't copied into the item version and continue to use their existing registry or Editor behavior.
+
+Mastra 在運行其目標之前解析每個專案的記分器 ID。它首先檢查註冊的記分器，然後要求編輯器補充儲存的記分器。過時的專案級 ID 會產生`EXPERIMENT_ITEM_SCORER_NOT_FOUND` code for that item. Mastra skips target execution without retrying that item, while the rest of the experiment continues.
+
+所選運行等級或資料集等級來源中缺少 ID 會導致實驗設定失敗。 Mastra 不會解析來自優先權規則忽略的較低優先權來源的 ID。
+
+Workflow步驟評分器只能透過運行等級分類來使用`scorers` configuration. Item-level IDs apply to the flat agent, workflow, and trajectory scorer dispatch.
+
+## 控制每次運作的持久性 {/* #control-persistence-per-run */}
+
+使用`persistence` to skip storage writes for a specific run. Experiment records and score records can be disabled independently:
+
+```typescript title="src/mastra/experiments/no-persistence.ts"
+const summary = await dataset.startExperiment({
+  targetType: 'agent',
+  targetId: 'translation-agent',
+  scorers: ['accuracy'],
+  persistence: {
+    experiments: 'none',
+    scores: 'none',
+  },
+})
+```
+
+目標和得分手仍在奔跑，並且`startExperiment()` still returns the item results and scores in `summary`. The settings are independent. For example, set only `scores: 'none'` to persist the experiment and its item results without creating score records.
+
+省略的設定預設為`'default'`, which preserves the standard storage behavior. This policy only controls experiment and score records created by the run. It doesn't disable storage used by the target, such as agent memory, vectors, observability, or custom tool storage.
+
+什麼時候`startExperimentAsync()` runs with `experiments: 'none'`, it doesn't persist an experiment record, progress updates, or item results. Score persistence remains controlled separately by `persistence.scores`. Without an experiment event observer, the run is fire-and-forget, and the experiment API can't report whether it completed or failed.
+
+使用同步`startExperiment()` when the caller needs the returned summary. An experiment event observer can receive lifecycle events and the terminal summary.
+
+## 觀察實驗事件 {/* #observe-experiment-events */}
+
+使用`onEvent` to receive versioned, JSON-safe lifecycle events while an experiment runs. This works with `startExperiment()`, `startExperimentAsync()`, and `runExperiment()`.
+
+```typescript title="src/mastra/experiments/observe.ts"
+import type { ExperimentEvent } from '@mastra/core/datasets'
+
+const events: ExperimentEvent[] = []
+
+await dataset.startExperimentAsync({
+  task: async ({ input }) => processItem(input),
+  persistence: { experiments: 'none' },
+  onEvent: async event => {
+    events.push(event)
+    await publishEvent(event)
+  },
+})
+```
+
+觀察者接收這些事件類型：
+
+* `experiment.run.started`：標識運行、目標、解析的資料集版本和項目計數。
+* `experiment.item.completed`：評分後報告提交的項目結果，包括分數、錯誤、重試次數、Tool模擬詳細資訊和穩定項目標識。
+* `experiment.run.finished`：報告最終結果和摘要計數器。
+
+Mastra 在傳遞下一個事件之前等待每個觀察者的呼叫。這種串行交付施加背壓並確保事件`sequence` values match delivery order, while item execution can remain concurrent.
+
+如果觀察者拋出或拒絕，Mastra 將中止剩餘的運行並拒絕`runExperiment()` with a `MastraError` whose `id` is `EXPERIMENT_EVENT_OBSERVER_FAILED`. It doesn't send a terminal event through the failed observer. For `startExperimentAsync()`, the method has already returned when a detached observer fails, so handle delivery failures inside the observer when the caller needs direct error reporting.
+
+這`experiment.run.finished` event is awaited before Mastra persists the final experiment status. Treat the event as the authoritative terminal signal when experiment persistence is disabled, but don't use it as a read-after-write signal for storage.
+
+導出的事件類型是`ExperimentEvent`, `ExperimentRunStartedEvent`, `ExperimentItemCompletedEvent`, and `ExperimentRunFinishedEvent`. Use the discriminated `type` field to narrow an event before reading event-specific properties.
+
+## 生命週期掛鉤 {/* #lifecycle-hooks */}
+
+使用生命週期掛鉤在目標運行之前準備狀態並在運行後清理它。當無法針對空環境評估項目時，這非常有用。運行可能需要將固定檔案複製到Agent的Workspace中，或在Agent可以接觸它之前配置沙箱。
+
+鉤子在兩個級別上運行。`beforeAll` and `afterAll` run once per experiment, and `beforeEach` and `afterEach` run once per item:
+
+```typescript title="src/mastra/experiments/hooks.ts"
+const summary = await dataset.startExperiment({
+  targetType: 'agent',
+  targetId: 'document-agent',
+  scorers: ['accuracy'],
+  beforeAll: async ({ experimentId }) => {
+    await createWorkspace(experimentId)
+  },
+  beforeEach: async ({ item }) => {
+    await copyFixture(item.metadata?.fixture)
+  },
+  afterEach: async ({ item, result }) => {
+    await clearWorkspaceFiles(item.id)
+  },
+  afterAll: async ({ summary }) => {
+    await deleteWorkspace(summary.experimentId)
+  },
+})
+```
+
+每個鉤子都可以是異步的。每一位都收到`experimentId`, the `mastra` instance, and the run-level `signal`, so long-running setup can be cancelled along with the experiment. The per-item hooks also receive `item`. The teardown hooks receive the result they follow: `afterEach` receives the item's `result` including scores, and `afterAll` receives the `summary` that's about to be returned.
+
+`id`, `input`, `groundTruth`, and `metadata`. Fields that control execution, such as tool mocks and scorer selection, aren't exposed, so a hook can't change how the item runs.
+
+### 吊鉤故障 {/* #hook-failures */}
+
+每個鉤子在拋出時都會產生不同的結果，這取決於運行對它的依賴程度：
+
+|鉤|失敗時 |
+| - | - |
+|`beforeAll` | Fails the experiment. No items run. |
+| `beforeEach` | Fails that item with `EXPERIMENT_ITEM_BEFORE_EACH_FAILED`. Other items continue. |
+| `afterEach` | Logged. The item's recorded outcome doesn't change. |
+| `afterAll` | Logged. The returned summary doesn't change. |
+
+什麼時候`beforeAll` fails, the experiment is marked failed and the `experiment.run.finished` event is still emitted before the error propagates.
+
+什麼時候`beforeEach` fails, the target and its scorers are skipped for that item, since the item's preconditions were never met. `afterEach` is also skipped for that item, on the basis that setup which didn't finish owns its own cleanup.
+
+拆卸失敗會被記錄而不是傳播。到......的時候`afterEach` runs, the target has already produced a real result, and discarding it because cleanup was untidy would lose the data the experiment was run to collect.
+
+`afterAll`在每個退出路徑上運行，包括實驗失敗時、`beforeAll` fails, and when an [event observer](#observe-experiment-events) fails, so teardown isn't skipped when something goes wrong. It runs at most once per experiment.
+
+## Tool模擬 {/* #tool-mocks */}
+
+當實驗執行呼叫副作用Tool的Agent時，請將靜態Tool模擬附加到各個資料集項目以使運行具有確定性。在實驗期間，模擬Tool返回其聲明的輸出而不是執行。預設情況下，沒有對專案進行模擬的Tool會即時運作。
+
+模擬與資料集項一起儲存和版本化。每個模擬指定Tool名稱和預期參數，以及要傳回的輸出：
+
+```typescript title="src/mastra/experiments/tool-mocks.ts"
+await dataset.addItem({
+  input: 'What is the weather in Seattle?',
+  toolMocks: [
+    {
+      toolName: 'getWeather',
+      args: { city: 'Seattle' },
+      output: { temperature: 60, conditions: 'rainy' },
+    },
+  ],
+})
+```
+
+支援Tool模擬`agent` targets only.
+
+### 阻止未聲明的Tool {/* #block-undeclared-tools */}
+
+放`unmockedToolPolicy: 'deny'` on an experiment to block every tool call that doesn't have a mock. This is useful when a live call could cause side effects:
+
+```typescript
+const summary = await dataset.startExperiment({
+  targetType: 'agent',
+  targetId: 'weather-agent',
+  unmockedToolPolicy: 'deny',
+})
+```
+
+預設策略是`'allow'`. You can override the experiment policy on an individual stored or inline item:
+
+```typescript
+await dataset.addItem({
+  input: 'What is the weather in Seattle?',
+  unmockedToolPolicy: 'allow',
+})
+```
+
+项目值优先于实验值。被拒絕的呼叫失敗`TOOL_MOCK_NOT_DECLARED` before the tool executes. The failure isn't retried or added to `liveCalls`.
+
+### 匹配與消費 {/* #matching-and-consumption */}
+
+參數嚴格匹配：物件鍵順序被忽略，但數組順序很重要。值不會被強制轉換為其他類型。只有當Agent使用深度等於模擬的參數呼叫Tool時，才會提供模擬`args`.
+
+當一個項目為相同的Tool和參數聲明多個模擬時，它們會按順序使用，第一個呼叫獲取第一個模擬，下一個呼叫獲取第二個模擬，依此類推。訂單追蹤按`(toolName, args)` group and is independent across different arguments.
+
+### 匹配方式 {/* #matching-mode */}
+
+預設情況下，每個模擬嚴格匹配其`args`. Set `matchArgs: 'ignore'` to match on the tool name only, the mock's `args` aren't compared and the next unconsumed mock for that tool is served regardless of how the agent called it:
+
+```typescript
+const subAgentMock = {
+  toolName: 'agent-balanceAgent',
+  args: { prompt: 'look up the balance for YJ' },
+  output: { text: "YJ's balance is $100." },
+  matchArgs: 'ignore',
+}
+```
+
+當Tool的參數有雜訊或由模型產生時，這非常有用。最常見的情況是嘲笑**sub-agent's response**. The parent sees a delegated sub-agent as an `agent-<name>` tool, and its arguments include an LLM-authored `prompt` plus runtime-injected fields. Mocking `agent-<name>` returns the canned response in place of running the sub-agent and its inner tools. When you create a mock from a trace, sub-agent delegation calls are derived with `matchArgs: 'ignore'` automatically. You can change it to `'strict'` to pin the exact arguments.
+
+### 失敗 {/* #failures */}
+
+當Tool呼叫違反模擬配置時，該專案將失敗：
+
+* `TOOL_MOCK_MISMATCH`：呼叫Tool時使用的參數沒有模擬匹配。
+* `TOOL_MOCK_EXHAUSTED`：每個匹配的模擬都已被消耗。
+* `TOOL_MOCK_NOT_DECLARED``unmockedToolPolicy` is `'deny'`.
+
+如果發生任何這些故障，Agent程式運行都會立即中止，因此模型無法繼續呼叫任何其他Tool，包括原本會即時運行的未模擬的副作用Tool。這些失敗是確定性的，因此不會重試。已聲明但從未使用過的模擬不會使該專案失敗，它們會被報告為未使用。
+
+當模擬攔截處於活動狀態時，Agent的Tool會依序執行，如此重複`(toolName, args)` mocks are consumed in the provider's call order. Interception is active when the item declares mocks or its effective `unmockedToolPolicy` is `'deny'`.
+
+### 診斷 {/* #diagnostics */}
+
+每個項目結果包括一個`toolMockReport` listing which mocks were used and which tool calls ran without a mock:
+
+```typescript
+for (const item of summary.results) {
+  const report = item.toolMockReport
+  if (!report) continue
+
+  console.log(report.served) // mocks matched and returned
+  console.log(report.unconsumed) // mocks declared but never used
+  console.log(report.liveCalls) // undeclared tools allowed to run live
+  console.log(report.failure) // the first deterministic mock failure, if any
+}
+```
+
+在[Studio](/docs/studio/overview), edit a dataset item to author tool mocks as a JSON array, and open an experiment result to see the same report.
+
+### 限制 {/* #limitations */}
+
+* **模擬的Tool跨度是平的。**&#x4E00;個已服務的模擬記錄了一個`tool_call` span with the mocked output and the attribute `mocked: true`. A mismatched or exhausted mock records one with `success: false`. The real tool never runs, so the span has no child spans and no `toolDescription`.
+* ****LibSQL、PostgreSQL、MongoDB 和 Spanner 適配器會保留Tool模擬和Tool模擬報告，而 MySQL 適配器會拒絕攜帶其中任何一種的寫入。所有資料集儲存適配器均保留`unmockedToolPolicy`.
+
+## 非同步實驗 {/* #async-experiments */}
+
+`startExperiment()`阻塞直到每個項目完成。對於長時間運行的資料集，請使用[`startExperimentAsync()`](/reference/datasets/startExperimentAsync) to start the experiment in the background:
+
+```typescript title="src/mastra/experiments/async.ts"
+const { experimentId, status } = await dataset.startExperimentAsync({
+  name: 'large-dataset-run',
+  targetType: 'agent',
+  targetId: 'translation-agent',
+  scorers: ['accuracy'],
+})
+
+console.log(experimentId) // UUID
+console.log(status) // 'pending'
+```
+
+使用輪詢完成[`getExperiment()`](/reference/datasets/getExperiment):
+
+```typescript
+let experiment = await dataset.getExperiment({ experimentId })
+if (!experiment) throw new Error('Experiment not found')
+
+while (experiment.status === 'pending' || experiment.status === 'running') {
+  await new Promise(resolve => setTimeout(resolve, 5000))
+  experiment = await dataset.getExperiment({ experimentId })
+  if (!experiment) throw new Error('Experiment not found')
+}
+
+console.log(experiment.status) // 'completed' | 'failed'
+```
+
+## 調用者驅動的實驗 {/* #caller-driven-experiments */}
+
+`startExperiment()`讓馬斯特拉負責整個跑步過程。如果持久編排器（例如 Temporal、Airflow 或自訂工作佇列）擁有循環，請先建立實驗並以下列形狀之一自行驅動：
+
+* **呼叫者驅動循環，Mastra 運行每個專案。**&#x4F7F;用目標建立實驗，然後調用[`runExperimentItem()`](/reference/datasets/runExperimentItem) once per item. Mastra executes the target and runs the scorers, then persists the result.
+* **調用者運行一切。**&#x5EFA;立沒有目標的實驗，在您自己的基礎架構上執行專案並對其進行評分，並使用以下命令獲取每個結果[`submitExperimentResult()`](/reference/datasets/submitExperimentResult).
+
+兩種形狀均以[`finalizeExperiment()`](/reference/datasets/finalizeExperiment), and both write to the same tables as native runs, so Studio views, comparisons, and review summaries work unchanged.
+
+### 在伺服器端運行項目 {/* #run-items-server-side */}
+
+創建實驗[`createExperiment()`](/reference/datasets/createExperiment), passing the target and scorers. Pass your own `id` (for example a workflow run id) to make creation idempotent: retrying the call with the same id returns the existing experiment instead of failing.
+
+```typescript title="src/mastra/experiments/caller-driven.ts"
+const dataset = await mastra.datasets.get({ id: 'translation-dataset-id' })
+
+const { experimentId, totalItems, datasetVersion } = await dataset.createExperiment({
+  id: 'temporal-wf-run-42', // optional: reuse your workflow run id for idempotent creates
+  targetType: 'agent',
+  targetId: 'translation-agent',
+  scorers: ['accuracy'],
+})
+```
+
+然後從您的協調器運行每個專案。 Mastra 解析固定資料集版本的項目，並使用解析的記分器執行目標。結果更新插入的關鍵字為`(experimentId, itemId, attempt)`. A retried activity converges on a single row:
+
+```typescript
+const { result, scores } = await dataset.runExperimentItem({
+  experimentId,
+  itemId: 'item-1',
+})
+```
+
+`runExperimentItem` call executes the item exactly once. Scorers resolve with the same precedence as native runs: experiment `scorers` win over item `scorerIds`, which win over dataset `scorerIds`.
+
+### 攝取外部結果 {/* #ingest-external-results */}
+
+如果您的工作人員自己執行專案並對其進行評分，請建立沒有目標的實驗：
+
+```typescript title="src/mastra/experiments/ingestion.ts"
+const { experimentId } = await dataset.createExperiment({
+  id: 'temporal-wf-run-42',
+  name: 'external-eval',
+})
+```
+
+每項提交一個結果[`submitExperimentResult()`](/reference/datasets/submitExperimentResult). Submissions are upserts keyed by `(experimentId, itemId, attempt)`. A retried worker converges on a single row instead of duplicating results:
+
+```typescript
+await dataset.submitExperimentResult({
+  experimentId,
+  itemId: 'item-1',
+  output: { translation: 'Hola' },
+  scores: [{ scorerId: 'accuracy', score: 0.92, reason: 'Faithful translation' }],
+})
+```
+
+`input`和`groundTruth` default to the dataset item's values at the experiment's pinned dataset version. Inline `scores` are persisted to the scores store under the experiment, so they show up in comparisons alongside native scorer runs. Experiments created with a target reject `submitExperimentResult` so two writers can't race on the same rows.
+
+### 最終確定 {/* #finalize */}
+
+當所有項目完成後，致電[`finalizeExperiment()`](/reference/datasets/finalizeExperiment). Mastra computes `succeededCount`, `failedCount`, and `skippedCount` from the persisted rows, so your workers never track completion bookkeeping. Finalization is idempotent. Calling it again returns the stored record:
+
+```typescript
+const experiment = await dataset.finalizeExperiment({ experimentId })
+
+console.log(experiment.status) // 'completed'
+console.log(experiment.succeededCount) // items with at least one attempt that didn't error
+console.log(experiment.failedCount) // items where every attempt errored
+console.log(experiment.skippedCount) // items never submitted
+```
+
+透過 HTTP 可以獲得相同的生命週期（`POST /api/datasets/:datasetId/experiments` with `start: false`, `POST .../experiments/:experimentId/items/:itemId/run`, `POST .../experiments/:experimentId/results`, `POST .../experiments/:experimentId/finalize`, see [Server routes](/reference/server/routes#datasets-and-experiments)) and through `@mastra/client-js` (see the [Datasets API](/reference/client-js/datasets)).
+
+### 重試和冪等合約 {/* #retry-and-idempotency-contract */}
+
+呼叫者驅動的呼叫被設計為主動重試（例如透過臨時重試策略）。具體保證：
+
+* **Create 是冪等的`id`.**&#x547C;喚`createExperiment` again with the same caller-supplied `id` returns the existing experiment. Reusing an `id` that belongs to another dataset or an experiment with a different target fails with `EXPERIMENT_ID_CONFLICT` (HTTP `409`).
+* **`(experimentId, itemId, attempt)`.**&#x91CD;新提交相同的鍵會更新現有行，並且所有可變欄位的最後一次寫入都會獲勝。重試的工作人員永遠不會建立重複項。
+* **`attempt`將故意試驗與重試分開。**&#x91CD;試相同的運行應該重複使用相同的`attempt` (default `0`) so they converge. To record repeated trials of an item as separate rows, submit with `attempt: 0`, `attempt: 1`, and so on.
+* ****提交內容將根據該版本中可見的項目進行驗證，因此之後編輯或刪除項目不會影響正在進行的實驗。提交一份`itemId` that isn't visible at the pinned version fails with `404`.
+* **Finalize 是冪等的且是終結的。**&#x5B8C;成已完成的實驗將傳回儲存的記錄，而無需重新計算。最終確定後，進一步的提交將被拒絕`EXPERIMENT_ALREADY_FINALIZED` (HTTP `409`).
+* ****`succeededCount` (at least one attempt without an error), `failedCount` (every attempt errored), `skippedCount` (never submitted). `succeededCount + failedCount + skippedCount === totalItems` always holds, and callers keep no completion bookkeeping. Attempt-level rows remain available via `listExperimentResults`.
+
+## 配置選項 {/* #configuration-options */}
+
+### 並發性 {/* #concurrency */}
+
+控制並行運行的項目數（預設值：5）：
+
+```typescript
+const summary = await dataset.startExperiment({
+  targetType: 'agent',
+  targetId: 'translation-agent',
+  maxConcurrency: 10,
+})
+```
+
+### 超時和重試 {/* #timeouts-and-retries */}
+
+設定每個項目的超時（以毫秒為單位）和重試計數：
+
+```typescript
+const summary = await dataset.startExperiment({
+  targetType: 'agent',
+  targetId: 'translation-agent',
+  itemTimeout: 30_000, // 30 seconds per item
+  maxRetries: 2, // retry failed items up to 2 times
+})
+```
+
+重試使用指數退避。中止錯誤永遠不會重試。
+
+### {/* #aborting-an-experiment */}
+
+透過一個`AbortSignal` to cancel a running experiment:
+
+```typescript
+const controller = new AbortController()
+
+// Cancel after 60 seconds
+setTimeout(() => controller.abort(), 60_000)
+
+const summary = await dataset.startExperiment({
+  targetType: 'agent',
+  targetId: 'translation-agent',
+  signal: controller.signal,
+})
+```
+
+其餘項目在摘要中標記為已跳過。
+
+### 固定資料集版本 {/* #pinning-a-dataset-version */}
+
+針對資料集的特定快照運行：
+
+```typescript
+const summary = await dataset.startExperiment({
+  targetType: 'agent',
+  targetId: 'translation-agent',
+  version: 3, // use items from dataset version 3
+})
+```
+
+## 查看結果 {/* #viewing-results */}
+
+### 列出實驗 {/* #listing-experiments */}
+
+```typescript
+const { experiments, pagination } = await dataset.listExperiments({
+  page: 0,
+  perPage: 10,
+})
+
+for (const exp of experiments) {
+  console.log(`${exp.name} — ${exp.status} (${exp.succeededCount}/${exp.totalItems})`)
+}
+```
+
+### 實驗詳情 {/* #experiment-details */}
+
+```typescript
+const experiment = await dataset.getExperiment({
+  experimentId: 'exp-abc-123',
+})
+if (!experiment) throw new Error('Experiment not found')
+
+console.log(experiment.status)
+console.log(experiment.startedAt)
+console.log(experiment.completedAt)
+```
+
+:::提示\[📹觀看]
+
+手錶[Mastra datasets and experiments workflow](https://www.youtube.com/watch?v=R6pjAdGhxhQ) to see how datasets and experiments help improve reliability.
+
+:::
+
+### 專案級結果 {/* #item-level-results */}
+
+```typescript
+const { results, pagination } = await dataset.listExperimentResults({
+  experimentId: 'exp-abc-123',
+  page: 0,
+  perPage: 50,
+})
+
+for (const result of results) {
+  console.log(result.itemId, result.output, result.error)
+}
+```
+
+## 理解摘要 {/* #understanding-the-summary */}
+
+`startExperiment()`返回一個`ExperimentSummary` with counts and per-item results:
+
+* `completedWithErrors`是`true` when the experiment finished but some items failed.
+* 項目取消通過`signal` appear in `skippedCount`.
+
+參觀[`startExperiment` reference](/reference/datasets/startExperiment) for the full parameter and return type documentation.
+
+## 有關的 {/* #related */}
+
+* [數據集](/docs/evals/datasets)
+* [得分手概述](/docs/evals/overview)
+* [`startExperiment`參考](/reference/datasets/startExperiment)
+* [`listExperimentResults`參考](/reference/datasets/listExperimentResults)

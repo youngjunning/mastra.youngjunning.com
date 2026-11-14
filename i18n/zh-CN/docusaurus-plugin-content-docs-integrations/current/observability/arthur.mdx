@@ -1,0 +1,152 @@
+---
+title: "Arthur | Observability"
+description: "Export Mastra traces to Arthur Engine or Arthur Cloud for AI observability, configure task routing and credentials, and monitor agent behavior."
+packages:
+  - "@mastra/arthur"
+  - "@mastra/core"
+  - "@mastra/observability"
+---
+
+# 亚瑟
+
+[亚瑟](https://arthur.ai/)为人工智能应用提供可观测和评估平台[Arthur Engine](https://github.com/arthur-ai/arthur-engine)（开源）。 Arthur 导出器使用 OpenTelemetry 发送跟踪信息[开放推理](https://github.com/Arize-ai/openinference/tree/main/spec)语义约定。
+
+## 安装 {/* #installation */}
+
+```bash npm2yarn
+npm install @mastra/arthur@latest
+```
+
+## 配置 {/* #configuration */}
+
+### 先决条件 {/* #prerequisites */}
+
+1. **亚瑟引擎实例**: 遵循[Docker Compose deployment guide](https://docs.arthur.ai/docs/arthur-genai-engine-docker-compose-deployment-guide) to start an Arthur Engine
+2. **API密钥**: [Generate an API key](https://docs.arthur.ai/docs/api-keys-management) from the Arthur Engine UI at `http://localhost:3030`
+3. **任务编号**（选修的）：[Create a task](https://docs.arthur.ai/docs/create-a-task) to route traces to a specific task
+
+### 任务路由 {/* #task-routing */}
+
+Arthur Engine 通过两种方式将跟踪与任务关联起来：
+
+* **按服务名称**： 放`serviceName` in the observability config. Arthur Engine automatically routes traces to the task matching that name, creating it if needed.
+* **按任务ID**：通过预先存在的`taskId` to the exporter to send traces to a specific task directly.
+
+如果两者都提供，`taskId` takes precedence.
+
+### 环境变量 {/* #environment-variables */}
+
+```bash title=".env"
+# Required
+ARTHUR_API_KEY=your-api-key
+ARTHUR_BASE_URL=http://localhost:3030
+
+# Optional - route traces to a pre-existing task by ID
+ARTHUR_TASK_ID=your-task-id
+```
+
+### 零配置设置 {/* #zero-config-setup */}
+
+设置环境变量后，无需配置即可使用导出器：
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { Observability } from '@mastra/observability'
+import { ArthurExporter } from '@mastra/arthur'
+
+export const mastra = new Mastra({
+  observability: new Observability({
+    configs: {
+      arthur: {
+        serviceName: 'my-service',
+        exporters: [new ArthurExporter()],
+      },
+    },
+  }),
+})
+```
+
+### 显式配置 {/* #explicit-configuration */}
+
+您还可以直接传递凭据（优先于环境变量）：
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { Observability } from '@mastra/observability'
+import { ArthurExporter } from '@mastra/arthur'
+
+export const mastra = new Mastra({
+  observability: new Observability({
+    configs: {
+      arthur: {
+        serviceName: 'my-service',
+        exporters: [
+          new ArthurExporter({
+            apiKey: process.env.ARTHUR_API_KEY!,
+            endpoint: process.env.ARTHUR_BASE_URL!,
+            taskId: process.env.ARTHUR_TASK_ID,
+          }),
+        ],
+      },
+    },
+  }),
+})
+```
+
+## 配置选项 {/* #configuration-options */}
+
+### 完整配置 {/* #complete-configuration */}
+
+```typescript
+new ArthurExporter({
+  // Arthur Configuration
+  apiKey: 'your-api-key', // Required
+  endpoint: 'http://localhost:3030', // Required
+  taskId: 'your-task-id', // Optional
+
+  // Optional OTLP settings
+  headers: {
+    'x-custom-header': 'value', // Additional headers for OTLP requests
+  },
+
+  // Debug and performance tuning
+  logLevel: 'debug', // Logging: debug | info | warn | error
+  batchSize: 512, // Batch size before exporting spans
+  timeout: 30000, // Timeout in ms before exporting spans
+
+  // Custom resource attributes
+  resourceAttributes: {
+    'deployment.environment': process.env.NODE_ENV,
+    'service.version': process.env.APP_VERSION,
+  },
+})
+```
+
+### 自定义元数据 {/* #custom-metadata */}
+
+非保留的跨度属性被序列化到 OpenInference 中`metadata` payload and surface in Arthur. You can add them via `tracingOptions.metadata`:
+
+```ts
+await agent.generate(input, {
+  tracingOptions: {
+    metadata: {
+      companyId: 'acme-co',
+      tier: 'enterprise',
+    },
+  },
+})
+```
+
+保留字段，例如`input`, `output`, `sessionId`, thread/user IDs, and OpenInference IDs are excluded automatically.
+
+## OpenInference 语义约定 {/* #openinference-semantic-conventions */}
+
+该出口商实施[OpenInference Semantic Conventions](https://github.com/Arize-ai/openinference/tree/main/spec) for generative AI applications, providing standardized trace structure across different observability platforms.
+
+## 有关的 {/* #related */}
+
+* [追踪概述](/docs/observability/tracing/overview)
+* [ArthurExporter 参考](/reference/observability/tracing/exporters/arthur)
+* [亚瑟引擎文档](https://docs.arthur.ai/)
+* [亚瑟引擎存储库](https://github.com/arthur-ai/arthur-engine)
+* [开放推理规范](https://github.com/Arize-ai/openinference/tree/main/spec)

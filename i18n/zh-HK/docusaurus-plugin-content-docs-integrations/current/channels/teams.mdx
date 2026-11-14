@@ -1,0 +1,136 @@
+---
+title: "Microsoft Teams | Channels"
+description: "Connect a Mastra agent to Microsoft Teams mentions and conversation events by installing the adapter and configuring agent webhook handling."
+packages:
+  - "@mastra/core"
+  - "@mastra/connect"
+---
+
+import TeamsConnectTools from "@site/src/components/connect/generated/microsoft-teams.mdx";
+
+# 微軟團隊
+
+透過兩種方式將 Microsoft Teams 與 Mastra 結合使用：
+
+* **AgentTool**讓Agent程式在 Teams 中執行操作，例如讀取和傳送訊息或管理頻道。
+* **Agent聊天**讓人們透過 Teams 提及和對話事件與您的Agent商交談。
+
+[馬斯特拉連接](/docs/mastra-platform/connect)設定兩者並為你註冊 Teams 機器人，因此你不需要註冊自己的 Azure 應用程式。您也可以註冊機器人並自行管理其憑證。
+
+## 連接 {/* #connect */}
+
+在開始之前，請完成[Connect setup](/docs/mastra-platform/connect#get-started) to install `@mastra/connect` and configure your platform project.
+
+一`microsoft-teams` connection provides both agent tools and agent chat. Sign in with a Microsoft work or school account. Some requested permissions need admin consent, so the first connection in a tenant needs a Microsoft Entra administrator.
+
+<TeamsConnectTools />
+
+### Agent聊天 {/* #agent-chat */}
+
+當您連接Agent程式時，Mastra 會在 Teams 開發人員入口網站中為其註冊機器人。 Mastra 以加密方式儲存機器人憑證。放`MASTRA_ENCRYPTION_KEY` to use a dedicated key. Without it, `channels()` derives a key from the platform access token and logs a warning. If you then rotate the platform access token, Mastra can't read the stored bot credentials. Disconnect and reconnect the channel to create new ones.
+
+您的伺服器需要團隊 webhook 和 OAuth 回呼的公共 URL。 Mastra 平台提供此 URL。當您在其他地方託管時，請設定`MASTRA_SERVER_URL` to your public server URL. For local development, use a public HTTPS tunnel.
+
+1. 如果您尚未新增連接，請運行`mastra connect add microsoft-teams` and sign in.
+
+2. 經過[`channels()`](/reference/connect/channels) to the `Mastra` constructor. It registers the Teams channel provider and its routes:
+
+   ```typescript title="src/mastra/index.ts"
+   import { Mastra } from '@mastra/core'
+   import { channels } from '@mastra/connect'
+   import { assistant } from './agents/assistant'
+
+   export const mastra = new Mastra({
+     agents: { assistant },
+     channels: await channels({ providers: ['microsoft-teams'] }),
+   })
+   ```
+
+   若要也註冊其他頻道，請將其提供者 ID 新增至`providers`.
+
+3. 啟動您的 Mastra 申請。
+
+4. 在 Studio 中，將 Teams 通道連接到Agent程式。 Mastra 為Agent程式建立單一租戶機器人註冊並返回指向[Teams Developer Portal](https://dev.teams.microsoft.com/bots).
+
+5. 打開鏈接，將機器人打包到開發者門戶中的 Teams 應用程式中，然後將該應用程式新增至 Teams。
+
+斷開Agent連接將刪除機器人註冊及其 Entra 應用程式。
+
+## 自我管理設定 {/* #self-managed-setup */}
+
+將聊天 SDK Teams 轉接器與您自己的 Azure 機器人註冊和憑證結合使用。
+
+### 安裝適配器 {/* #install-the-adapter */}
+
+從聊天 SDK 安裝 Teams 轉接器：
+
+```bash npm2yarn
+npm install @chat-adapter/teams
+```
+
+### Agent配置 {/* #agent-configuration */}
+
+添加`createTeamsAdapter()` to the agent's `channels.adapters` object:
+
+```typescript title="src/mastra/agents/teams-agent.ts"
+import { Agent } from '@mastra/core/agent'
+import { createTeamsAdapter } from '@chat-adapter/teams'
+
+export const teamsAgent = new Agent({
+  id: 'teams-agent',
+  name: 'Teams Agent',
+  instructions: 'Answer questions and help with tasks in Microsoft Teams.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  channels: {
+    adapters: {
+      teams: createTeamsAdapter({
+        appType: 'SingleTenant',
+      }),
+    },
+  },
+})
+```
+
+在 Mastra 實例上註冊Agent：
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { teamsAgent } from './agents/teams-agent'
+
+export const mastra = new Mastra({
+  agents: { teamsAgent },
+})
+```
+
+### 適配器設定 {/* #adapter-setup */}
+
+遵循[Chat SDK Teams adapter docs](https://chat-sdk.dev/adapters/official/teams) for Teams-specific setup, including Azure bot registration, Teams CLI usage, authentication options, and required permissions.
+
+適配器從環境變數中讀取 Teams 憑證，例如：
+
+```bash title=".env"
+TEAMS_APP_ID=your-azure-bot-app-id
+TEAMS_APP_PASSWORD=your-azure-bot-app-password
+TEAMS_APP_TENANT_ID=your-azure-tenant-id
+```
+
+### 網路鉤子 URL {/* #webhook-url */}
+
+Mastra 根據Agent ID 和適配器金鑰產生 Teams Webhook 路由：
+
+```text
+/api/agents/teams-agent/channels/teams/webhook
+```
+
+使用您的公用 Mastra 伺服器 URL 作為基本 URL：
+
+```text
+https://your-app.example.com/api/agents/teams-agent/channels/teams/webhook
+```
+
+在 Teams 適配器文件要求提供機器人終結點或 Webhook URL 的任何位置使用此 URL。對於本機開發，使用隧道公開 Mastra 開發伺服器並使用隧道 URL 作為基本 URL。
+
+## 有關的 {/* #related */}
+
+* [頻道概覽](/docs/channels)
+* [更多的](/docs/channels#other-adapters)

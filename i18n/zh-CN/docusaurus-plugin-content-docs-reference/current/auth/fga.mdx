@@ -1,19 +1,25 @@
 ---
-title: "参考：IFGAProvider | Auth"
-description: "IFGAProvider interface 的 API 参考；该 interface 针对资源授权用户和系统 actor，用于 Mastra 细粒度授权（FGA）。"
+title: "Reference: IFGAProvider | Auth"
+description: "Implement IFGAProvider to authorize users and system actors against Mastra resources with fine-grained authorization checks and provider-specific policies."
 packages:
   - "@mastra/core"
 ---
 
 # IFGAProvider
 
-`IFGAProvider` interface 定义细粒度授权（FGA）Provider。Mastra 调用它来决定用户或系统 actor 是否可以对特定资源执行某项权限。实现此 interface 可将 Mastra 连接到 WorkOS Authorization 等 FGA backend。
+这`IFGAProvider`接口定义了细粒度授权（FGA）提供者。 Mastra 调用它来决定用户或系统参与者是否可以对特定资源执行权限。实现它以将 Mastra 连接到 FGA 后端，例如 WorkOS Authorization。
 
-有关概念、配置以及 Mastra 强制执行 FGA 的生命周期节点，请参阅[细粒度授权](/docs/server/auth/fga)。
+有关 Mastra 强制执行 FGA 的概念、配置和生命周期点，请参阅[Fine-grained authorization](/docs/auth/fga).
+
+：：：笔记
+
+FGA 在生产中需要 Mastra 企业版 (EE) 许可证。它在开发过程中无需许可证即可运行。看[what requires an EE license](/docs/license#what-requires-an-ee-license). [Contact sales](https://mastra.ai/contact) for more information.
+
+:::
 
 ## 使用示例 {/* #usage-example */}
 
-以下示例实现一个最小 Provider。`require` 通过抛出异常拒绝访问，`check` 返回 boolean。
+以下示例实现了一个最小提供程序。`require` throws to deny, and `check` returns a boolean.
 
 ```typescript title="src/mastra/fga.ts"
 import { FGADeniedError } from '@mastra/core/auth/ee'
@@ -46,29 +52,29 @@ class MyFGAProvider implements IFGAProvider {
 
 ### `check(user, params)` {/* #checkuser-params */}
 
-返回 `user` 是否拥有该资源的权限。可用于筛选或条件式 UI 等不抛出异常的检查。
+返回是否`user` has the permission on the resource. Use it for non-throwing checks, such as filtering or conditional UI.
 
 返回：`Promise<boolean>`
 
 ### `require(user, params)` {/* #requireuser-params */}
 
-当 `user` 缺少权限时抛出 `FGADeniedError`。Mastra 会在其[强制执行节点](/docs/server/auth/fga#enforcement-points)调用此方法。
+投掷`FGADeniedError` when `user` lacks the permission. Mastra calls this at its [enforcement points](/docs/auth/fga#enforcement-points).
 
 返回：`Promise<void>`
 
 ### `filterAccessible(user, resources, resourceType, permission)` {/* #filteraccessibleuser-resources-resourcetype-permission */}
 
-返回 `resources` 中 `user` 可使用 `permission` 访问的子集。
+返回的子集`resources` that `user` can access with `permission`.
 
 返回：`Promise<T[]>`
 
 ### `requireActor(actor, params)` {/* #requireactoractor-params */}
 
-授权非用户系统 actor，例如自主或定时 Agent。可选。
+授权非用户系统参与者，例如自主或调度Agent。选修的。
 
-系统 actor 会跳过以用户为中心的 `require()` 路径，因此请实现 `requireActor`，对它们强制执行各 Agent 最小权限。抛出 `FGADeniedError` 可拒绝访问。Provider 未实现 `requireActor` 时，Mastra 会保留可信 actor bypass（在 tenant scope 检查后允许访问），因此添加该方法仍向后兼容。
+系统参与者跳过以用户为中心`require()` path, so implement `requireActor` to enforce per-agent least privilege for them. Throw `FGADeniedError` to deny. When a provider doesn't implement `requireActor`, Mastra preserves the trusted-actor bypass (allow after the tenant-scope check), so adding the method remains backward compatible.
 
-请将 `actor.permissions` 视为不可信 claim。应从以 `actor.agentId` 为键的可信来源解析 Agent 的权威授权，而不是信任内联值。请参阅[系统 actor](/docs/server/auth/fga#system-actors)。
+对待`actor.permissions` as an untrusted claim. Resolve the agent's authoritative grants from a trusted source keyed by `actor.agentId`, rather than trusting the inline values. See [System actors](/docs/auth/fga#system-actors).
 
 ```typescript
 import { FGADeniedError } from '@mastra/core/auth/ee'
@@ -93,109 +99,121 @@ class MyFGAProvider implements IFGAProvider {
 
 ## 配置属性 {/* #configuration-properties */}
 
-可选属性控制 Route 覆盖范围和启动验证。
+可选属性控制路线覆盖范围和启动验证。
 
 <PropertiesTable
   content={[
-  {
-    name: 'requireForProtectedRoutes',
-    type: 'boolean',
-    isOptional: true,
-    defaultValue: 'false',
-    description: '设为 true 时，如果受保护路由没有路由级 FGA metadata 或 resolver 输出，则拒绝访问，而不是直接放行。',
-  },
-  {
-    name: 'auditProtectedRoutes',
-    type: "boolean | 'warn' | 'error'",
-    isOptional: true,
-    defaultValue: 'false',
-    description:
-      "审计缺少内置 FGA metadata 的受保护路由。使用 true 或 'warn' 记录启动警告，使用 'error' 使启动失败，使用 false 禁用审计。",
-  },
-  {
-    name: 'resolveRouteFGA',
-    type: 'FGARouteResolver',
-    isOptional: true,
-    description: '根据路由、解析后的参数和 Request Context 推导 resource type、resource ID 和 permission。',
-  },
-  {
-    name: 'validatePermissions',
-    type: '(permissions: MastraFGAPermissionInput[]) => void | Promise<void>',
-    isOptional: true,
-    description:
-      '在启动时验证 Provider 专用的 permission mapping。如果 Mastra 可能发出的某项 permission 未被映射，则抛出错误。',
-  },
+{
+  name: 'requireForProtectedRoutes',
+  type: 'boolean',
+  isOptional: true,
+  defaultValue: 'false',
+  description:
+    'When true, protected routes without route-level FGA metadata or resolver output are denied instead of allowed through.',
+},
+{
+  name: 'auditProtectedRoutes',
+  type: "boolean | 'warn' | 'error'",
+  isOptional: true,
+  defaultValue: 'false',
+  description:
+    "Audits protected routes that lack built-in FGA metadata. Use true or 'warn' to log a startup warning, 'error' to fail startup, or false to disable.",
+},
+{
+  name: 'resolveRouteFGA',
+  type: 'FGARouteResolver',
+  isOptional: true,
+  description:
+    'Derives resource type, resource ID, and permission from the route, parsed params, and request context.',
+},
+{
+  name: 'validatePermissions',
+  type: '(permissions: MastraFGAPermissionInput[]) => void | Promise<void>',
+  isOptional: true,
+  description:
+    'Startup validation for provider-specific permission mappings. Throw when a permission Mastra may emit is not mapped.',
+},
 ]}
 />
 
 ## 参数 {/* #parameters */}
 
-传给 `check`、`require` 和 `requireActor` 的 `params` 参数。
+这`params` argument passed to `check`, `require`, and `requireActor`.
 
 <PropertiesTable
   content={[
-  {
-    name: 'resource',
-    type: '{ type: string; id: string }',
-    description: '正在访问的 resource。',
-  },
-  {
-    name: 'permission',
-    type: 'MastraFGAPermissionInput | MastraFGAPermissionInput[]',
-    description: '要检查的 permission。提供数组时，actor 只需具有其中任意一项 permission。',
-  },
-  {
-    name: 'context',
-    type: 'FGACheckContext',
-    isOptional: true,
-    description: '用于解析 resource 的 Provider 专用上下文，包括所属的 resourceId、Request Context 和操作 metadata。',
-  },
+{
+  name: 'resource',
+  type: '{ type: string; id: string }',
+  description: 'The resource being accessed.',
+},
+{
+  name: 'permission',
+  type: 'MastraFGAPermissionInput | MastraFGAPermissionInput[]',
+  description:
+    'The permission(s) being checked. When an array is provided, the actor needs any one of the listed permissions.',
+},
+{
+  name: 'context',
+  type: 'FGACheckContext',
+  isOptional: true,
+  description:
+    'Provider-specific context for resource resolution, including the owning resourceId, the request context, and action metadata.',
+},
 ]}
 />
 
 ## `ActorSignal` {/* #actorsignal */}
 
-标识由可信非用户 actor 而非已验证最终用户发起的调用。其值为 `true`（匿名系统的简写），或一个指定执行操作的 Agent 并携带 Provider 可强制执行授权的对象。
+识别由受信任的非用户参与者而不是经过身份验证的最终用户发出的呼叫。要么是`true` (the anonymous system shorthand) or an object that names the acting agent and carries the grants a provider can enforce.
 
 <PropertiesTable
   content={[
-  {
-    name: 'actorKind',
-    type: "'system'",
-    description: '标记 signal 的对象形式。',
-  },
-  {
-    name: 'agentId',
-    type: 'string',
-    isOptional: true,
-    description:
-      '执行操作的系统 Agent 身份。它与检查 resource（目标）不同，表示 actor 本身，因此 Provider 可以对每个 Agent 强制实施最小权限。',
-  },
-  {
-    name: 'permissions',
-    type: 'MastraFGAPermissionInput[]',
-    isOptional: true,
-    description:
-      '为该 actor 声明的 permission grant。这是不可信的自声明提示；要实施真正的最小权限，Provider 应从以 agentId 为键的可信来源解析 Agent 的权威 grant，而不是信任这些值。',
-  },
-  {
-    name: 'scope',
-    type: 'Record<string, string>',
-    isOptional: true,
-    description: 'Actor 的额外 Provider 专用 scope，例如 tenant 或 environment。',
-  },
-  {
-    name: 'sourceWorkflow',
-    type: 'string',
-    isOptional: true,
-    description: '启动 actor run 的 Workflow 名称（如适用）。',
-  },
+{
+  name: 'actorKind',
+  type: "'system'",
+  description: 'Marks the object form of the signal.',
+},
+{
+  name: 'agentId',
+  type: 'string',
+  isOptional: true,
+  description:
+    'Identity of the acting system agent. Unlike the check resource (the target), this names the actor itself, so a provider can enforce per-agent least privilege.',
+},
+{
+  name: 'permissions',
+  type: 'MastraFGAPermissionInput[]',
+  isOptional: true,
+  description:
+    "Permission grants claimed for this actor. This is an untrusted, self-asserted hint; a provider enforcing real least privilege resolves the agent's authoritative grants from a trusted source keyed by agentId rather than trusting these values.",
+},
+{
+  name: 'scope',
+  type: 'Record<string, string>',
+  isOptional: true,
+  description: 'Additional provider-specific scope for the actor, for example tenant or environment.',
+},
+{
+  name: 'sourceWorkflow',
+  type: 'string',
+  isOptional: true,
+  description: 'Name of the workflow that started the actor run, when applicable.',
+},
+{
+  name: 'propagate',
+  type: 'boolean',
+  isOptional: true,
+  defaultValue: 'false',
+  description:
+    "Forwards this actor into the agent and tool calls the framework makes for the run's declarative .then(agent) and .then(tool) steps. Custom step execute functions aren't covered and must pass actor explicitly. Ignored by authorization itself.",
+},
 ]}
 />
 
 ## `FGADeniedError` {/* #fgadeniederror */}
 
-授权检查被拒绝时抛出。`require` 和 `requireActor` 通过抛出该错误拒绝访问，Mastra 会将其作为 HTTP `403` 返回。
+当授权检查被拒绝时抛出。`require` and `requireActor` throw it to deny, and Mastra surfaces it as an HTTP `403`.
 
 ```typescript
 import { FGADeniedError } from '@mastra/core/auth/ee'
@@ -204,8 +222,8 @@ throw new FGADeniedError(user, { type: 'agent', id: 'reporter' }, 'agents:execut
 // Optional fourth argument: a reason string included in the error message.
 ```
 
-## 相关内容 {/* #related */}
+## 有关的 {/* #related */}
 
-- [细粒度授权](/docs/server/auth/fga)
-- [系统 actor](/docs/server/auth/fga#system-actors)
-- [WorkOS 身份验证](/reference/auth/workos)
+* [细粒度授权](/docs/auth/fga)
+* [系统参与者](/docs/auth/fga#system-actors)
+* [WorkOS 身份验证](/reference/auth/workos)

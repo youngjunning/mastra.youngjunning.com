@@ -1,0 +1,253 @@
+---
+title: 'Reference: createClassifierScorer | Evals'
+description: 'Create a Mastra scorer that projects one configured Classifier question into a numeric score while preserving typed evidence.'
+packages:
+  - '@mastra/core'
+---
+
+# 创建分类器评分器
+
+`createClassifierScorer()`适应一个构造函数配置[`Classifier`](/reference/classifier/classifier)对马斯特拉的得分手管道的问题。它返回正常`MastraScorer`带有数字`score`并在中保留选定的答案、概率、用法、警告和安全响应元数据`analyzeStepResult`.
+
+每个得分手跑动都呼叫`Classifier.decide()` to evaluate all questions configured on the classifier, then projects only the answer selected by `question` into a score between 0 and 1. The `question` option doesn't limit which questions are sent to the model. The adapter doesn't aggregate questions, apply boolean thresholds, infer choice ordering, or call a second judge model.
+
+要准确评估每次记分器运行的一个问题，请使用仅配置有该问题的单独分类器。例如，共享五个问题分类器的五个评分员在每次运行中评估所有五个问题，而不是仅评估他们选择的问题。
+
+Agent记分器运行包含的消息对象`Classifier.decide()` can't accept directly, so `state` is required. Use it to extract JSON-compatible text, for example with the helpers from `@mastra/evals/scorers/utils`.
+
+## 例子 {/* #example */}
+
+```typescript title="src/mastra/scorers/response-quality.ts"
+import { Classifier } from '@mastra/core/classifier'
+import { typeSafeAi } from '@ai-sdk/typesafe-ai'
+import { createClassifierScorer } from '@mastra/core/evals'
+import {
+  getAssistantMessageFromRunOutput,
+  getUserMessageFromRunInput,
+} from '@mastra/evals/scorers/utils'
+
+const responseJudge = new Classifier({
+  id: 'response-judge',
+  model: typeSafeAi.decisionModel('__AI_SDK_TYPESAFE_DECISION_MODEL__'),
+  questions: {
+    quality: {
+      type: 'score',
+      instructions: 'How well does the response answer the request?',
+      criteria: ['Incorrect or irrelevant', 'Partially correct', 'Correct and complete'],
+    },
+    route: {
+      type: 'choice',
+      criteria: {
+        correct: 'The response took the correct route',
+        partiallyCorrect: 'The response took a partly correct route',
+        incorrect: 'The response took the wrong route',
+      },
+    },
+    factual: {
+      type: 'boolean',
+      criteria: { true: 'The response is factual', false: 'The response contains factual errors' },
+    },
+  },
+})
+
+export const qualityScorer = createClassifierScorer({
+  id: 'response-quality',
+  description: 'Scores response quality with the configured classifier',
+  classifier: responseJudge,
+  question: 'quality',
+  type: 'agent',
+  state: ({ run }) => ({
+    input: getUserMessageFromRunInput(run.input) ?? '',
+    output: getAssistantMessageFromRunOutput(run.output) ?? '',
+  }),
+})
+```
+
+该分类器配置了三个问题，因此下面的示例可以重用它。每个`qualityScorer.run()` evaluates `quality`, `route`, and `factual`, but only the `quality` answer determines its score. To evaluate only `quality`, remove `route` and `factual`从这个分类器的`questions`.
+
+对于具有 N 个标准的评分问题，分类器的答案级别为`0` to `N - 1`, and `result.score` divides that level by `N - 1`. With three criteria, `Partially correct` scores `0.5`.
+
+## 选择题 {/* #choice-questions */}
+
+选择问题需要详尽的映射，为每个配置的选择提供一个分数`0` and `1`, without an assumed order or fallback.
+
+```typescript
+const routeScorer = createClassifierScorer({
+  id: 'route-score',
+  classifier: responseJudge,
+  question: 'route',
+  type: 'agent',
+  scores: {
+    correct: 1,
+    partiallyCorrect: 0.5,
+    incorrect: 0,
+  },
+  state: ({ run }) => ({
+    input: getUserMessageFromRunInput(run.input) ?? '',
+    output: getAssistantMessageFromRunOutput(run.output) ?? '',
+  }),
+})
+```
+
+所选选项及其可选概率分布仍然可用`result.analyzeStepResult.answer`.
+
+## 布尔问题 {/* #boolean-questions */}
+
+对于布尔问题，`result.score` is the classifier's estimated `P(true)` without applying a threshold or converting the probability to `0` or `1`.
+
+```typescript
+const factualityScorer = createClassifierScorer({
+  id: 'factuality',
+  classifier: responseJudge,
+  question: 'factual',
+  type: 'agent',
+  state: ({ run }) => ({
+    input: getUserMessageFromRunInput(run.input) ?? '',
+    output: getAssistantMessageFromRunOutput(run.output) ?? '',
+  }),
+})
+```
+
+## 请求上下文 {/* #request-context */}
+
+这`state` function receives the scorer run, including `run.requestContext`, so the classifier input can include per-request details such as a tenant policy. This lets one classifier judge the same output differently depending on who made the request:
+
+```typescript
+import { RequestContext } from '@mastra/core/request-context'
+
+export const policyScorer = createClassifierScorer({
+  id: 'policy-factuality',
+  classifier: responseJudge,
+  question: 'factual',
+  type: 'agent',
+  state: ({ run }) => ({
+    policy:
+      (run.requestContext instanceof RequestContext
+        ? run.requestContext.get('policy')
+        : run.requestContext?.policy) ?? null,
+    output: getAssistantMessageFromRunOutput(run.output) ?? '',
+  }),
+})
+```
+
+## 注册分类器 {/* #registered-classifiers */}
+
+当记分器运行时，传递一个分类器 ID 以从 Mastra 解析它。提供已配置的分类器类型和选定的问题作为泛型，因为 TypeScript 无法从字符串 ID 推断它们。
+
+```typescript
+import { Mastra } from '@mastra/core/mastra'
+
+const registeredScorer = createClassifierScorer<typeof responseJudge, 'quality'>({
+  id: 'registered-response-quality',
+  classifier: 'response-judge',
+  question: 'quality',
+  type: 'agent',
+  state: ({ run }) => ({
+    input: getUserMessageFromRunInput(run.input) ?? '',
+    output: getAssistantMessageFromRunOutput(run.output) ?? '',
+  }),
+})
+
+new Mastra({
+  classifiers: { responseJudge },
+  scorers: { registeredScorer },
+})
+```
+
+在向 Mastra 注册之前运行 ID 支持的记分器会拒绝并显示识别分类器 ID 和记分器 ID 的错误。您可以通过直接传递配置的分类器实例来避免注册表解析。
+
+## 选项 {/* #options */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'id',
+  type: 'string',
+  description: 'Unique scorer identifier.',
+  isOptional: false,
+},
+{
+  name: 'classifier',
+  type: 'Classifier | string',
+  description: 'A classifier with constructor-configured questions, or its registered Mastra ID.',
+  isOptional: false,
+},
+{
+  name: 'question',
+  type: 'keyof classifier.questions',
+  description:
+    'The configured question whose answer is projected into the score. All questions configured on the classifier are evaluated on each scorer run.',
+  isOptional: false,
+},
+{
+  name: 'scores',
+  type: 'Record<ChoiceKey, number>',
+  description:
+    'Required exhaustive mapping for choice questions. Each value must be between 0 and 1. Rejected for score and boolean questions.',
+  isOptional: true,
+},
+{
+  name: 'type',
+  type: "'agent' | 'trajectory' | { input: ZodSchema; output: ZodSchema }",
+  description: 'Scorer input and output typing. Matches createScorer().',
+  isOptional: true,
+},
+{
+  name: 'state',
+  type: '(context) => ClassifierState | Promise<ClassifierState>',
+  description:
+    'Selects JSON-compatible classifier state from the scorer step context, including run.input, run.output, and run.requestContext.',
+  isOptional: false,
+},
+{
+  name: 'maxRetries',
+  type: 'number',
+  description: 'Classifier model retry count. This is separate from scorer or batch retry policy.',
+  isOptional: true,
+},
+{
+  name: 'providerOptions',
+  type: 'SharedV4ProviderOptions',
+  description: 'Provider-specific options passed to Classifier.decide().',
+  isOptional: true,
+},
+{
+  name: 'prepareRun',
+  type: '(run: ScorerRun) => ScorerRun | Promise<ScorerRun>',
+  description: 'Transforms scorer run data before the pipeline executes.',
+  isOptional: true,
+},
+]}
+/>
+
+本厂还接受`name` and `description` from `createScorer()`.
+
+## 错误 {/* #errors */}
+
+`createClassifierScorer()`抛出一个`TypeError` when an inline classifier configuration is invalid:
+
+* 分类器没有配置问题。
+* 所选问题不存在。
+* 选择映射忽略了已配置的选择、包含未知的选择或具有非有限数字的值`0` and `1`.
+* 分数或布尔问题收到`scores` mapping.
+
+记分员跑动时失败拒绝`scorer.run()` with a `ScorerRunError` whose `failedStep` is `analyze`, and the original error is available as its `cause`. This covers:
+
+* 分类器评估失败或未返回所选问题的答案。
+* 决策模型拒绝所选问题。该错误命名了分类器、问题和评分器。
+* 在评分员注册到 Mastra 之前使用分类器 ID，或者该 ID 不存在于 Mastra 中。`classifiers`.
+* 已注册的分类器对此评分器的配置无效。
+
+## 结果证据 {/* #result-evidence */}
+
+`result.analyzeStepResult`包含：
+
+* `question`：所选的问题键。
+* `answer`：准确输入的选择、分数或布尔答案，包括可选概率。
+* `usage`：标准化分类器标记的使用。
+* `warnings`, `rounding`, and `providerMetadata`: Evidence returned by the decision model.
+* `response`：安全响应身份`id`, `timestamp`, and `modelId`.
+
+原始提供者响应正文和标头不会复制到记分器结果中。称呼`Classifier.decide()` directly when you need the full raw response.
+
+分类器评估在评分器的活动跟踪上下文中运行。

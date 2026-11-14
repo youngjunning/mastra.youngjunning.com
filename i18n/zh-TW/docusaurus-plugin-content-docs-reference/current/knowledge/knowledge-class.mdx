@@ -1,0 +1,384 @@
+---
+title: 'Reference: Knowledge class | Knowledge'
+description: 'Constructor options and methods of the Knowledge class.'
+packages:
+  - '@mastra/core'
+---
+
+# 知識課
+
+這`Knowledge`類別保存頁面和註釋，聲明存在哪些範圍以及誰在其中扮演哪個角色，並為附加Agent提供知識Tool。看[知識](/docs/knowledge/overview)了解它的作用和快速入門。
+
+：：：阿爾法
+
+知識處於阿爾法階段。其 API 可能會在不同版本之間變更。
+
+:::
+
+## 使用範例 {/* #usage-example */}
+
+```typescript title="src/mastra/knowledge.ts"
+import { Knowledge, knowledgeMemoryScopes } from '@mastra/core/knowledge'
+import { LibSQLStore } from '@mastra/libsql'
+
+export const knowledge = new Knowledge({
+  id: 'company',
+  storage: new LibSQLStore({ id: 'knowledge', url: 'file:./knowledge.db' }),
+  tools: true,
+  scopes: {
+    ...knowledgeMemoryScopes(),
+    'team:$orgId:$teamId': {
+      access: [
+        { principal: 'self', role: 'editor' },
+        { principal: 'org:$orgId', role: 'viewer' },
+      ],
+    },
+  },
+})
+```
+
+## 建構函數選項 {/* #constructor-options */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'scopes',
+  type: 'KnowledgeScopeDeclarations',
+  description:
+    "Scope types and concrete scopes this Knowledge knows, keyed by pattern (`team:$orgId:$teamId`) or address (`org:acme`). Required. Every run scope of an attached agent must match a declaration. Spread `knowledgeMemoryScopes()` for Memory's scopes, or pass `{}` to declare none. See [Scope declarations](/reference/knowledge/scope-declarations) for the fields of each declaration.",
+},
+{
+  name: 'id',
+  type: 'string',
+  description: 'Identifier. Random if omitted.',
+  isOptional: true,
+},
+{
+  name: 'name',
+  type: 'string',
+  description: 'Name used in logs. Defaults to `id`.',
+  isOptional: true,
+},
+{
+  name: 'description',
+  type: 'string',
+  description: "Stored as `knowledge.description`. Agents and Studio don't use it yet.",
+  isOptional: true,
+},
+{
+  name: 'storage',
+  type: 'MastraCompositeStore',
+  description: 'Storage adapter. Without it, Knowledge uses the storage of the Mastra instance it is registered on.',
+  isOptional: true,
+},
+{
+  name: 'tools',
+  type: 'boolean | { read?: boolean | { maxTokens?: number }; write?: boolean }',
+  description:
+    'Tools an attached agent gets. `true` gives all five: `knowledge_list`, `knowledge_search`, `knowledge_read`, `knowledge_page` and `knowledge_note`. `{ read: true }` gives the first three. `{ write: true }` gives the last two. `{ read: { maxTokens } }` turns on read and caps each `knowledge_read` body or `match` result, and each `knowledge_list` result, at `maxTokens`: 1,000 by default, at least 100. See [Read pages](/docs/knowledge/agents-and-tools#read-pages).',
+  isOptional: true,
+  defaultValue: 'false',
+},
+{
+  name: 'pinnedContext',
+  type: 'boolean | { maxPins?: number; maxTokens?: number }',
+  description:
+    'Pinned pages delivered to an attached agent every turn, plus the `knowledge_pin` tool. Needs Memory. `maxPins` defaults to 20 and `maxTokens` to 500, with no maximum. See [Pinned context](/docs/knowledge/pinned-context).',
+  isOptional: true,
+  defaultValue: 'false',
+},
+{
+  name: 'vector',
+  type: 'MastraVector',
+  description:
+    'Vector store for semantic search. Pass with `embedder`; passing only one throws. Without both, search is keyword only.',
+  isOptional: true,
+},
+{
+  name: 'embedder',
+  type: 'MastraEmbeddingModel<string>',
+  description: 'Embedding model for semantic search. Pass with `vector`.',
+  isOptional: true,
+},
+{
+  name: 'embedderOptions',
+  type: 'MastraEmbeddingOptions',
+  description:
+    'Options passed to the embedder on every call: `maxRetries`, `headers`, `providerOptions`, `telemetry`.',
+  isOptional: true,
+},
+{
+  name: 'instructions',
+  type: 'false | string | ((parts: { read: string; write: string; pins: string }) => string)',
+  description:
+    'Replaces the built-in usage instructions added when Knowledge attaches tools. `false` adds none. A function receives the built-in parts, with an empty string for each disabled group, and must return the same text for the same input so the prompt stays cacheable. See [Tool instructions](/reference/knowledge/tool-instructions).',
+  isOptional: true,
+},
+]}
+/>
+
+構造函數拋出一個`KnowledgeDeclarationError` when `scopes` is missing or a declaration is invalid, for example two patterns of one type that overlap or a rule principal that doesn't bind. Without `scopes` the message is:
+
+```text
+Knowledge needs `scopes`: declare the scopes its runs hold, e.g. `scopes: { ...knowledgeMemoryScopes() }`, or `{}` for none.
+```
+
+## 方法 {/* #methods */}
+
+### Tool {/* #tools */}
+
+#### `createTools()` {/* #createtools */}
+
+```typescript oxfmt:false
+createTools(options?: { read?: boolean; write?: boolean; pinnedContext?: boolean }): Record<string, Tool>
+```
+
+傳回用於明確連線的知識Tool，例如未附加的Agent`knowledge`. Each option overrides the matching group set on the instance, and an omitted option keeps it. On an instance with `pinnedContext` on, `createTools({ write: false })` also returns `knowledge_pin`. See [Knowledge tools](/reference/knowledge/knowledge-tools).
+
+```typescript
+const tools = knowledge.createTools({ write: false })
+// knowledge_list, knowledge_search, knowledge_read
+```
+
+#### `getInstructions()` {/* #getinstructions */}
+
+```typescript oxfmt:false
+getInstructions(options?: { read?: boolean; write?: boolean; pinnedContext?: boolean }): string
+```
+
+返回附帶的使用說明`createTools(options)`, built the same way as for an attached agent: the built-in parts for the enabled groups, or what the `instructions` option makes of them.
+
+### 使用權 {/* #access */}
+
+#### `explainAccess()` {/* #explainaccess */}
+
+```typescript oxfmt:false
+explainAccess(
+  runScopes: readonly string[],
+  target: { scope: string } | { page: string },
+): Promise<KnowledgeAccessExplanation>
+```
+
+解釋為何持有跑步`runScopes` can or can't reach a scope or page. `runScopes` are canonical addresses, including `resource:` and `thread:` (`resource:slack%3AU123` for Memory resource `slack:U123`). `target.page` takes a page ID or a page path such as `org:acme#policies/refund`.
+
+```typescript
+await knowledge.explainAccess(['org:acme'], { page: 'team:acme:support#refunds' })
+// {
+//   role: 'viewer',
+//   reasons: [{ principal: 'org:acme', role: 'viewer', rule: 'team:$orgId:$teamId', via: 'rule' }],
+//   page: { id: '…', scope: 'team:acme:support' },
+// }
+
+await knowledge.explainAccess(['org:globex'], { page: 'team:acme:support#refunds' })
+// { role: null, reasons: [], page: { id: '…', scope: 'team:acme:support' }, reason: 'hidden' }
+```
+
+<PropertiesTable
+  content={[
+{
+  name: 'role',
+  type: "'viewer' | 'contributor' | 'editor' | 'owner' | null",
+  description: "The strongest role the run has on the target scope. `null` when it can't read it.",
+},
+{
+  name: 'reasons',
+  type: 'Array<{ principal: string; role: string; rule: string; via: "self" | "rule" | "belongsTo" }>',
+  description:
+    "Every rule that gives one of the run's scopes a role there: the held scope, the role, the declaration key or concrete address, and how the rule bound.",
+},
+{
+  name: 'page',
+  type: '{ id: string; scope: string }',
+  description: 'The resolved page and its home scope, for page targets that exist.',
+  isOptional: true,
+},
+{
+  name: 'reason',
+  type: "'missing' | 'hidden' | 'no-rule'",
+  description:
+    "`missing`: no such page. `hidden`: the page exists but the run can't read its scope. `no-rule`: no rule gives the run a role on the scope.",
+  isOptional: true,
+},
+]}
+/>
+
+沒有聲明的運行範圍會拋出異常，就像在運行開始時一樣：
+
+```text
+Knowledge run scope "project:x" does not match a declared scope type. Declare it in Knowledge `scopes` (for Memory's resource:/thread: scopes, spread `...knowledgeMemoryScopes()`).
+```
+
+一個`target.scope` with no declaration throws `Knowledge scope "project:x" does not match a declared scope type.`
+
+：：：警告
+
+`explainAccess()`僅限主機。它區分遺失的頁面和隱藏的頁面，運行時永遠不能學習。不要透過AgentTool或未經管理員級別身份驗證的伺服器路由公開它。
+
+:::
+
+#### `readScopeFor()` {/* #readscopefor */}
+
+```typescript oxfmt:false
+readScopeFor(principals: readonly string[]): Promise<KnowledgeReadScope>
+```
+
+返回持有者的內容`principals` can read: the principals themselves plus every scope their rules give them a role on. Roles don't carry over to further scopes. Pass the result as `read` to the store's read methods when host code reads Knowledge for a user. Undeclared principals throw `Knowledge run scope "project:x" does not match a declared scope type.` An empty list reads nothing.
+
+#### `scopeGrants()` {/* #scopegrants */}
+
+```typescript oxfmt:false
+scopeGrants(scope: { address: string; parentAddress?: string | null }): KnowledgeScopeGrant[]
+```
+
+聲明賦予此角色的其他範圍，如`{ principal, role }` with the strongest role per principal and `self` rules left out. It reads no storage. `parentAddress` supplies the tree parent that rules binding through `belongsTo` need. Use it for a browsing UI that draws access between scopes. Use `explainAccess()` for one run's view.
+
+#### `scopeDeclaration()` {/* #scopedeclaration */}
+
+```typescript oxfmt:false
+scopeDeclaration(key: string): KnowledgeScopeDeclarationInfo | undefined
+```
+
+透過其聲明鍵返回建立作用域的聲明以供顯示：`{ key, description?, displayLabel?, belongsTo?, children }`. Child keys work too, such as `org:$orgId/private`. Access rules are left out. Use `explainAccess()` for those. Returns `undefined` for an unknown key.
+
+#### `scopeLabel()` {/* #scopelabel */}
+
+```typescript oxfmt:false
+scopeLabel(address: string): string | undefined
+```
+
+返回`displayLabel` for a scope address with its `$params` filled in: `'$orgId organization'` on `org:$orgId` gives `acme organization` for `org:acme`. A concrete address's own `displayLabel` wins. Returns `undefined` when the address matches no declaration or has no label.
+
+### 主持人寫道 {/* #host-writes */}
+
+`upsertPage()`, `removePage()`, `addNote()`, `updateNote()` and `removeNote()` are host-only: they check no run scopes or access rules. Don't expose them through an agent tool, or through a server route without admin-level auth.
+
+#### `upsertPage()` {/* #upsertpage */}
+
+```typescript oxfmt:false
+upsertPage(input: {
+  scope: string
+  path: string
+  name: string
+  description?: string
+  body?: string
+  author?: string
+}): Promise<{ page: KnowledgePage; status: 'created' | 'updated' | 'unchanged' }>
+```
+
+建立或更新頁面`path` (keys joined by `/`, such as `guides/install`) in `scope`, creating the scope and any missing pages along the path. Writing the same path again updates that page. `description` and `body` keep their stored values when left out. An `unchanged` result means nothing was written. The page keeps its version, emits no change event and isn't re-embedded. `author` is recorded as the writer and defaults to `host`. A path with no keys throws `Knowledge page path "<path>" needs at least one key.` See [Load your content](/docs/knowledge/load-your-content).
+
+#### `removePage()` {/* #removepage */}
+
+```typescript oxfmt:false
+removePage(input: { scope: string; path: string; author?: string }): Promise<KnowledgePage | null>
+```
+
+刪除位於`path` and resolves to it, or to `null` when no page is there. Throws `"<scope>#<path>" has child pages; remove them first.` for a page with children, and `"<scope>#<path>" is declared in config; change the scope's pages to remove it.` for a template page. Throws without retrying when another write changed the page first.
+
+#### `addNote()` {/* #addnote */}
+
+```typescript oxfmt:false
+addNote(input: {
+  scope: string
+  path: string
+  text: string
+  when?: Date
+  stamps?: string[]
+  author?: string
+}): Promise<KnowledgeNote>
+```
+
+在頁面上新增註釋`path`. `text` is at most 250 tokens. `[[scope#path]]` mentions of existing pages link the note to them. Other `[[...]]` text stays plain. `stamps` are the scope addresses whose readers see the note and default to the page's scope. Throws `KnowledgeNotFoundError` when the page doesn't exist.
+
+#### `updateNote()` {/* #updatenote */}
+
+```typescript oxfmt:false
+updateNote(input: { id: string; text: string; when?: Date; stamps?: string[]; author?: string }): Promise<KnowledgeNote>
+```
+
+取代註釋：新增註釋，然後刪除舊註釋，並解析為具有新 ID 的新註釋。`when` and `stamps` keep their old values when left out or empty. If removing the old note fails after the add, both notes exist and the call throws, so remove the one you don't want. When the old note was already removed by someone else, the new note is removed too and nothing is left behind.
+
+#### `removeNote()` {/* #removenote */}
+
+```typescript oxfmt:false
+removeNote(input: { id: string; author?: string }): Promise<KnowledgeNote | null>
+```
+
+`null` when it's already gone.
+
+### 儲存與維護 {/* #storage-and-maintenance */}
+
+#### `getStorage()` {/* #getstorage */}
+
+```typescript oxfmt:false
+getStorage(): Promise<KnowledgeStorage>
+```
+
+返回知識存儲，用於主機程式碼，例如管理頁面、刪除和您自己的匯入腳本。它的讀取方法採用`read`: `'all'` skips the role checks, so pass the value from `readScopeFor()` whenever a read should be limited to what a user can see.
+
+```typescript
+const store = await knowledge.getStorage()
+const read = await knowledge.readScopeFor(['org:acme'])
+const [scope] = await store.getScopesByAddress(['team:acme:support'])
+const page = await store.getPageByPath({ scopeId: scope.id, path: ['handbook', 'refunds'], read })
+```
+
+#### `reindexLinks()` {/* #reindexlinks */}
+
+```typescript oxfmt:false
+reindexLinks(): Promise<number>
+```
+
+從每個頁面主體重建頁面連結索引，並解析它索引的頁面數量。寫入使索引保持最新，因此這適用於早於索引或直接寫入儲存的頁面。它不需要向量存儲。
+
+#### `renameScopeDeclaration()` {/* #renamescopedeclaration */}
+
+```typescript oxfmt:false
+renameScopeDeclaration(from: string, to: string): Promise<number>
+```
+
+移動從聲明鍵建立的儲存範圍`from`, and its child scopes (`from/<name>`), to key `to`, in one step. Resolves to how many scopes moved. Refuses, and changes nothing, when `from` is still in `scopes`, `to` isn't, or a stored address doesn't match `to`'s pattern. Until stored keys match `scopes`, the instance refuses to run.
+
+在 MongoDB 上，重新命名僅在副本集上的交易中執行。在獨立伺服器上，它不是原子的，並且中途失敗可能會導致某些範圍被重新命名。
+
+看[rename or retire a scope type](/reference/knowledge/scope-declarations#rename-or-retire-a-scope-type).
+
+### 活動 {/* #events */}
+
+#### `onChange()` {/* #onchange */}
+
+```typescript oxfmt:false
+onChange(listener: (event: KnowledgeChangeEvent) => void): () => void
+```
+
+通話`listener` after each committed write made through this instance's store: tool writes, host writes through `getStorage()`, and new scopes. Returns a function that removes the listener. Use it to refresh a live UI. Writes made on a store obtained another way aren't seen.
+
+事件攜帶 ID，而不是內容或存取權限，因此將事件轉發給人們的任何內容都必須重新閱讀該人的閱讀範圍內的每個頁面`readScopeFor()`:
+
+| `kind` | `op` | Fields |
+| - | - | - |
+| `scope` | `create` | `pageId`, `scopeId` (the new scope page's ID) |
+| `page` | `create`, `update`, `move`, `merge`, `delete` | `pageId`, `scopeId`; `fromScopeId` for `move` and `merge`; `sourceId` (the page merged away) for `merge` |
+| `note` | `add`, `restamp`, `remove`, `restore` | `pageId`, `noteId` |
+| `pin` | `add`, `remove` | `pageId` |
+
+每個活動還有`knowledgeId` and `at`. Creating a scope emits one `scope` event, not one per child scope or template page, so re-list the scope when it arrives. A listener that throws is logged and doesn't fail the write.
+
+```typescript
+const unsubscribe = knowledge.onChange(event => {
+  if (event.kind === 'page') refreshPage(event.pageId)
+})
+```
+
+### 特性 {/* #properties */}
+
+#### `pinnedContextEnabled` {/* #pinnedcontextenabled */}
+
+`boolean`。無論`pinnedContext` is on, so attached agents get pinned pages every turn.
+
+## 有關的 {/* #related */}
+
+* [`knowledgeMemoryScopes()`](/reference/knowledge/knowledge-memory-scopes)
+* [知識Tool](/reference/knowledge/knowledge-tools)
+* [範圍聲明](/reference/knowledge/scope-declarations)
+* [範圍和存取權限](/docs/knowledge/scopes-and-access)

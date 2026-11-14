@@ -1,0 +1,570 @@
+---
+title: 'Subagents'
+description: 'Build Mastra supervisor agents that delegate work to specialized subagents with hooks, request context, message filtering, and completion scoring.'
+packages:
+  - '@mastra/core'
+  - '@mastra/memory'
+---
+
+# 子Agent
+
+**添加于：** `@mastra/core@1.8.0`
+
+子Agent是专门的Agent，另一个Agent可以将任务委派给它。将它们添加到父Agent中`agents` property, then call [`Agent.stream()`](/reference/streaming/agents/stream)或者[`Agent.generate()`](/reference/agents/generate)。父Agent使用其指令和每个子Agent的指令`description`决定何时以及如何委派任务。
+
+## 何时使用子Agent {/* #when-to-use-subagents */}
+
+当任务需要不同专业的Agent一起工作时，请使用子Agent。父Agent决定何时委托并将上下文传递给每个子Agent。然后它综合他们的结果。
+
+常见用例：
+
+* 研究和编写Workflow程，其中一个Agent收集数据，另一个Agent生成内容
+* 每个阶段需要不同专业知识的多步骤任务
+* 需要对委派行为进行细粒度控制的任务
+
+：：：笔记
+
+协调子Agent的父Agent通常称为主管。主管模式是在 Mastra 中构建多Agent系统的一种方法。对于其他模式，请阅读[conceptual overview](/docs/guides/multi-agent-systems).
+
+:::
+
+## 快速入门 {/* #quickstart */}
+
+定义具有清晰描述的子Agent，然后将它们添加到父Agent中：
+
+```typescript title="src/mastra/agents/parent-agent.ts"
+import { Agent } from '@mastra/core/agent'
+import { Memory } from '@mastra/memory'
+import { LibSQLStore } from '@mastra/libsql'
+
+const researchAgent = new Agent({
+  id: 'research-agent',
+  // highlight-next-line
+  description: 'Gathers factual information and returns bullet-point summaries.',
+  model: '__GATEWAY_OPENAI_MODEL_LUNA__',
+})
+
+const writingAgent = new Agent({
+  id: 'writing-agent',
+  // highlight-next-line
+  description: 'Transforms research into well-structured articles.',
+  model: '__GATEWAY_OPENAI_MODEL_LUNA__',
+})
+
+// highlight-start
+const parentAgent = new Agent({
+  id: 'parent-agent',
+  instructions: `You coordinate research and writing using specialized agents.
+    Delegate to research-agent for facts, then writing-agent for content.`,
+  model: '__GATEWAY_OPENAI_MODEL__',
+  agents: { researchAgent, writingAgent },
+  memory: new Memory({
+    storage: new LibSQLStore({ id: 'storage', url: 'file:mastra.db' }),
+  }),
+})
+// highlight-end
+
+const stream = await parentAgent.stream('Research AI in education and write an article', {
+  maxSteps: 10,
+})
+
+for await (const chunk of stream.textStream) {
+  process.stdout.write(chunk)
+}
+```
+
+## 委托挂钩 {/* #delegation-hooks */}
+
+委托挂钩允许您在委托发生时拦截、修改或拒绝委托。在下面配置它们`delegation` option, either in the agent's `defaultOptions` or per-call.
+
+### `onDelegationStart` {/* #ondelegationstart */}
+
+在父Agent委托给子Agent之前调用。返回一个对象来控制委托：
+
+* `proceed: true`：允许委派（默认行为）
+* `proceed: false`：拒绝委托`rejectionReason`
+* `modifiedPrompt`：重写发送给子Agent的提示
+* `modifiedMaxSteps`：设置子Agent的迭代预算。这会覆盖模型提供的上限`maxSteps`, so it can raise the budget as well as lower it
+* `threadMetadata`：附加元数据（例如`tenantId`) to the subagent's thread when it's created, so you can filter threads with `memory.listThreads({ filter: { metadata } })`
+
+:::注意
+当主管模型通过时`maxSteps` to a delegation, Mastra caps it at the subagent's `defaultOptions.maxSteps`. The model can lower the subagent's budget that way, but not raise it. `modifiedMaxSteps` is applied after that cap and replaces the capped value, so it can raise the budget above the subagent's default. Use it to stop a supervisor model from cutting a subagent short.
+:::
+
+```typescript title="src/mastra/agents/parent-agent.ts"
+const stream = await parentAgent.stream('Research AI trends', {
+  maxSteps: 10,
+  delegation: {
+    onDelegationStart: async context => {
+      console.log(`Delegating to: ${context.primitiveId}`)
+
+      // Modify the prompt for a specific agent
+      if (context.primitiveId === 'research-agent') {
+        return {
+          proceed: true,
+          modifiedPrompt: `${context.prompt}\n\nFocus on 2024-2025 data.`,
+          modifiedMaxSteps: 5,
+        }
+      }
+
+      // Reject delegation after too many iterations
+      if (context.iteration > 8) {
+        return {
+          proceed: false,
+          rejectionReason: 'Max iterations reached. Synthesize current findings.',
+        }
+      }
+
+      return { proceed: true }
+    },
+  },
+})
+```
+
+这`context` object includes:
+
+|物业 |描述 |
+| - | - |
+|`primitiveId` | The ID of the subagent being delegated to |
+| `prompt` | The prompt the parent agent is sending |
+| `iteration` | Current iteration number |
+| `requestContext` | The request context the subagent run will receive |
+
+### 委托边界处的请求上下文 {/* #request-context-at-the-delegation-boundary */}
+
+每个委托都会收到一个请求上下文，其条目是从父运行浅层复制的，不包括运行范围的身份密钥。在子Agent运行期间设置或删除条目不会影响父Agent的上下文。将条目设置为`context.requestContext` in `onDelegationStart` to pass values to the delegated run:
+
+```typescript title="src/mastra/agents/parent-agent.ts"
+const stream = await parentAgent.stream('Research AI trends', {
+  maxSteps: 10,
+  delegation: {
+    onDelegationStart: async context => {
+      context.requestContext.set('audience', 'technical')
+    },
+  },
+})
+```
+
+子Agent在其Tool和动态配置中读取这些条目，例如`instructions: ({ requestContext }) => ...`. See [Request Context](/docs/server/request-context) for details. Values must be JSON-serializable to work with durable agents.
+
+### `onDelegationComplete` {/* #ondelegationcomplete */}
+
+代表团结束后调用。用它来检查结果或提供反馈，或者停止执行：
+
+* `context.bail()`：立即停止父Agent的循环
+* 返回`{ feedback: '...' }`: Add feedback that gets saved to the parent agent's memory and is available on the next turn
+* 返回`{ resultText: '...' }`: Replace the tool result text the parent model sees for this delegation, within the current run
+
+放`resultText` when the subagent's own result would give the parent a misleading signal. For example, empty text from a subagent stopped on a tool-calls step looks like a successful but empty delegation to the parent model. You can also replace the error text from a failed delegation with a more useful message. This doesn't recover the delegation. The parent still receives a failed tool result. Unlike `feedback` on the next turn, `resultText` affects the parent's reasoning immediately.
+
+要在失败时停止父Agent并保存反馈以供稍后使用，请调用`bail()` and return `feedback`:
+
+```typescript title="src/mastra/agents/parent-agent.ts"
+const stream = await parentAgent.stream('Research AI trends', {
+  maxSteps: 10,
+  delegation: {
+    onDelegationComplete: async context => {
+      console.log(`Completed: ${context.primitiveId}`)
+
+      // Bail on errors
+      if (context.error) {
+        context.bail()
+        return {
+          feedback: `Delegation to ${context.primitiveId} failed: ${context.error}. Try a different approach.`,
+        }
+      }
+    },
+  },
+})
+```
+
+这`context` object includes:
+
+|物业 |描述 |
+| - | - |
+|`primitiveId` | The ID of the subagent that ran |
+| `result` | The subagent's response, including `text`, `usage`, `finishReason`, `subAgentToolResults`, `subAgentPendingToolCalls`, `subAgentThreadId`, and `subAgentResourceId` when available |
+| `success` | Whether the delegation succeeded |
+| `error` | The original error if the delegation failed |
+| `messages` | The collected subagent transcript, including partial messages when available |
+| `bail()` | Function to stop the parent agent's loop |
+
+#### 失败的代表团 {/* #failed-delegations */}
+
+当子Agent运行失败时，父模型会收到失败的Tool结果以及一般错误消息。这不会自动停止父Agent，这可以解释失败或选择其他方法。称呼`context.bail()` to stop its loop instead.
+
+钩子接收`success: false`, the original `error`, and any collected partial results and messages. Returning `resultText` replaces the error text the parent model sees without changing the delegation's failed status or discarding its original cause. An empty string is also a valid replacement.
+
+要让父级继续显示策划的失败消息而不是停止其循环，请返回`resultText` without calling `bail()`:
+
+```typescript title="src/mastra/agents/parent-agent.ts"
+const stream = await parentAgent.stream('Research AI trends', {
+  maxSteps: 10,
+  delegation: {
+    onDelegationComplete: ({ success }) => {
+      if (!success) {
+        return {
+          resultText: 'The delegated task failed. Try another approach.',
+        }
+      }
+    },
+  },
+})
+```
+
+更喜欢精心策划的消息，如本例所示。返回`{ resultText: error.message }` explicitly forwards the underlying message to the parent model's provider, and the model may repeat it to the end user. Provider errors can contain sensitive information. A generic `resultText` isn't a redaction policy for logs, traces, or streamed error payloads.
+
+对于代表运行的[background tasks](/docs/harness/background-tasks), configured retries can invoke `onDelegationComplete` once per attempt. Account for repeated calls if your hook has side effects.
+
+### 挂钩错误 {/* #hook-errors */}
+
+如果委托钩子抛出，则默认情况下委托将继续：`onDelegationStart` proceeds with the original prompt, `messageFilter` falls back to the unfiltered context, and `onDelegationComplete` keeps the subagent's original result. Set `hookErrorStrategy: 'throw'` to fail the delegation instead.
+
+```typescript title="src/mastra/agents/parent-agent.ts"
+const stream = await parentAgent.stream('Research AI trends', {
+  maxSteps: 10,
+  delegation: {
+    hookErrorStrategy: 'throw',
+    onDelegationComplete: async ({ result }) => {
+      // If this throws, the parent sees a failed delegation instead of a
+      // successful one whose result was silently dropped.
+      await reportToAnalytics(result)
+    },
+  },
+})
+```
+
+无论哪种方式，每个钩子失败都会记录在运行的请求上下文中`__mastra_delegationHookErrors` as a list of `{ hook, primitiveId, toolCallId, runId, name, message }` entries, so you can detect a hook failure programmatically:
+
+```typescript title="src/mastra/agents/parent-agent.ts"
+import { RequestContext } from '@mastra/core/request-context'
+
+const requestContext = new RequestContext()
+
+await parentAgent.generate('Research AI trends', { maxSteps: 10, requestContext })
+
+const hookErrors = requestContext.get('__mastra_delegationHookErrors') ?? []
+```
+
+什么时候`hookErrorStrategy` is `'throw'`, a throwing `onDelegationStart` blocks the subagent from running at all, and a throwing `messageFilter` or `onDelegationComplete` surfaces to the parent as a failed tool call. If `onDelegationComplete` throws while handling a failed delegation, the original delegation error remains the surfaced error. The hook isn't invoked again for its own failure.
+
+## 消息过滤 {/* #message-filtering */}
+
+默认情况下，子Agent从父Agent接收完整的对话上下文。使用`messageFilter` to control what messages are shared, for example, to remove sensitive data or limit context size.
+
+```typescript title="src/mastra/agents/parent-agent.ts"
+const stream = await parentAgent.stream('Research AI trends', {
+  maxSteps: 10,
+  delegation: {
+    messageFilter: ({ messages, primitiveId, prompt }) => {
+      // Remove messages containing sensitive data
+      return messages
+        .filter(msg => {
+          const content =
+            typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
+          return !content.includes('confidential')
+        })
+        .slice(-10) // Only pass the last 10 messages
+    },
+  },
+})
+```
+
+回调收到`messages` (the full conversation history), `primitiveId` (the subagent ID), and `prompt` (the delegation prompt). Return the filtered array of messages.
+
+## 子Agent结果上下文 {/* #subagent-result-context */}
+
+当子Agent完成时，父Agent的模型会在以后的迭代中接收子Agent的文本响应。嵌套Tool调用和子Agent元数据（例如线程和资源 ID）不会添加到父Agent的模型上下文中。
+
+应用程序代码和 UI 集成仍然可以检查`subAgentToolResults` and the rest of the raw delegation result in the tool result payload.
+
+这样可以保持调试和显示数据可用，而无需将嵌套Tool参数或输出发送回父Agent的下一个模型调用。
+
+子Agent无法运行客户端Tool（没有`execute` function). If a subagent calls one, its run stops at that step with `finishReason: 'tool-calls'`. The delegation result lists the unresolved calls in `subAgentPendingToolCalls`, the parent agent's model is told which tools were never run, and Mastra logs a warning. Give client tools to the parent agent, or use [`suspend()`](/docs/agents/human-in-the-loop#use-suspend-in-supervisor-agents) in the subagent's tool when it needs input from the user.
+
+放`includeSubAgentToolResultsInModelContext` to include the full subagent result, including nested tool results and subagent metadata, in the parent agent's model context.
+
+```typescript title="src/mastra/agents/parent-agent.ts"
+await parentAgent.generate('Research AI trends', {
+  delegation: {
+    includeSubAgentToolResultsInModelContext: true,
+  },
+})
+```
+
+### 重用早期的子Agent结果 {/* #reusing-an-earlier-subagent-result */}
+
+默认情况下，子Agent结果作为Tool结果到达父Agent，这些结果从转发到后续子Agent的上下文中删除。父Agent必须在下一个委托提示中重申先前的结果，这会消耗令牌并丢失详细信息。
+
+放`enableResultReferences` to let a later delegation reuse an earlier result verbatim:
+
+```typescript title="src/mastra/agents/parent-agent.ts"
+await parentAgent.generate('Find and fix the token refresh bug', {
+  delegation: {
+    enableResultReferences: true,
+  },
+})
+```
+
+启用后：
+
+* 每个成功的非空子Agent结果都会获得一个参考 ID，例如`explorer-1`. The parent agent's model sees it as a `[ref: explorer-1]` line after the subagent's text.
+* 委派Tool获得了`contextFromRefs` input. The parent agent can pass earlier IDs, either as strings (`["explorer-1"]`) or as objects with an optional label and note (`[{ ref: "explorer-1", as: "investigation", note: "bug location" }]`).
+* 引用的文本插入到委托提示之前，每个结果都在其自己的标记块中，与之前的子Agent生成的结果完全相同。`onDelegationStart` and `messageFilter` receive the expanded prompt.
+* 如果`onDelegationComplete` returns `resultText`, the replaced text is what later delegations receive.
+
+对于单个父Agent运行，引用保存在内存中，并且不会持久保存。被拒绝、失败、空和后台任务委托不会收到参考 ID。未知 ID 将被跳过并出现警告，并且委派将继续。
+
+引用的文本是从另一个Agent输出的。每个块都使用一个新的、不可预测的标签，并告诉接收子Agent将内容视为数据，但如果子Agent处理不受信任的输入，请添加您自己的检查`onDelegationStart` or through processors.
+
+## 迭代监控 {/* #iteration-monitoring */}
+
+`onIterationComplete`在父Agent循环的每次迭代之后调用。用它来监视执行或指导下一次迭代。您也可以提前停止执行。
+
+```typescript title="src/mastra/agents/parent-agent.ts"
+const stream = await parentAgent.stream('Research AI trends', {
+  maxSteps: 10,
+  onIterationComplete: async context => {
+    console.log(`Iteration ${context.iteration}/${context.maxIterations}`)
+    console.log(`Finish reason: ${context.finishReason}`)
+
+    // Inject feedback to guide the agent
+    if (!context.text.includes('recommendations')) {
+      return {
+        continue: true,
+        feedback: 'Please include specific recommendations in your analysis.',
+      }
+    }
+
+    // Stop early when the response is sufficient
+    if (context.text.length > 1000 && context.finishReason === 'stop') {
+      return { continue: false }
+    }
+
+    return { continue: true }
+  },
+})
+```
+
+返回`{ continue: true }` to keep iterating, or `{ continue: false }` to stop. Include optional `feedback` to inject guidance into the conversation. When `feedback` is combined with `continue: false`, the model may get one final turn for a text response that incorporates the feedback. The extra turn is granted only while the current iteration is active (e.g., after tool calls).
+
+## 内存隔离 {/* #memory-isolation */}
+
+Mastra 在委派期间隔离子Agent内存。子Agent会收到完整的对话上下文，以便做出更好的决策，但只有其特定的授权提示和响应才会保存到内存中。
+
+工作原理：
+
+1. **完整上下文转发**：当父Agent委托时，子Agent接收父Agent对话中的所有消息
+2. **作用域内存保存**：仅将委托提示和子Agent的响应保存到子Agent的内存中
+3. **每次调用都有新线程**：每个委托使用唯一的线程ID，确保干净分离
+
+因此，子Agent可以获得所需的上下文，而不会因父Agent的整个对话而使自己的记忆混乱。访问[memory in multi-agent systems](/docs/memory/overview#memory-in-multi-agent-systems) for more details.
+
+## Tool批准传播 {/* #tool-approval-propagation */}
+
+Tool批准通过授权链传播。当子Agent使用Tool时`requireApproval: true` or calls `suspend()`, the approval request surfaces in the parent agent's stream.
+
+```typescript
+const sensitiveDataTool = createTool({
+  id: 'get-user-data',
+  requireApproval: true,
+  execute: async input => {
+    return await database.getUserData(input.userId)
+  },
+})
+
+const dataAgent = new Agent({
+  id: 'data-agent',
+  tools: { sensitiveDataTool },
+})
+
+const parentAgent = new Agent({
+  id: 'parent-agent',
+  agents: { dataAgent },
+  memory: new Memory(),
+})
+
+const stream = await parentAgent.stream('Get data for user 123')
+
+for await (const chunk of stream.fullStream) {
+  if (chunk.type === 'tool-call-approval') {
+    console.log('Tool requires approval:', chunk.payload.toolName)
+  }
+}
+```
+
+## 消除 {/* #cancellation */}
+
+当你通过一个`abortSignal` to the parent agent's [`stream()`](/reference/streaming/agents/stream) or [`generate()`](/reference/agents/generate) call, Mastra forwards that same signal to delegated subagents. Calling `AbortController.abort()` cancels in-flight subagent runs at their next step instead of letting them run to completion.
+
+```typescript
+const controller = new AbortController()
+
+const stream = await parentAgent.stream('Research AI trends', {
+  abortSignal: controller.signal,
+})
+
+// Cancel the parent agent and any in-flight subagents
+controller.abort()
+```
+
+## 任务完成评分 {/* #task-completion-scoring */}
+
+Agent并不总是在第一次尝试时产生完整、正确的输出。任务完成评分器可以通过在每次迭代后验证任务是否完成来提供帮助。如果验证失败，父Agent将继续迭代。失败的记分员的反馈包含在对话上下文中，以便子Agent可以看到缺少的内容。
+
+```typescript
+import { createScorer } from '@mastra/core/evals'
+
+const taskCompleteScorer = createScorer({
+  id: 'task-complete',
+  name: 'Task Completeness',
+}).generateScore(async context => {
+  const text = (context.run.output || '').toString()
+  const hasAnalysis = text.includes('analysis')
+  const hasRecommendations = text.includes('recommendation')
+  return hasAnalysis && hasRecommendations ? 1 : 0
+})
+
+const stream = await parentAgent.stream('Research AI in education', {
+  maxSteps: 10,
+  isTaskComplete: {
+    scorers: [taskCompleteScorer],
+    strategy: 'all',
+    onComplete: async result => {
+      console.log('Task complete:', result.complete)
+    },
+  },
+})
+```
+
+### 评分表 {/* #rubric-scorer */}
+
+内置的评分表可让您将“正确”定义为清单，并让Agent进行自我评估和迭代，直到满足每个标准或`maxSteps` is reached.
+
+它的工作原理是**LLM-as-judge** scorer. After each iteration, a separate grader model reviews the agent's output against the rubric. The loop ends when every required criterion passes. A failed criterion adds its feedback to the conversation so the agent can try again.
+
+这对于具有明确、可验证的成功标准的任务最有效。你可以像这样使用它：
+
+```typescript title="src/mastra/agents/rubric-scorer.ts"
+import { Agent } from '@mastra/core/agent'
+import { createRubricScorer } from '@mastra/evals/scorers/prebuilt'
+
+const parentAgent = new Agent({
+  id: 'parent-agent',
+  instructions: 'You coordinate research and writing using specialized agents.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  agents: { researchAgent, writingAgent },
+})
+
+const rubricScorer = createRubricScorer({
+  model: '__GATEWAY_OPENAI_MODEL_LUNA__',
+  criteria: [
+    { description: 'The response includes an analysis section' },
+    { description: 'The response includes concrete recommendations' },
+  ],
+})
+
+const stream = await parentAgent.stream('Research AI in education', {
+  maxSteps: 10,
+  isTaskComplete: {
+    scorers: [rubricScorer],
+    strategy: 'all',
+  },
+})
+```
+
+有关完整 API 详细信息，请参阅[rubric scorer reference](/reference/evals/rubric).
+
+## 编写有效的指令 {/* #writing-effective-instructions */}
+
+明确的指示对于有效授权至关重要。
+
+父Agent的`instructions` should specify the available resources and when to use each one. They should also define coordination behavior and success criteria.
+
+每个子Agent都应该有一个明确的`description` that explains its purpose and return format, including when the parent agent should use it.
+
+父Agent使用这些描述来做出委托决策。
+
+```typescript
+const parentAgent = new Agent({
+  id: 'parent-agent',
+  instructions: `You coordinate research and writing tasks.
+
+Available resources:
+- researchAgent: Gathers factual data and sources (returns bullet points)
+- writingAgent: Transforms research into narrative content (returns full paragraphs)
+
+Delegation strategy:
+1. For research requests: Delegate to researchAgent first
+2. For writing requests: Delegate to writingAgent
+3. For complex requests: Delegate to researchAgent first, then writingAgent
+
+Success criteria:
+- All user questions are fully answered
+- Response is well-formatted and complete`,
+  agents: { researchAgent, writingAgent },
+})
+```
+
+## 在后台运行子Agent {/* #running-subagents-in-the-background */}
+
+子Agent调用作为Tool调用进行分派，因此它们可以作为[background tasks](/docs/harness/background-tasks). This is useful when one or more delegations are long-running and you don't want them to block the parent agent's response.
+
+启用[backgroundTasks manager](/reference/configuration#backgroundtasks) on the Mastra instance, then opt subagents in on the parent agent:
+
+```typescript title="src/mastra/agents/parent-agent.ts"
+import { Agent } from '@mastra/core/agent'
+
+const parentAgent = new Agent({
+  id: 'parent-agent',
+  instructions: 'Coordinate research and writing using the available agents.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  agents: { researchAgent, writingAgent },
+  // highlight-start
+  backgroundTasks: {
+    tools: {
+      researchAgent: { enabled: true, timeoutMs: 900_000 },
+      writingAgent: { enabled: true, timeoutMs: 900_000 },
+    },
+  },
+  // highlight-end
+})
+
+const stream = await parentAgent.streamUntilIdle('Research AI in education and write an article', {
+  memory: { thread: 't1', resource: 'u1' },
+})
+```
+
+使用[`streamUntilIdle()`](/reference/streaming/agents/streamUntilIdle) instead of `stream()` so the stream stays open until the subagents complete and the parent agent has had a chance to respond to their results.
+
+如果子Agent未在父Agent下列出`backgroundTasks.tools` but has its own background-eligible tools, the parent agent still dispatches the subagent as a background task and inherits its config. See [Inheriting from the subagent](/docs/harness/background-tasks#inheriting-from-the-subagent) for details.
+
+## 子Agent版本控制 {/* #subagent-versioning */}
+
+当使用[editor](/docs/studio/editor), you can control which stored version of each subagent the parent agent uses at runtime. Set version overrides on the Mastra instance or per invocation:
+
+```typescript
+const result = await parentAgent.generate('Research and write about AI safety', {
+  versions: {
+    agents: {
+      'research-agent': { status: 'published' },
+      'writing-agent': { versionId: 'draft-456' },
+    },
+  },
+})
+```
+
+版本覆盖通过委托自动传播。看[Subagent versioning](/reference/editor/versioning#sub-agent-versioning) for details on resolution order and server API usage.
+
+## 有关的 {/* #related */}
+
+* [后台任务](/docs/harness/background-tasks)
+* [子Agent版本控制](/reference/editor/versioning#sub-agent-versioning)
+* [指导：研究协调员](https://mastra.ai/blog/build-a-research-coordinator-with-supervisor-agents)
+* [Agent.stream() 参考](/reference/streaming/agents/stream)
+* [Agent.streamUntilIdle() 参考](/reference/streaming/agents/streamUntilIdle)
+* [Agent.generate() 参考](/reference/agents/generate)
+* [Agent审批](/docs/agents/human-in-the-loop)
+* [多智能体系统中的内存](/docs/memory/overview#memory-in-multi-agent-systems)
+* [概念：多Agent系统](/docs/guides/multi-agent-systems)
+* 📹 [Mastra supervisor agents workshop](https://www.youtube.com/watch?v=FNb2fL9WhQg\&t=1872s)

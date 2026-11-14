@@ -1,0 +1,521 @@
+---
+title: "Kubernetes (Helm) | Deploy"
+description: "Deploy Mastra Enterprise to Kubernetes with the official Helm chart, configure secrets and storage, expose services securely, and scale workloads."
+---
+
+import Steps from "@site/src/components/Steps";
+import StepItem from "@site/src/components/StepItem";
+
+# 库伯内特斯（头盔）
+
+:::信息 仅限企业
+Helm 图表仅供 Mastra Enterprise 客户使用。它是从私人注册表分发的：您的企业许可证将交换为短期拉取凭据。[Contact us](https://mastra.ai/contact)获得企业许可证。
+:::
+
+使用官方的在任何 Kubernetes 集群上部署 Mastra 平台 — Mastra Server（您的Agent运行时）和 Mastra Studio（管理 UI）`mastra-projects` Helm chart. The chart works on GKE, EKS, AKS, and generic or local clusters, and handles service exposure, TLS, and secret wiring for you.
+
+该图表遵循两个设计原则：
+
+* **带上你自己的图像。**&#x60A8;可以使用以下命令构建 Mastra 项目映像`mastra build` and push it to a registry. The chart never builds images.
+* **带上您自己的数据存储。**&#x60A8;将图表指向 PostgreSQL 数据库以及（可选）与 S3 兼容的对象存储。没有捆绑任何有状态的东西。
+
+本指南涵盖 Helm 图表，它为您管理部署、服务、入口或网关资源以及机密。要自己编写 Kubernetes 清单，或者使用共享的 pub/sub 运行多个服务器 Pod，请参阅[Kubernetes](/integrations/deploy/kubernetes).
+
+## 开始之前 {/* #before-you-begin */}
+
+你需要：
+
+* Kubernetes 1.27+ 集群和[`kubectl`](https://kubernetes.io/docs/tasks/tools/)
+* [舵](https://helm.sh/docs/intro/install/)3.8+（OCI 注册表支持）
+* 您的集群可以从中提取的容器注册表
+* 可从集群访问的 PostgreSQL 数据库
+* Mastra Enterprise 许可证密钥 — 提取图表和生产运行时都需要
+* 为了`ingress` mode: an ingress controller, or let the chart install one
+* 为了`gateway` mode: Gateway API CRDs and a Gateway controller (for example GKE's managed Gateway)
+
+## 部署 {/* #deploy */}
+
+:::警告
+配置[authentication](/docs/auth/overview) in your Mastra application before building and installing the image. The default `loadBalancer` mode creates externally reachable Services that may expose Server and Studio to the internet, depending on your cluster and cloud provider.
+:::
+
+<Steps>
+  <StepItem>
+    构建您的 Mastra 项目并将输出容器化。经过`--studio` so the same image can serve both Server and Studio:
+
+    ```bash
+    mastra build --studio
+    ```
+
+    ```dockerfile title="Dockerfile"
+    FROM node:22-slim
+    WORKDIR /app
+    # Install dependencies inside the image: native modules (for example libsql)
+    # are platform-specific, so node_modules built on your machine must not be
+    # copied into the image (see .dockerignore below).
+    COPY .mastra/output/package.json .mastra/output/package-lock.json* ./
+    RUN npm install --force --prefer-offline --no-audit --no-fund
+    COPY .mastra/output ./
+    EXPOSE 4111
+    CMD ["node", "index.mjs"]
+    ```
+
+    ```text title=".dockerignore"
+    .mastra/output/node_modules
+    ```
+
+    :::警告
+    不要`COPY` the host-built `node_modules` into the image. `mastra build`
+    installs native modules for your local platform — an image built on an
+    Apple Silicon Mac for an amd64 cluster will crash at startup with errors
+    like `Cannot find module '@libsql/linux-x64-gnu'`. Installing dependencies
+    in-image (as above) always matches the target platform.
+    :::
+
+    将图像推送到您的注册表。如果您的计算机架构与集群节点不同（例如部署到 amd64 节点的 arm64 Mac），请使用`--platform`:
+
+    ```bash
+    docker buildx build --platform linux/amd64 \
+      -t your-registry/my-mastra-app:1.0.0 --push .
+    ```
+
+    看[Mastra server](/docs/deployment/mastra-server) for build details.
+  </StepItem>
+
+  <StepItem>
+    将您的应用程序机密存储在发布命名空​​间中。该图表从您拥有的 Secret 中读取数据库、许可证和模型提供者凭据：
+
+    ```bash
+    kubectl create namespace mastra
+    kubectl create secret generic mastra-app-env -n mastra \
+      --from-literal=DATABASE_URL='postgresql://user:pass@host:5432/mastra' \
+      --from-literal=MASTRA_EE_LICENSE='<your-license-key>' \
+      --from-literal=OPENAI_API_KEY='<provider-key>' \
+      --from-literal=CLICKHOUSE_URL='https://your-instance.clickhouse.cloud:8443' \
+      --from-literal=CLICKHOUSE_USERNAME='<clickhouse-username>' \
+      --from-literal=CLICKHOUSE_PASSWORD='<clickhouse-password>'
+    ```
+
+    包括Agent所需的任何其他环境变量，例如模型提供程序 API 密钥。省略`CLICKHOUSE_*` variables unless you use ClickHouse for observability.
+  </StepItem>
+
+  <StepItem>
+    创建一个值文件，将图表指向您的图像和秘密：
+
+    ```yaml title="mastra-values.yaml"
+    global:
+      cloud: generic # gke | eks | aks | generic | local
+
+    mastra-server:
+      image:
+        repository: your-registry/my-mastra-app
+        tag: '1.0.0'
+      existingSecret: mastra-app-env
+
+    mastra-studio:
+      image:
+        repository: your-registry/my-mastra-app
+        tag: '1.0.0'
+      existingSecret: mastra-app-env
+    ```
+
+    两个组件引用相同的 Secret，因为本指南为 Server 和 Studio 运行相同的应用程序映像。仅当 Studio 部署不执行需要应用程序提供者凭据的路由时，才使用单独的 Secret。
+
+    放`global.cloud` to your platform so the chart emits the correct LoadBalancer and Ingress annotations for that cloud.
+
+    如果您的集群尚无权访问应用程序映像注册表，请创建一个映像拉取 Secret：
+
+    ```bash
+    kubectl create secret docker-registry mastra-registry -n mastra \
+      --docker-server=your-registry \
+      --docker-username='<username>' \
+      --docker-password='<access-token>'
+    ```
+
+    从两个组件中引用它：
+
+    ```yaml title="mastra-values.yaml"
+    mastra-server:
+      imagePullSecrets:
+        - name: mastra-registry
+
+    mastra-studio:
+      imagePullSecrets:
+        - name: mastra-registry
+    ```
+
+    与集群集成的公共映像和注册表不需要映像拉取 Secret。
+
+    这只是最低配置。后`helm registry login`, inspect the selected chart version's annotated defaults and README for every available value:
+
+    ```bash
+    CHART_VERSION=0.2.0
+    CHART=oci://us-central1-docker.pkg.dev/mastra-cloud/mastra-helm-ee/mastra-projects
+
+    helm show values "$CHART" --version "$CHART_VERSION"
+    helm show readme "$CHART" --version "$CHART_VERSION"
+    ```
+  </StepItem>
+
+  <StepItem>
+    将您的企业许可证密钥交换为短期注册表访问令牌，登录到私有图表注册表，然后安装图表：
+
+    ```bash
+    CHART_VERSION=0.2.0
+    CHART=oci://us-central1-docker.pkg.dev/mastra-cloud/mastra-helm-ee/mastra-projects
+
+    TOKEN=$(curl -s https://license.mastra.ai/v1/registry-token \
+      -H "Authorization: Bearer $MASTRA_EE_LICENSE" | jq -r .token)
+
+    printf '%s' "$TOKEN" | helm registry login us-central1-docker.pkg.dev \
+      --username oauth2accesstoken \
+      --password-stdin
+
+    helm install mastra "$CHART" \
+      --version "$CHART_VERSION" \
+      -n mastra -f mastra-values.yaml
+    ```
+
+    令牌会在短时间内过期；如果稍后升级因授权错误而失败，请请求新令牌并再次登录。
+
+    默认情况下，每个组件都通过 Service 类型公开`LoadBalancer`.
+  </StepItem>
+
+  <StepItem>
+    验证发布。等待 Pod，然后检查服务器的运行状况端点：
+
+    ```bash
+    kubectl -n mastra rollout status deployment -l app.kubernetes.io/instance=mastra
+    kubectl -n mastra get svc
+    ```
+
+    ```bash
+    curl http://<server-external-ip>:4111/health
+    ```
+
+    一个`{"success":true}` response means the server is up. Open the Studio service address in a browser to reach the Mastra Studio UI.
+  </StepItem>
+</Steps>
+
+## 曝光模式 {/* #exposure-modes */}
+
+该图表支持三种公开 Server 和 Studio 的方式，通过以下方式选择一次`global.exposure.mode`:
+
+|模式|你得到什么 |所需值|
+| - | - | - |
+|`loadBalancer` (default) | One `LoadBalancer` Service per component with per-cloud annotations | — |
+| `ingress` | ClusterIP Services plus one Ingress per component | `mastra-server.ingress.host`, `mastra-studio.ingress.host` |
+| `gateway` | ClusterIP Services, a shared Gateway, and one HTTPRoute per component | `mastra-server.httpRoute.host`, `mastra-studio.httpRoute.host` |
+
+### 使用 Let's Encrypt TLS 进行入口 {/* #ingress-with-lets-encrypt-tls */}
+
+使用`ingress` mode with cert-manager to serve both components over HTTPS. The chart can install ingress-nginx and cert-manager for you, or use controllers you already run:
+
+```yaml title="mastra-values.yaml"
+global:
+  exposure:
+    mode: ingress
+  tls:
+    clusterIssuer: letsencrypt
+
+ingressController:
+  install: true # omit if you already run an ingress controller
+
+tls:
+  certManager:
+    install: true # omit if cert-manager is already installed
+  letsEncrypt:
+    email: ops@example.com
+
+mastra-server:
+  ingress:
+    host: api.example.com
+
+mastra-studio:
+  ingress:
+    host: studio.example.com
+```
+
+什么时候`tls.letsEncrypt.email` is set, the chart renders a `ClusterIssuer` and annotates each Ingress so certificates are issued automatically. HTTP requests redirect to HTTPS.
+
+在`generic` clusters the chart doesn't set an `ingressClassName` unless you configure one, so your cluster's default ingress class applies.
+
+### 网关API {/* #gateway-api */}
+
+使用`gateway` mode on clusters with Gateway API support. On GKE the chart selects the managed `gke-l7-global-external-managed` class automatically; on other clouds set `global.gateway.className` explicitly:
+
+```yaml title="mastra-values.yaml"
+global:
+  exposure:
+    mode: gateway
+  tls:
+    clusterIssuer: letsencrypt
+
+mastra-server:
+  httpRoute:
+    host: api.example.com
+
+mastra-studio:
+  httpRoute:
+    host: studio.example.com
+```
+
+该图表使用 HTTP 和每个组件的 HTTPS 侦听器创建共享网关。要附加到您已经运行的网关，请设置`global.gateway.name` instead.
+
+## 云预设 {/* #cloud-presets */}
+
+该图表为每个平台提供了预设值`global.cloud` and platform-appropriate defaults:
+
+|平台|预设|笔记|
+| - | - | - |
+| GKE |`values-gke.yaml` | Gateway API recommended; Workload Identity supported via `serviceAccount.annotations` |
+| EKS | `values-eks.yaml` | NLB by default; ALB via ingress annotations; IRSA supported |
+| AKS | `values-aks.yaml` | Azure LoadBalancer annotations |
+| Local (kind/minikube) | `values-local.yaml` | Ingress on `api.localhost` / `studio.localhost` |
+
+## 对象存储 {/* #object-storage */}
+
+要连接 S3 兼容的对象存储（S3、具有 HMAC 互操作性的 GCS 或 MinIO），请在服务器上设置通用对象存储值：
+
+```yaml title="mastra-values.yaml"
+mastra-server:
+  externalServices:
+    objectStore:
+      endpoint: https://storage.googleapis.com
+      bucket: my-mastra-bucket
+      region: us-central1
+```
+
+放`S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` in your existing Secret rather than in values. On EKS and GKE, prefer IRSA or Workload Identity over static keys.
+
+## ClickHouse 可观察性 {/* #clickhouse-observability */}
+
+要在 ClickHouse 中保留跟踪、日志、指标、分数和反馈，请添加`CLICKHOUSE_URL`, `CLICKHOUSE_USERNAME`, and `CLICKHOUSE_PASSWORD` to the Secret that `mastra-server.existingSecret` references. The Secret example above includes those variables for ClickHouse Cloud.
+
+该图表使变量可供您的应用程序使用。它本身不配置Observability或发送遥测数据。配置`ObservabilityStorageClickhouseVNext` for the `observability` storage domain and add `MastraStorageExporter` to your Mastra application. See [ClickHouse](/integrations/databases/clickhouse#observability-with-vnext-recommended) for the complete application configuration.
+
+当您启用`mastra-workers`, worker pods mount the Server's Secret. If you install the `mastra-workers` chart separately, set `mastra-workers.server.existingSecret` to the same Secret name. The `mastra-projects` chart verifies that the names match.
+
+## 缩放服务器副本 {/* #scale-server-replicas */}
+
+该图表默认启动一个服务器副本。 Horizo​​ntalPodAutoscaler 可以添加 Pod，但它无法使 Mastra 的进程内状态在 Pod 之间可用。
+
+设置前`replicaCount` above one or enabling `mastra-server.autoscaling`:
+
+* 配置共享存储后端，例如`PostgresStore`, for persisted run state.
+* 配置分布式 PubSub 后端和共享缓存。这[Kubernetes guide](/integrations/deploy/kubernetes#configure-shared-infrastructure) uses `RedisStreamsPubSub` and `RedisServerCache`, with `REDIS_URL` stored in the application Secret.
+* 使用[durable agents](/docs/harness/durable-agents) for streams, approvals, and runs that must continue when requests reach different pods.
+* 从一个副本开始，在扩展之前初始化数据库架构。对于更严格的部署，请在 Kubernetes 作业中初始化架构并在每个 Pod 中禁用初始化。
+* 审查[worker roles](/docs/deployment/workers#select-workers). Multiple scheduler instances are safe, because each schedule occurrence is claimed by one instance.
+
+满足这些要求后，设置资源请求并启用自动缩放：
+
+```yaml title="mastra-values.yaml"
+mastra-server:
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 80
+```
+
+## 后台工作者 {/* #background-workers */}
+
+默认情况下，服务器在进程中运行 Mastra 的后台工作程序。这`mastra-workers` subchart moves them into their own deployments (one per role) so workflow orchestration, scheduled workflows, and background tasks scale independently of the API. See [Workers](/docs/deployment/workers) for what each role does.
+
+工人是**opt-in**: nothing is deployed unless you enable them.
+
+### 要求 {/* #requirements */}
+
+在启用工作人员之前：
+
+* **具有拉取功能的 PubSub 后端**在 Mastra 应用程序中配置：Redis Streams、Valkey Streams 或 Google Cloud Pub/Sub。工作人员从Agent中提取事件，因此仅请求/响应的后端将无法工作。放置其连接字符串（例如`REDIS_URL`) in the same Secret the Server uses.
+* **支持的存储后端`schedules` domain**，如果启用调度程序：PostgreSQL、LibSQL、MySQL、MongoDB、Spanner 或 Convex。 Redis 和 ClickHouse 不支持它，调度程序不会在它们上找到到期的调度。
+* **`mastra-server.workers.splitDeployment: true`.**&#x5982;果没有它，API 会继续在进程中运行工作程序，因此每个工作程序也会与工作程序部署一起在 API pod 中运行。如果您在没有图表的情况下启用工作人员，图表将拒绝呈现。
+
+:::警告 Redis 驱逐政策
+套装`maxmemory-policy` to `noeviction` on Redis or Valkey. Every evicting policy deletes live Mastra state under memory pressure: `allkeys-*` policies evict unacknowledged workflow events, and `volatile-*` policies evict lease keys and streams, which carry a TTL by default. Runs then stall without a run error. `RedisStreamsPubSub` and `ValkeyStreamsPubSub` log a one-time warning after they first connect when the policy can evict. On managed Redis this is a parameter-group setting, and Amazon ElastiCache defaults to `volatile-lru`.
+:::
+
+### 将工人工件构建到您的图像中 {/* #build-the-worker-artifact-into-your-image */}
+
+工人们经营着**same image** as the Server, but a different entrypoint inside it. `mastra build` alone doesn't produce that entrypoint, so add a second build and redirect its output:
+
+```bash
+mastra build --studio
+mastra worker build --output-dir .mastra/worker
+```
+
+`--output-dir` 是必需的。没有它，`mastra worker build` writes to `.mastra/output` and **overwrites the server bundle**, leaving you with a worker-only image.
+
+这两个包声明了不同的依赖关系——工作人员拉入诸如`bufferutil` and `pg` that the server bundle doesn't list — so each needs its own `npm install`. Node resolves modules upward from the entrypoint, so the worker finds its packages in `.mastra/worker/node_modules`:
+
+```dockerfile title="Dockerfile"
+FROM node:22-slim
+WORKDIR /app
+
+# Server bundle and its dependencies.
+COPY .mastra/output/package.json .mastra/output/package-lock.json* ./
+RUN npm install --force --prefer-offline --no-audit --no-fund
+COPY .mastra/output ./
+
+# Worker bundle and its dependencies, which differ from the server's.
+COPY .mastra/worker/package.json .mastra/worker/package-lock.json* ./.mastra/worker/
+RUN cd .mastra/worker && npm install --force --prefer-offline --no-audit --no-fund
+COPY .mastra/worker ./.mastra/worker
+
+EXPOSE 4111
+CMD ["node", "index.mjs"]
+```
+
+```text title=".dockerignore"
+.mastra/output/node_modules
+.mastra/worker/node_modules
+```
+
+服务器仍然以`CMD ["node", "index.mjs"]` and Studio assets stay at `/app/studio`, so nothing about the Server or Studio deployment changes. The worker entrypoint lands at `/app/.mastra/worker/index.mjs`, which is the chart's default `mastra-workers.command`. If you lay your image out differently, override that value to match.
+
+:::警告为每个构建使用新标签
+将每个构建推送到其自己的标签下。图表的默认值`imagePullPolicy` is `IfNotPresent`, so re-pushing an existing tag leaves nodes running the cached digest and your worker pods keep crashing on the old bundle.
+:::
+
+### 赋能工人 {/* #enable-workers */}
+
+工人们经营着**same image** as the Server — `mastra build` emits the worker entrypoint alongside the server entrypoint. Setting `global.image` once keeps every component on the same build:
+
+```yaml title="mastra-values.yaml"
+global:
+  image:
+    repository: your-registry/my-mastra-app
+    tag: '1.0.0'
+
+mastra-server:
+  existingSecret: mastra-app-env
+  # Required: stop the API from also running workers in-process.
+  workers:
+    splitDeployment: true
+
+mastra-workers:
+  enabled: true
+  server:
+    # Must match mastra-server.existingSecret; the chart verifies this.
+    existingSecret: mastra-app-env
+  roles:
+    orchestration:
+      enabled: true
+      replicaCount: 2
+    scheduler:
+      enabled: true
+    backgroundTasks:
+      enabled: true
+```
+
+Worker pod 安装**Server's** ConfigMap and Secret rather than defining their own, so their configuration is identical to the API's by construction. You never maintain two copies of the same environment.
+
+### 角色和扩展 {/* #roles-and-scaling */}
+
+|角色 |秤 |笔记|
+| - | - | - |
+|`orchestration` | Yes | Consumes the `workflows` topic and calls back into the API to execute steps. The consumer group distributes work across replicas. |
+| `scheduler` | **No — always 1** | Polls storage for due cron schedules. The chart pins it to one replica and uses the `Recreate` strategy. Extra schedulers are safe but add polling load without adding throughput. |
+| `backgroundTasks` | Yes | Executes agent tool calls marked `background: { enabled: true }` off the request path. |
+
+这两个可扩展角色支持自动缩放。利用率目标需要匹配的资源请求，如果您在没有它们的情况下启用自动缩放，则图表将无法渲染：
+
+```yaml title="mastra-values.yaml"
+mastra-workers:
+  roles:
+    orchestration:
+      resources:
+        requests:
+          cpu: 200m
+          memory: 512Mi
+      autoscaling:
+        enabled: true
+        minReplicas: 2
+        maxReplicas: 5
+        targetCPUUtilizationPercentage: 80
+```
+
+CPU 利用率是队列深度的粗略Agent。要扩展待处理事件的数量，请使用[KEDA](https://keda.sh/) with a Redis Streams scaler against the same consumer group.
+
+### 单独的工人图像 {/* #separate-worker-images */}
+
+如果您的构建生成单独的 API 和工作程序映像，而不是具有两个入口点的一个映像，则图表的默认锁步检查将拒绝不匹配。明确选择退出：
+
+```yaml title="mastra-values.yaml"
+mastra-workers:
+  image:
+    tag: worker
+    # Server and workers intentionally run different builds; keeping them on the
+    # same source commit becomes your responsibility.
+    allowServerSkew: true
+  command: ['node', 'index.mjs'] # match your worker image's entrypoint
+```
+
+防护之所以存在，是因为 API 和工作人员之间的版本偏差在双方都是沉默的：工作人员启动、消耗队列，并针对新 API 运行过时的步骤代码。
+
+### 配置更改后重新启动工作人员 {/* #restarting-workers-after-a-config-change */}
+
+当服务器的 ConfigMap 或 Secret 更改时，Worker Pod 不会自动重新启动 - Helm 的校验和注释仅涵盖图表拥有的对象，并且这些对象属于`mastra-server`. Roll them yourself:
+
+```bash
+kubectl rollout restart deploy -n mastra   -l app.kubernetes.io/name=mastra-workers,app.kubernetes.io/instance=mastra
+```
+
+## 生产清单 {/* #production-checklist */}
+
+* 参考凭证`existingSecret` instead of plaintext values.
+* 通过设置资源请求`mastra-server.resources` and `mastra-studio.resources`.
+* 优先安装独立的证书管理器和入口控制器，而不是捆绑的切换器；伞图中的 CRD 生命周期使升级变得复杂。
+* 仅在配置共享存储、分布式 PubSub、共享缓存和所需的进程角色后才启用多个副本。
+* 运行后台工作者时，设置`mastra-server.workers.splitDeployment: true` and set `maxmemory-policy` to `noeviction` on Redis or Valkey.
+* 该图表应用强化的默认设置：非根容器、只读根文件系统、seccomp`RuntimeDefault`, and no service account token automount.
+
+## 升级和卸载 {/* #upgrade-and-uninstall */}
+
+使用相同的命令升级到新的图表版本或推出新的图像标签：
+
+```bash
+CHART_VERSION=0.2.0
+CHART=oci://us-central1-docker.pkg.dev/mastra-cloud/mastra-helm-ee/mastra-projects
+
+helm upgrade mastra "$CHART" \
+  --version "$CHART_VERSION" \
+  -n mastra -f mastra-values.yaml
+```
+
+该图表将配置和秘密内容散列到 Pod 注释中，因此配置更改会自动触发滚动重启。
+
+卸载发行版：
+
+```bash
+helm uninstall mastra -n mastra
+```
+
+您的数据库和对象存储不受影响，因为图表从不管理有状态服务。
+
+## 故障排除 {/* #troubleshooting */}
+
+* **`helm install`/`upgrade` fails with `401 Unauthorized` or `UNAUTHORIZED`.**&#x60A8;的注册表访问令牌丢失或已过期。请求新的令牌`https://license.mastra.ai/v1/registry-token` using your Enterprise license and run `helm registry login` again.
+* **Pod 崩溃时`Cannot find module '@libsql/linux-x64-gnu'` (or similar).**&#x8BE5;图像包含`node_modules` built for a different platform. Install dependencies inside the image and exclude host-built `node_modules` via `.dockerignore`, then rebuild with `--platform` matching your nodes.
+* **Pod 因许可证错误而崩溃循环。**&#x751F;产模式需要有效`MASTRA_EE_LICENSE` in your secret when enterprise features are configured.
+* **Studio 显示服务器 API 而不是 UI。**&#x8BE5;图像是在没有 Studio 资源的情况下构建的。重建与`mastra build --studio`.
+* **Worker pod 崩溃循环`Cannot find module '/app/.mastra/worker/index.mjs'`.**&#x8BE5;映像是在没有工人工件的情况下构建的。跑步`mastra worker build --output-dir .mastra/worker` and copy it into the image, or override `mastra-workers.command` to match your layout.
+* **Workflow程停止，没有错误。**&#x7F16;排工作人员无法访问 API，或者 Redis 驱逐了未确认的事件。查看`mastra-workers.server.port` against `mastra-server.service.port`, confirm any restrictive NetworkPolicy admits worker pods, and verify `maxmemory-policy` is `noeviction`.
+* **工作 Pod 留在`CreateContainerConfigError`.**&#x4ED6;们挂载了服务器的 ConfigMap 和 Secret，所以`mastra-workers.server.existingSecret` must match `mastra-server.existingSecret`, and `mastra-workers` can't be installed as a standalone release.
+* **Ingress 没有地址。**&#x786E;认入口控制器正在运行，或设置`ingressController.install=true`.
+* **证书在网关模式下保持待定状态。**&#x5728;侦听器证书存在之前，某些网关控制器无法应对 ACME 质询。检查图表的每云预设和发行说明，了解您平台上的引导程序。
+
+## 有关的 {/* #related */}
+
+* [库伯内斯](/integrations/deploy/kubernetes)：手写清单和使用共享发布/订阅的多 Pod 扩展
+* [马斯特拉服务器](/docs/deployment/mastra-server)：构建输出和服务器行为
+* [部署概览](/docs/deployment/overview)
+* [工人](/docs/deployment/workers)：将后台处理拆分到单独的容器中
+* [工人认证](/docs/auth/workers)：安全的工作人员到 API 通信
+* [预定的Workflow程](/docs/workflows/scheduled-workflows)：在Workflow上声明 cron 计划

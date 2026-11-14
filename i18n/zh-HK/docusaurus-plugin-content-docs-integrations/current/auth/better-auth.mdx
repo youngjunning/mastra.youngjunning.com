@@ -1,0 +1,218 @@
+---
+title: "Better Auth | Auth"
+description: "Secure a Mastra server with a self-hosted Better Auth instance, configure route authorization, and authenticate clients with cookies or bearer tokens."
+packages:
+  - "@mastra/auth-better-auth"
+---
+
+import Tabs from "@theme/Tabs";
+import TabItem from "@theme/TabItem";
+
+# 更好的身份驗證
+
+這`@mastra/auth-better-auth`套件使用 Better Auth 為 Mastra 提供身份驗證。它使用您的 Better Auth 實例驗證傳入請求，並透過以下方式與 Mastra 伺服器整合：`server.auth`選項。
+
+## 先決條件 {/* #prerequisites */}
+
+此範例使用更好的身份驗證。確保您的 Better Auth 實例已配置並且環境變數已設定。
+
+```env title=".env"
+# Required by Better Auth
+BETTER_AUTH_SECRET=...   # at least 32 chars
+BETTER_AUTH_URL=http://localhost:3000
+
+# Example DB URL used by the snippet below (adjust for your setup)
+DATABASE_URL=postgres://...
+```
+
+：：：筆記
+
+Better Auth 建議設置`baseURL` explicitly (or via `BETTER_AUTH_URL`) for security and stability.
+
+:::
+
+如果您尚未安裝 Better Auth 的處理程序（以便您的應用程式可以讓使用者登入/建立會話），請依照[Better Auth installation guide](https://www.better-auth.com/docs/installation) to mount the `/api/auth/*` route (or your configured base path).
+
+## 安裝 {/* #installation */}
+
+安裝`@mastra/auth-better-auth` package:
+
+```bash npm2yarn
+npm install @mastra/auth-better-auth
+```
+
+## 使用範例 {/* #usage-example */}
+
+首先，建立您的 Better Auth 實例：
+
+```ts title="lib/auth.ts"
+import { betterAuth } from 'better-auth'
+
+export const auth = betterAuth({
+  database: {
+    provider: 'postgresql',
+    url: process.env.DATABASE_URL!,
+  },
+  emailAndPassword: {
+    enabled: true,
+  },
+  baseURL: process.env.BETTER_AUTH_URL,
+  secret: process.env.BETTER_AUTH_SECRET,
+})
+```
+
+然後，將其與 Mastra 一起使用：
+
+```ts title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { MastraAuthBetterAuth } from '@mastra/auth-better-auth'
+import { auth } from '@/lib/auth'
+
+const mastraAuth = new MastraAuthBetterAuth({
+  auth,
+})
+
+export const mastra = new Mastra({
+  server: {
+    auth: mastraAuth,
+  },
+})
+```
+
+訪問[MastraAuthBetterAuth](/reference/auth/better-auth) for all available configuration options.
+
+## 客製化授權 {/* #custom-authorization */}
+
+```ts
+const mastraAuth = new MastraAuthBetterAuth({
+  auth,
+  async authorizeUser(user) {
+    // Example: only allow verified emails
+    return user?.user?.emailVerified === true
+  },
+})
+```
+
+## 路由配置 {/* #route-configuration */}
+
+```ts
+const mastraAuth = new MastraAuthBetterAuth({
+  auth,
+  public: ['/health', '/api/status'],
+  protected: ['/api/*', '/admin/*'],
+})
+```
+
+### 匹配規則 {/* #matching-rules */}
+
+* `public`和`protected` accept exact paths, wildcard patterns (like `/api/*`), and path params (like `/users/:id`).
+* 對於特定方法的規則，請使用元組，例如`["/api/agents", ["GET", "POST"]]`.
+* 如果一條路線與兩者都匹配`public` and `protected`, `public` wins and no auth is required.
+* 如果兩者都不匹配，則預設將路由視為受保護（除非路由被明確標記為`requiresAuth: false`).
+
+## 客戶端設定 {/* #client-side-setup */}
+
+啟用身份驗證後，對 Mastra 內建路由的請求需要身份驗證。實際上，這表示您的用戶端需要發送您的 Better Auth 設定用於經過驗證的請求的任何憑證。
+
+### Cookie 會話（建議） {/* #cookie-session-recommended */}
+
+如果您的 Better Auth 設定使用 cookie，請將用戶端設定為傳送憑證。對於跨來源請求（例如 Next.js 上`:3000` calling Mastra on `:4111`), enable CORS credentials on the Mastra server:
+
+```ts title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+
+export const mastra = new Mastra({
+  server: {
+    auth: mastraAuth,
+    cors: {
+      origin: 'http://localhost:3000', // your frontend origin
+      credentials: true,
+    },
+  },
+})
+```
+
+然後配置客戶端以包含憑證：
+
+```ts
+import { MastraClient } from '@mastra/client-js'
+
+export const mastraClient = new MastraClient({
+  baseUrl: 'http://localhost:4111',
+  credentials: 'include',
+})
+```
+
+如果您直接呼叫 API，請將憑證包含在`fetch` as well:
+
+```ts
+await fetch('http://localhost:4111/api/agents/weatherAgent/generate', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+  },
+  credentials: 'include',
+  body: JSON.stringify({ messages: 'Weather in London' }),
+})
+```
+
+### 不記名令牌 {/* #bearer-token */}
+
+您可以將簽署的會話令牌作為承載令牌傳遞。從 Better Auth 用戶端會話中檢索它並將其包含在`Authorization` header:
+
+```ts
+import { MastraClient } from '@mastra/client-js'
+import { authClient } from './auth-client' // your Better Auth client
+
+const session = await authClient.getSession()
+
+export const mastraClient = new MastraClient({
+  baseUrl: 'http://localhost:4111',
+  headers: {
+    Authorization: `Bearer ${session.data?.session.token}`,
+  },
+})
+```
+
+訪問[Mastra Client SDK](/docs/server/mastra-client) for more configuration options.
+
+### 發出經過身份驗證的請求 {/* #making-authenticated-requests */}
+
+<Tabs>
+  <TabItem value="react" label="React">
+    ```tsx title="src/components/test-agent.tsx"
+    import { mastraClient } from '../lib/mastra-client'
+
+    export const TestAgent = () => {
+      async function handleClick() {
+        const agent = mastraClient.getAgent('weatherAgent')
+
+        const response = await agent.generate('Weather in London')
+
+        console.log(response)
+      }
+
+      return <button onClick={handleClick}>Test Agent</button>
+    }
+    ```
+  </TabItem>
+
+  <TabItem value="curl" label="cURL">
+    ```bash
+    curl -X POST http://localhost:4111/api/agents/weatherAgent/generate \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer <your-token>" \
+      -d '{
+        "messages": "Weather in London"
+      }'
+    ```
+  </TabItem>
+</Tabs>
+
+## 故障排除 {/* #troubleshooting */}
+
+* **每個請求均回傳 401**：確認您的 Better Auth 處理程序已安裝並且您的應用程式可以建立有效的會話。檢查您的用戶端是否發送會話 cookie 或`Authorization: Bearer <signed-token>` header.
+* **Cookie 未跨來源發送**： 放`credentials: "include"` in `MastraClient` and configure `server.cors` with your frontend origin and `credentials: true`.
+* **不記名令牌被拒絕**：確保您傳遞完整簽署的會話令牌（來自`authClient.getSession()`), not a raw or unsigned token.
+* **基本 URL 問題**： 放`baseURL` in `betterAuth({ ... })` or set `BETTER_AUTH_URL`.
+* **資料庫連線錯誤**： 核實`DATABASE_URL` and database provider configuration.

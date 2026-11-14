@@ -64,6 +64,7 @@ const changes = git(upstream, 'diff', '--name-status', '--no-renames', baseline,
     const [status, sourcePath] = line.split('\t')
     return { status, sourcePath, localPath: sourcePath.replace(/^docs\//, '') }
   })
+  .filter(change => change.localPath.endsWith('.mdx'))
 const upstreamBlobs = new Map(
   git(upstream, 'ls-tree', '-r', 'HEAD', 'docs/src/content/en', 'docs/src/learn/content')
     .split('\n')
@@ -80,24 +81,37 @@ const upstreamBlobs = new Map(
 const hashMatched = []
 const pending = []
 const removed = []
-for (const change of changes) {
-  if (change.status === 'D') {
-    removed.push(change.localPath)
+for (const [localPath, entry] of Object.entries(ledger.pages)) {
+  const sourcePath = `docs/${localPath}`
+  const sourceBlob = upstreamBlobs.get(sourcePath)
+  if (!sourceBlob) {
+    removed.push(localPath)
     continue
   }
-  const entry = ledger.pages[change.localPath]
-  const sourceBlob = upstreamBlobs.get(change.sourcePath)
-  const englishPath = path.join(root, change.localPath)
-  const chinesePath = entry && path.join(root, entry.zhCNPath)
+  const englishPath = path.join(root, localPath)
+  const localizedFiles = [
+    [entry.zhCNPath, entry.zhCNBlob],
+    [entry.zhTWPath, entry.zhTWBlob],
+    [entry.zhHKPath, entry.zhHKBlob],
+  ]
   const matches =
-    entry &&
     sourceBlob === entry.sourceBlob &&
     fs.existsSync(englishPath) &&
     git(root, 'hash-object', englishPath) === (entry.englishBlob ?? sourceBlob) &&
-    fs.existsSync(chinesePath) &&
-    git(root, 'hash-object', chinesePath) === entry.zhCNBlob
-  if (matches) hashMatched.push(change.localPath)
-  else pending.push(change.localPath)
+    localizedFiles.every(
+      ([localePath, localeBlob]) =>
+        localePath && localeBlob && fs.existsSync(path.join(root, localePath)) &&
+        git(root, 'hash-object', path.join(root, localePath)) === localeBlob,
+    )
+  if (matches) hashMatched.push(localPath)
+  else pending.push(localPath)
+}
+for (const change of changes) {
+  if (change.status === 'D') {
+    if (!removed.includes(change.localPath)) removed.push(change.localPath)
+  } else if (!ledger.pages[change.localPath] && !pending.includes(change.localPath)) {
+    pending.push(change.localPath)
+  }
 }
 
 pending.sort((a, b) => Number(newlyChangedPaths.has(b)) - Number(newlyChangedPaths.has(a)) || a.localeCompare(b))
@@ -105,6 +119,7 @@ const summary = {
   officialHead: head,
   englishImportCommit,
   translationBaseCommit: baseline,
+  ledgerPairCount: Object.keys(ledger.pages).length,
   changedFileCount: changes.length,
   hashMatchedPairCount: hashMatched.length,
   pendingFileCount: pending.length,
@@ -135,7 +150,7 @@ if (asJson) {
     if (newChanges.length > 20) console.log(`  ... and ${newChanges.length - 20} more new changes`)
   }
   console.log(`All changed English content files since baseline: ${changes.length}`)
-  console.log(`English + zh-CN pairs matching recorded hashes: ${hashMatched.length}`)
+  console.log(`English + zh-CN + zh-TW + zh-HK pairs matching recorded hashes: ${hashMatched.length}`)
   console.log(`Pending files: ${pending.length}; pending removals: ${removed.length}`)
   for (const file of pending.slice(0, 20)) console.log(`  ${file}`)
   if (pending.length > 20) console.log(`  ... and ${pending.length - 20} more`)

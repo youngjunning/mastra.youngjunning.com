@@ -1,0 +1,147 @@
+---
+title: "Vercel | Deploy"
+description: "Deploy a Mastra server as Vercel serverless functions with @mastra/deployer-vercel, generated Build Output API files, Studio, and overrides."
+---
+
+import Steps from "@site/src/components/Steps";
+import StepItem from "@site/src/components/StepItem";
+
+# Vercel部署器
+
+使用`@mastra/deployer-vercel`將 Mastra 伺服器部署為 Vercel 上的無伺服器功能。部署程式捆綁您的程式碼並生成`.vercel/output`符合 Vercel 的目錄[建構輸出 API](https://vercel.com/docs/build-output-api/v3)，無需額外配置即可部署。
+
+:::注意
+本指南涵蓋了部署[Mastra server](/docs/server/overview). If you're using a [server adapter](/docs/server/server-adapters) or [web framework](/docs/deployment/web-framework), deploy the way you normally would for that framework.
+:::
+
+## 開始之前 {/* #before-you-begin */}
+
+你需要一個[Mastra application](/docs) and a [Vercel](https://vercel.com/) account.
+
+:::警告
+Vercel Functions 使用暫存檔案系統，因此您配置的任何儲存空間（包括可觀察性儲存）都必須託管在外部。如果您正在使用[LibSQLStore](/integrations/databases/libsql) with a file URL, switch to a remotely hosted database.
+:::
+
+## 安裝 {/* #installation */}
+
+添加`@mastra/deployer-vercel` package to your project:
+
+```bash npm2yarn
+npm install @mastra/deployer-vercel@latest
+```
+
+進口[`VercelDeployer`](/reference/deployer/vercel) and set it as the deployer in your Mastra configuration:
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+// highlight-next-line
+import { VercelDeployer } from '@mastra/deployer-vercel'
+
+export const mastra = new Mastra({
+  // highlight-next-line
+  deployer: new VercelDeployer(),
+})
+```
+
+## 部署 {/* #deploy */}
+
+<Steps>
+  <StepItem>
+    將您的專案推送到遠端 Git 提供者（例如 GitHub）並將您的儲存庫連接到 Vercel。
+
+    預設情況下，Vercel 運行`npm run build`, which triggers `mastra build`. If you don't have a build script, add `"build": "mastra build"` to your `package.json`.
+
+    ：：：筆記
+
+    請記住設定運行應用程式所需的環境變數（例如您的[model provider](/models/providers) API key).
+
+    :::
+  </StepItem>
+
+  <StepItem>
+    準備好後，點擊**Deploy** and wait for the first deployment to complete.
+  </StepItem>
+
+  <StepItem>
+    驗證您的部署`https://<your-project>.vercel.app/api/agents`, which should return a JSON list of your agents.
+
+    由於 Mastra 伺服器為每個端點添加前綴`/api`, you have to add it to your URLs when making requests.
+  </StepItem>
+
+  <StepItem>
+    現在您可以透過 HTTP 呼叫 Mastra 端點。
+
+    :::警告
+    設定[authentication](/docs/auth/overview) before exposing your endpoints publicly.
+    :::
+  </StepItem>
+</Steps>
+
+## 工作室 {/* #studio */}
+
+您可以部署[Studio](/docs/studio/overview) alongside your API by enabling the `studio` option. Studio is deployed as static assets served from Vercel's Edge CDN, so it doesn't consume function invocations.
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { VercelDeployer } from '@mastra/deployer-vercel'
+
+export const mastra = new Mastra({
+  deployer: new VercelDeployer({
+    // highlight-next-line
+    studio: true,
+  }),
+})
+```
+
+部署後，Studio 可在根 URL (`https://<your-project>.vercel.app/`) and the API remains at `/api/*`. Studio automatically connects to the API on the same origin, so you don't need additional environment variables.
+
+Studio 從 CDN 提供自己的頁面，並且所有其他路徑都會到達您的伺服器，因此您新增的路由[`registerApiRoute()`](/docs/server/custom-api-routes) stay reachable at their own paths. Avoid giving a custom route a path that Studio already uses (for example `/agents` or `/workflows`), since Studio claims those first.
+
+:::警告
+Studio 連接到您的 Mastra 伺服器後，它可以完全存取您的Agent、Workflow和Tool。確保在生產中正確保護它（例如，在身份驗證、VPN 等後面），以防止未經授權的存取。
+:::
+
+## 可選覆蓋 {/* #optional-overrides */}
+
+Vercel 部署程式支援寫入 Vercel 輸出 API 函數配置的設定選項。請參閱[`VercelDeployer` reference](/reference/deployer/vercel#constructor-options) for available options like `maxDuration`, `memory`, and `regions`.
+
+請求超時有兩個單獨的限制。`maxDuration` (seconds) caps how long Vercel lets the function run, while Mastra's `server.timeout` (milliseconds, default `180000`) caps how long Mastra waits before answering `504 Gateway Timeout`. Raising `maxDuration` alone doesn't extend the 180 second Mastra limit, so long-running requests such as workflow runs need both:
+
+```typescript title="src/mastra/index.ts"
+export const mastra = new Mastra({
+  deployer: new VercelDeployer({ maxDuration: 600 }),
+  server: { timeout: 600_000 },
+})
+```
+
+看[Request timeouts](/reference/deployer/vercel#request-timeouts) for details.
+
+## 可觀察性 {/* #observability */}
+
+無伺服器函數可以在回傳回應後立即終止。任何掛起的非同步工作（例如發送遙測資料）都可能在完成之前被終止。等待中`flush()` ensures all traces are sent before the function exits.
+
+```typescript title="api/chat.ts"
+import type { VercelRequest, VercelResponse } from '@vercel/node'
+import { mastra } from '../src/mastra'
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  const { message } = req.body
+  const agent = mastra.getAgent('myAgent')
+  const result = await agent.generate([{ role: 'user', content: message }])
+
+  await mastra.observability.flush()
+
+  return res.json(result)
+}
+```
+
+:::警告
+Vercel 部署程式不包括`flush` calls. If you need this, you'll need to wrap the handler yourself to add the logic before returning the response. Alternatively, deploy to a long-running server like a [virtual machine](/integrations/deploy/digital-ocean) where this isn't an issue.
+:::
+
+## 有關的 {/* #related */}
+
+* [VercelDeployer 參考](/reference/deployer/vercel)
+* [部署概覽](/docs/deployment/overview)
+* [伺服器適配器](/docs/server/server-adapters)
+* [Web框架集成](/docs/deployment/web-framework)

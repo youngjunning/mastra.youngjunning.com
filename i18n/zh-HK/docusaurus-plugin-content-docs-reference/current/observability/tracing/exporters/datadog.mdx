@@ -1,6 +1,6 @@
 ---
-title: "參考：DatadogExporter | 可觀測性"
-description: 用於 Tracing 的 Datadog LLM Observability exporter
+title: "Reference: DatadogExporter | Observability"
+description: "Configure DatadogExporter to send Mastra traces into Datadog LLM Observability, supporting application monitoring and analysis of spans and AI performance."
 packages:
   - "@mastra/core"
   - "@mastra/observability"
@@ -8,17 +8,17 @@ packages:
 
 import PropertiesTable from "@site/src/components/PropertiesTable";
 
-# DatadogExporter
+# 數據狗導出器
 
-將 Tracing 資料傳送至 Datadog 的 LLM Observability 產品，以供監察及分析。
+將追蹤資料傳送到 Datadog 的 LLM Observability 產品以進行監控和分析。
 
-:::info
-如果你亦使用 `dd-trace` APM 自動檢測，並需要它正確地以 Mastra span 為父項，請改用 [DatadogBridge](/reference/observability/tracing/bridges/datadog)。exporter 會在執行完成後傳送 LLM Observability 資料，因此不會參與 `dd-trace` 的即時 scope。
+:::注意
+如果你也使用`dd-trace` APM auto-instrumentation and need it correctly parented under Mastra spans, use the [數據狗橋](/reference/observability/tracing/bridges/datadog)反而。導出器在執行完成後發送LLM Observability數據，因此它不參與`dd-trace`的直播範圍。
 :::
 
-## 建構函式 {/* #constructor */}
+## 建構函數 {/* #constructor */}
 
-```typescript prettier:false
+```typescript oxfmt:false
 new DatadogExporter(config: DatadogExporterConfig)
 ```
 
@@ -33,59 +33,67 @@ interface DatadogExporterConfig extends BaseExporterConfig {
   env?: string
   agentless?: boolean
   integrationsEnabled?: boolean
+  flushGraceMs?: number
 }
 ```
 
-擴充 `BaseExporterConfig`，當中包括：
+延伸`BaseExporterConfig`, which includes:
 
-- `logger?: IMastraLogger` - Logger 實例
-- `logLevel?: LogLevel | 'debug' | 'info' | 'warn' | 'error'` - Log 級別（預設：INFO）
+* `logger?: IMastraLogger`- 記錄器實例
+* `logLevel?: LogLevel | 'debug' | 'info' | 'warn' | 'error'`- 日誌等級（預設：INFO）
 
 <PropertiesTable
   props={[
-  {
-    name: 'apiKey',
-    type: 'string',
-    description: 'Datadog API 金鑰。agentless 模式必須提供。未設定時會使用 DD_API_KEY 環境變數。',
-    required: false,
-  },
-  {
-    name: 'mlApp',
-    type: 'string',
-    description: '用於將 trace 分組的 ML 應用程式名稱。必須提供。未設定時會使用 DD_LLMOBS_ML_APP 環境變數。',
-    required: false,
-  },
-  {
-    name: 'site',
-    type: 'string',
-    description:
-      "Datadog 網站（例如 'datadoghq.com'、'datadoghq.eu'、'us3.datadoghq.com'）。未設定時會使用 DD_SITE 環境變數。預設：'datadoghq.com'。",
-    required: false,
-  },
-  {
-    name: 'service',
-    type: 'string',
-    description: '應用程式的服務名稱。預設為 mlApp 的值。',
-    required: false,
-  },
-  {
-    name: 'env',
-    type: 'string',
-    description: "環境名稱（例如 'production'、'staging'）。未設定時會使用 DD_ENV 環境變數。",
-    required: false,
-  },
-  {
-    name: 'agentless',
-    type: 'boolean',
-    description: '使用直接 HTTPS 接收端（true）或本機 Datadog Agent（false）。預設：true。',
-    required: false,
-  },
-  {
-    name: 'integrationsEnabled',
-    type: 'boolean',
-    description: '啟用 dd-trace 自動整合。預設：false。',
-    required: false,
-  },
+{
+  name: 'apiKey',
+  type: 'string',
+  description: 'Datadog API key. Required for agentless mode. Falls back to DD_API_KEY env var.',
+  required: false,
+},
+{
+  name: 'mlApp',
+  type: 'string',
+  description: 'ML application name for grouping traces. Required. Falls back to DD_LLMOBS_ML_APP env var.',
+  required: false,
+},
+{
+  name: 'site',
+  type: 'string',
+  description:
+    "Datadog site (e.g., 'datadoghq.com', 'datadoghq.eu', 'us3.datadoghq.com'). Falls back to DD_SITE env var. Default: 'datadoghq.com'.",
+  required: false,
+},
+{
+  name: 'service',
+  type: 'string',
+  description: 'Service name for the application. Defaults to mlApp value.',
+  required: false,
+},
+{
+  name: 'env',
+  type: 'string',
+  description: "Environment name (e.g., 'production', 'staging'). Falls back to DD_ENV env var.",
+  required: false,
+},
+{
+  name: 'agentless',
+  type: 'boolean',
+  description: 'Use direct HTTPS intake (true) or local Datadog Agent (false). Default: true.',
+  required: false,
+},
+{
+  name: 'integrationsEnabled',
+  type: 'boolean',
+  description: 'Enable dd-trace automatic integrations. Default: false.',
+  required: false,
+},
+{
+  name: 'flushGraceMs',
+  type: 'number',
+  description:
+    'How long flush() waits, in milliseconds, after handing data to dd-trace. dd-trace sends LLM Observability data in the background and gives no way to await the request, so the wait keeps a process that exits right after flush() from cutting it off. Only waits when something was sent since the last flush. Set to 0 to disable. Default: 2000.',
+  required: false,
+},
 ]}
 />
 
@@ -93,31 +101,33 @@ interface DatadogExporterConfig extends BaseExporterConfig {
 
 ### `exportTracingEvent` {/* #exporttracingevent */}
 
-```typescript prettier:false
+```typescript oxfmt:false
 async exportTracingEvent(event: TracingEvent): Promise<void>
 ```
 
-將 tracing event 匯出至 Datadog LLM Observability。
+將追蹤事件匯出到 Datadog LLM Observability。
 
-### flush {/* #flush */}
+### 沖水 {/* #flush */}
 
-```typescript prettier:false
+```typescript oxfmt:false
 async flush(): Promise<void>
 ```
 
-在不關閉 exporter 的情況下，強制將所有已緩衝的 span 清送至 Datadog。這對無伺服器環境十分有用，可確保 span 在執行環境終止前完成匯出。
+強制將任何緩衝的跨度刷新到 Datadog，而不關閉導出器。在無伺服器環境中很有用，您需要確保在執行時間終止之前導出跨度。
 
-### shutdown {/* #shutdown */}
+刷新是盡力而為：dd-trace 從後台編寫器發送 LLM Observability數據，並且無法等待請求，因此`flush()` waits `flushGraceMs` (default 2000 ms) after asking dd-trace to flush. Each flush that sent new data costs that full wait, so a serverless handler that awaits `flush()` per request pays it per request. Raise it if spans from short-lived processes are missing in Datadog, or set it to `0` to skip the wait when something else keeps the process alive.
 
-```typescript prettier:false
+### 關閉 {/* #shutdown */}
+
+```typescript oxfmt:false
 async shutdown(): Promise<void>
 ```
 
-清送待處理資料並關閉 exporter。取消所有待處理的清理計時器，並停用 LLM Observability。
+刷新待處理資料並關閉導出器。取消任何掛起的清理計時器並停用 LLM 可觀察性。
 
 ## 用法 {/* #usage */}
 
-### 零設定（使用環境變數） {/* #zero-config-using-environment-variables */}
+### 零配置（使用環境變數） {/* #zero-config-using-environment-variables */}
 
 ```typescript
 import { DatadogExporter } from '@mastra/datadog'
@@ -126,7 +136,7 @@ import { DatadogExporter } from '@mastra/datadog'
 const exporter = new DatadogExporter()
 ```
 
-### 明確設定 {/* #explicit-configuration */}
+### 明確配置 {/* #explicit-configuration */}
 
 ```typescript
 import { DatadogExporter } from '@mastra/datadog'
@@ -139,7 +149,7 @@ const exporter = new DatadogExporter({
 })
 ```
 
-### 配合本機 Datadog Agent {/* #with-local-datadog-agent */}
+### 使用本地 Datadog Agent {/* #with-local-datadog-agent */}
 
 ```typescript
 const exporter = new DatadogExporter({
@@ -149,31 +159,31 @@ const exporter = new DatadogExporter({
 })
 ```
 
-## Span 對應 {/* #span-mapping */}
+## 跨距映射 {/* #span-mapping */}
 
-Mastra span 類型會對應至 Datadog LLM Observability span 種類：
+Mastra 跨距類型對應到 Datadog LLM Observability跨距類型：
 
-| Mastra SpanType | Datadog 種類 |
+|馬斯特拉 SpanType |資料狗種類 |
 | - | - |
-| `AGENT_RUN` | `agent` |
+|`AGENT_RUN` | `agent` |
 | `MODEL_GENERATION` | `workflow` |
 | `MODEL_STEP` | `llm` |
 | `TOOL_CALL` | `tool` |
 | `MCP_TOOL_CALL` | `tool` |
 | `PROVIDER_TOOL_CALL` | `tool` |
-| `WORKFLOW_RUN` | `workflow` |
-| 所有其他類型 | `task` |
+| `WORKFLOW_RUN` | `workflow`|
+|所有其他類型 |`task` |
 
-所有未有對應的 span 類型（包括 `MODEL_CHUNK`、`WORKFLOW_STEP`、`GENERIC` 及日後新增的 span 類型）均會自動預設為 `task`。
+所有未映射的跨度類型（包括`MODEL_CHUNK`, `WORKFLOW_STEP`, `GENERIC`, and future span types) automatically default to `task`.
 
 ## 環境變數 {/* #environment-variables */}
 
-exporter 會從以下環境變數讀取設定：
+導出器從這些環境變數中讀取配置：
 
-| 變數 | 說明 |
+|變數|描述 |
 | - | - |
-| `DD_API_KEY` | Datadog API 金鑰 |
-| `DD_LLMOBS_ML_APP` | ML 應用程式名稱 |
-| `DD_SITE` | Datadog 網站 |
-| `DD_ENV` | 環境名稱 |
-| `DD_LLMOBS_AGENTLESS_ENABLED` | 設為 'false' 或 '0' 以使用本機 Agent |
+|`DD_API_KEY` | Datadog API key |
+| `DD_LLMOBS_ML_APP` | ML application name |
+| `DD_SITE` | Datadog site |
+| `DD_ENV` | Environment name |
+| `DD_LLMOBS_AGENTLESS_ENABLED` | Set to 'false' or '0' to use local agent |

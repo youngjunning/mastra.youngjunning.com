@@ -1,25 +1,25 @@
 ---
-title: "參考：Observability API | Client SDK"
-description: 了解如何使用 client-js SDK 取得 Trace、監察應用程式效能、為 Trace 評分及記錄意見回饋。
+title: 'Reference: Observability API | Client SDK'
+description: 'The Observability API provides methods to retrieve traces, monitor application performance, score traces for evaluation, and record feedback linked to traces and spans.'
 packages:
-  - "@mastra/client-js"
+  - '@mastra/client-js'
 ---
 
-# Observability API
+# ObservabilityAPI
 
-Observability API 提供取得 Trace、監察應用程式效能、為 Trace 評分以供評估，以及記錄與 Trace 和 span 關聯的意見回饋等方法。
+Observability API 提供了檢索追蹤、監控應用程式效能、對追蹤進行評分以進行評估以及記錄與追蹤和跨度相關的回饋的方法。
 
-## 取得指定 Trace {/* #getting-a-specific-trace */}
+## 取得特定軌跡 {/* #getting-a-specific-trace */}
 
-按 ID 取得指定 Trace，包括所有 span 及詳情：
+透過 ID 檢索特定跟踪，包括其所有範圍和詳細資訊：
 
 ```typescript
 const trace = await mastraClient.getTrace('trace-id-123')
 ```
 
-## 篩選 Trace {/* #getting-traces-with-filtering */}
+## 透過過濾獲取痕跡 {/* #getting-traces-with-filtering */}
 
-取得 Trace 根 span 的分頁清單，並可選擇篩選條件：
+使用可選過濾檢索追蹤根跨距的分頁列表：
 
 ```typescript
 const traces = await mastraClient.getTraces({
@@ -46,11 +46,11 @@ console.log(`Total pages: ${traces.pagination.totalPages}`)
 const completeTrace = await mastraClient.getTrace(traces.spans[0].traceId)
 ```
 
-## 列出清單檢視所需的 Trace {/* #listing-traces-for-a-list-view */}
+## 列出清單視圖的追蹤 {/* #listing-traces-for-a-list-view */}
 
-`listTracesLight()` 傳回與 Trace 清單相同的列，但不包括 `input`、`output` 及 `attributes` 承載資料。每列改為包含簡短的 `inputPreview` 字串，讓清單可顯示預覽欄而毋須傳送完整提示詞。
+`listTracesLight()`傳回與追蹤清單相同的行，但不帶`input`, `output` and `attributes` payloads. Each row carries short `inputPreview`, `outputPreview`和`errorPreview`改為字串（最多 100 個字符，以`…`剪下時），因此清單可以渲染預覽列，而無需傳輸整個有效負載，加上`threadId`和`resourceId`對於記憶體上下文列。
 
-如需一次顯示大量 Trace，應優先使用此方法，並只在開啟個別列時才取得完整記錄：
+當您一次渲染許多跟踪時更喜歡它，並且僅在打開行時獲取完整記錄：
 
 ```typescript
 const list = await mastraClient.listTracesLight({
@@ -66,11 +66,328 @@ for (const span of list.spans) {
 const selected = await mastraClient.getTrace(list.spans[0].traceId)
 ```
 
-此方法接受與 `listTraces()` 相同的篩選、排序及差量輪詢參數。如確實需要完整的 span 承載資料，請使用 `listTraces()`。
+`listTraces()`. Use `listTraces()` when you actually need the full span payloads.
 
-## 為 Trace 評分 {/* #scoring-traces */}
+## 查詢跨度 {/* #querying-spans */}
 
-使用已註冊的評分器為指定 Trace 評分，以供評估：
+`querySpans()`傳回跨跡線的完整跨度摘要。它需要跨度開始時間的正 ISO 時間戳範圍，並支援遊標分頁：
+
+```typescript
+const result = await mastraClient.querySpans({
+  timeRange: {
+    from: '2026-10-01T00:00:00.000Z',
+    to: '2026-10-02T00:00:00.000Z',
+  },
+  where: {
+    op: 'and',
+    args: [
+      { op: 'eq', left: { path: 'threadId' }, right: { literal: 'thread-123' } },
+      { op: 'gte', left: { path: 'durationMs' }, right: { literal: 1000 } },
+    ],
+  },
+  orderBy: [{ field: 'startedAt', direction: 'desc' }],
+  page: { limit: 100 },
+})
+
+// Pass result.page.next as page.after to continue with the same filters and ordering.
+console.log(result.spans)
+```
+
+響應是`{ spans, page: { next } }`. Check `capabilities.spanQuery` before calling, and the field-specific capabilities before using optional filters. See [Query spans](/reference/observability/tracing/advanced-queries#query-spans) for fields, operators, defaults, capabilities, response details, and cursor handling.
+
+### 聚合跨度 {/* #aggregate-spans */}
+
+`aggregateSpans()`將與直接跨距謂詞相符的已完成跨距進行分組。當每組或每組和非空時間段返回一行時`interval` is set. It counts spans at any depth, such as nested agent runs that trace aggregation misses:
+
+```typescript
+const { capabilities } = await mastraClient.getObservabilityCapabilities()
+
+if (capabilities.spanAggregate) {
+  const { rows, truncated } = await mastraClient.aggregateSpans({
+    timeRange: {
+      from: '2026-10-01T00:00:00.000Z',
+      to: '2026-10-08T00:00:00.000Z',
+    },
+    where: { op: 'eq', left: { path: 'spanType' }, right: { literal: 'agent_run' } },
+    groupBy: ['status'],
+    interval: '1d',
+    measures: ['count', 'errorRate'],
+  })
+}
+```
+
+請求和回應結構如下`aggregateTraces()`, with direct span predicates and span dimensions such as `spanType`, `name`, and `parentEntityName`. Token and cost measures belong to the span that recorded the usage and aren't added to parent spans. Check `capabilities.spanAggregate` before calling, and `capabilities.spanAggregateModelDimensions` before grouping or counting distinct values by `model` or `provider`. With an older adapter, those requests return `501`.
+
+兩個都`aggregateTraces()` and `aggregateSpans()` accept time to first token (TTFT) and time to first chunk (TTFC) measures, `timeToFirstToken.*` and `timeToFirstChunk.*`, when `capabilities.aggregateTimeToFirstMeasures` is `true`. Spans and traces without a recorded value are skipped, never counted as 0. See [Time to first chunk (TTFC)](/reference/observability/tracing/advanced-queries#time-to-first-chunk-ttfc) and [Time to first token (TTFT)](/reference/observability/tracing/advanced-queries#time-to-first-token-ttft).
+
+看[Aggregate spans](/reference/observability/tracing/advanced-queries#aggregate-spans) for selection, dimensions, per-span usage, and how to list the spans behind a group.
+
+## 查詢線程 {/* #querying-threads */}
+
+`queryTraceThreads()`從已完成的追蹤返回線程摘要`POST /observability/threads/query`. Each row includes activity timestamps, trace counts, context and previews. Traces without a thread ID aren't included.
+
+```typescript
+const result = await mastraClient.queryTraceThreads({
+  timeRange: {
+    traces: {
+      from: '2026-10-01T00:00:00.000Z',
+      to: '2026-10-02T00:00:00.000Z',
+    },
+  },
+  where: { op: 'eq', left: { path: 'status' }, right: { literal: 'error' } },
+  orderBy: [{ field: 'endedAt', direction: 'desc' }],
+  page: { limit: 100 },
+})
+
+for (const thread of result.threads) {
+  console.log(thread.firstTraceId, thread.lastTraceId, thread.traceCount, thread.outputPreview)
+}
+```
+
+### 線程時間範圍 {/* #thread-time-ranges */}
+
+精確選擇一個時間選擇器。每個範圍都需要 ISO 時間戳`from` earlier than `to`. The range includes `from` and excludes `to`.
+
+|選擇器|與 | 匹配線程
+| - | - |
+|`timeRange.traces: { from, to }` | At least one trace that started in the window |
+| `timeRange.threads: { field: 'startedAt', from, to }` | Their first activity in the window |
+| `timeRange.threads: { field: 'endedAt', from, to }` | Their last activity in the window |
+
+例如，尋找最近活動發生在 10 月 1 日的線程：
+
+```typescript
+const result = await mastraClient.queryTraceThreads({
+  timeRange: {
+    threads: {
+      field: 'endedAt',
+      from: '2026-10-01T00:00:00.000Z',
+      to: '2026-10-02T00:00:00.000Z',
+    },
+  },
+})
+```
+
+行包括授權範圍內完整保留的歷史記錄，包括視窗之前和之後的痕跡。過濾器適用於這些完整的行。一個`environment` filter checks the first trace's environment.
+
+### 螺紋過濾器 {/* #thread-filters */}
+
+使用`where` to filter thread rows. Combine predicates with `and`, `or` and `not`.
+
+|領域 |運營商|
+| - | - |
+|`threadId`, `organizationId`, `firstTraceId`, `lastTraceId` | `eq`, `ne`, `in`, `notIn`, `exists`, `notExists` |
+| `resourceId`, `userId`, `runId`, `sessionId`, `requestId`, `serviceName`, `experimentId`, `environment`, `executionSource` | Same string operators |
+| `entityType`, `entityId`, `entityName`, `entityVersionId`|相同的字串運算子 |
+|`status` | `eq`, `ne`, `in`, `notIn`，有值`success`或者`error` |
+| `startedAt`, `endedAt`, `timeToFirstChunkMs`, `timeToFirstTokenMs` | `eq`, `ne`, `lt`, `lte`, `gt`, `gte`, `in`, `notIn`, `exists`, `notExists` |
+| `traceCount` | `eq`, `ne`, `lt`, `lte`, `gt`, `gte` |
+
+例如，過濾來自選定Agent的至少具有三個追蹤的執行緒：
+
+```typescript
+const result = await mastraClient.queryTraceThreads({
+  timeRange: {
+    traces: {
+      from: '2026-10-01T00:00:00.000Z',
+      to: '2026-10-02T00:00:00.000Z',
+    },
+  },
+  where: {
+    op: 'and',
+    args: [
+      { op: 'in', value: { path: 'entityId' }, set: ['support-agent', 'sales-agent'] },
+      { op: 'gte', left: { path: 'traceCount' }, right: { literal: 3 } },
+    ],
+  },
+})
+```
+
+存在過濾器的使用`{ op: 'exists', path: 'userId' }` to check for a non-null value. Model/provider and previews are available in returned rows but aren't filterable.
+
+### 話題回覆 {/* #thread-response */}
+
+響應是`{ threads, page: { next } }`, without a total count. Each entry in `threads` contains these fields:
+
+|返回字段 |意義|
+| - | - |
+|`threadId`, `organizationId` | Thread identity. Equal thread IDs in different organizations remain separate. |
+| `firstTraceId`, `lastTraceId` | Earliest and latest trace by start time. Equal start times use trace ID as a deterministic tie-breaker. |
+| `resourceId`, `userId`, `runId`, `sessionId`, `requestId`, `serviceName`, `experimentId`, `environment`, `executionSource` | First-trace context, or `null` when missing. |
+| `entityType`, `entityId`, `entityName`, `entityVersionId` | First-trace entity. |
+| `startedAt`, `endedAt` | Earliest start and maximum end time across the thread. |
+| `status` | `error` when the last-started trace's root span has an error, otherwise `success`. |
+| `traceCount` | Number of logical traces in the thread. |
+| `inputPreview` | First trace's input preview. |
+| `outputPreview`, `errorPreview` | Last-started trace's previews. |
+| `timeToFirstChunkMs` | First trace's root agent time to first chunk, in milliseconds. `null` when unavailable or the root isn't an agent. |
+| `timeToFirstTokenMs` | First trace's root agent time to first token, in milliseconds, with the same `null` rules. Present only when the store supports it. |
+
+較早開始的追蹤可以最後完成。在這種情況下，它提供`endedAt`, while the last-started trace still supplies status and output/error previews. Missing first-trace values aren't replaced with values from a later trace.
+
+### 線程排序和分頁 {/* #thread-ordering-and-pagination */}
+
+訂購僅接受其中之一`startedAt` or `endedAt`, with direction `asc` or `desc`. The default is `endedAt` descending. Pages default to 25 rows and allow at most 100. Pass `result.page.next` as `page.after` with the same time selector, filters, scope and ordering. A `null` cursor means no more pages are available. Pagination reflects live data, so new traces can move a thread between pages.
+
+要在線程中加載跟踪，請使用[`queryTraces()`](#querying-traces) with a `threadId` filter and a time range covering the thread's activity.
+
+### 線程查詢支持 {/* #thread-query-support */}
+
+查看`capabilities.threadQueryRows` from `getObservabilityCapabilities()` before using this contract. A missing or false value means full thread rows aren't available. Older core or storage packages return a structured `501` for these requests. Legacy identity requests remain supported for mixed package versions.
+
+當授權歷史記錄超過 250,000 個儲存的追蹤根行（包括重複副本）時，ClickHouse 會拒絕寬執行緒查詢。透過選擇較少的候選線程，較窄的時間範圍仍然可以成功。拒絕查詢返回`503 TRACE_QUERY_RESOURCE_LIMIT` without partial results.
+
+## 查詢痕跡 {/* #querying-traces */}
+
+`queryTraces()`使用相關跨度上的追蹤欄位和條件來尋找完整的邏輯追蹤。每個查詢都需要 ISO 時間戳範圍。
+
+```typescript
+const result = await mastraClient.queryTraces({
+  timeRange: {
+    from: '2026-08-01T00:00:00.000Z',
+    to: '2026-08-08T00:00:00.000Z',
+  },
+  where: {
+    spans: {
+      some: {
+        op: 'and',
+        args: [
+          { op: 'eq', left: { path: 'spanType' }, right: { literal: 'tool_call' } },
+          { op: 'exists', path: 'error' },
+        ],
+      },
+    },
+  },
+})
+```
+
+看[Query traces](/reference/observability/tracing/advanced-queries#query-traces) for request fields, predicates, limits, response shapes, and errors.
+
+### 載入頁面並輪詢痕跡 {/* #load-a-page-and-poll-for-traces */}
+
+`queryTraces()`支援鍵集遍歷`page`, numbered pages with `pagination`, and delta polling with `mode: 'delta'`. Use one mode per request. To migrate from `listTracesLight()`, read `traces` instead of `spans` and retain the numbered page's `deltaCursor`:
+
+```typescript
+const timeRange = {
+  from: '2026-08-01T00:00:00.000Z',
+  to: '2026-08-08T00:00:00.000Z',
+}
+const initial = await mastraClient.queryTraces({
+  timeRange,
+  pagination: { page: 0, perPage: 100 },
+})
+if (!initial.deltaCursor) throw new Error('Delta polling is unavailable')
+
+const changes = await mastraClient.queryTraces({
+  timeRange,
+  mode: 'delta',
+  after: initial.deltaCursor,
+  limit: 100,
+})
+```
+
+合併`changes.traces` by `traceId`, retain `changes.deltaCursor`, and continue while `changes.delta.hasMore` is `true`. Keep the same time range and predicate across polls. Only completed traces are returned; polling doesn't guarantee notifications for related-record updates, deletions, or traces that stop matching.
+
+看[Delta polling](/reference/observability/tracing/advanced-queries#poll-after-loading-a-numbered-page) for bootstrap behavior, cursor lifetime, retention, and a complete polling loop.
+
+### 聚合痕跡 {/* #aggregate-traces */}
+
+`aggregateTraces()`按時間範圍和可選的方式對選定的軌跡進行分組`where` predicate, and returns one row per group, or per group and non-empty time bucket when `interval` is set. It accepts the same predicates as `queryTraces()`.
+
+```typescript
+const { capabilities } = await mastraClient.getObservabilityCapabilities()
+
+if (capabilities.traceAggregate) {
+  const { rows, truncated } = await mastraClient.aggregateTraces({
+    timeRange: {
+      from: '2026-08-01T00:00:00.000Z',
+      to: '2026-08-08T00:00:00.000Z',
+    },
+    where: { op: 'eq', left: { path: 'environment' }, right: { literal: 'production' } },
+    groupBy: ['entityName'],
+    interval: '1d',
+    measures: ['count', 'errorRate', 'duration.p95', 'cost.sum'],
+    orderBy: { field: 'count', direction: 'desc' },
+    limit: 10,
+  })
+}
+```
+
+每行有`dimensions` keyed by `groupBy` field, `measures` keyed by measure name, a `bucket` timestamp when `interval` is set, and `cost` coverage when a cost measure is requested. `truncated` is `true` when more groups matched than `limit`. Check `capabilities.traceAggregate` before calling. The client applies its configured retry policy, except for `4xx` responses, `501`, and `504` responses with code `TRACE_QUERY_EXECUTION_TIMEOUT`, which aren't retried. Ordinary gateway `504` responses remain retryable.
+
+看[Aggregate traces](/reference/observability/tracing/advanced-queries#aggregate-traces) for dimensions, measures, token and cost semantics, time buckets, limits, and errors.
+
+### 發現追蹤查詢欄位和值 {/* #discover-trace-query-fields-and-values */}
+
+`getTraceQueryFields()`傳回一個謂詞範圍的規範查詢欄位和觀察到的頂級字串元資料欄位。回應包括每個欄位的值類型、支援的運算符以及值建議是否可用。
+
+```typescript
+const timeRange = {
+  from: '2026-08-01T00:00:00.000Z',
+  to: '2026-08-08T00:00:00.000Z',
+}
+
+const fields = await mastraClient.getTraceQueryFields({
+  timeRange,
+  predicateScope: 'spans',
+  search: 'model',
+  limit: 25,
+})
+```
+
+對於`trace` scope on a server that supports aggregation, the response also includes `aggregate`: the `dimensions` you can pass to `groupBy` and the `measures` you can request. See [Discover fields and values](/reference/observability/tracing/advanced-queries#discover-fields-and-values).
+
+使用具有相同範圍的回應中的確切本地路徑。例如，`model` belongs inside a `spans.some` or `spans.none` predicate. A field picker can fetch the `trace` and `spans` scopes in parallel.
+
+稱呼`getTraceQueryValues()` only after selecting a field with `valueSuggestions: true`:
+
+```typescript
+const controller = new AbortController()
+
+const values = await mastraClient.getTraceQueryValues(
+  {
+    timeRange,
+    predicateScope: 'spans',
+    path: 'model',
+    search: 'claude',
+    limit: 25,
+  },
+  { signal: controller.signal },
+)
+
+// Cancel this autocomplete request when the search text changes.
+controller.abort()
+```
+
+兩種方法都使用不區分大小寫的文字子字串搜尋並接受空搜尋。限制預設為 25，不能超過 100。結果按出現次數排序，然後按路徑或數值決定。`observedFieldsTruncated` and `valuesTruncated` indicate that the caller should refine `search`. Discovery has no cursor.
+
+建議是有限的和諮詢性的。當建議不可用、為空或被截斷時，手動值仍然有效。 Discovery 不接受草稿查詢謂詞。客戶端不會重試任何一個請求，並且每次都調用`AbortSignal` takes precedence over the signal configured on `MastraClient`.
+
+發現超時拒絕`504 TRACE_QUERY_EXECUTION_TIMEOUT`. Backend memory or resource exhaustion rejects with `503 TRACE_QUERY_RESOURCE_LIMIT`. Neither error contains partial suggestions; truncation flags are only present on successful, completely ranked responses.
+
+## 刪除痕跡 {/* #deleting-traces */}
+
+刪除追蹤及其關聯的跨度、指標、日誌、分數和回饋：
+
+```typescript
+const result = await mastraClient.deleteTraces({
+  traceIds: ['trace-1', 'trace-2'],
+})
+
+if ('accepted' in result) {
+  console.log('Deletion requested')
+} else {
+  console.log(result.success)
+}
+```
+
+每個請求最多接受 1,000 個追蹤 ID，且沒有租戶範圍欄位。未連結到跡線的訊號將被保留。實驗創建的痕跡會像任何其他痕跡一樣被刪除。
+
+用戶端支援兩種回應形態： OSS返回`{ success: true }` after its delete operation, while a Platform backend that supports queued batch deletion returns `202 { accepted: true }` after accepting cleanup. Acceptance doesn't mean records have disappeared from reads, so check the response before reporting deletion as complete. Using these client methods with Platform requires a deployment that supports the batch deletion endpoints.
+
+## 評分痕跡 {/* #scoring-traces */}
+
+使用註冊評分員對特定痕跡進行評分以進行評估：
 
 ```typescript
 const result = await mastraClient.score({
@@ -82,9 +399,9 @@ const result = await mastraClient.score({
 })
 ```
 
-## 按 span 取得評分 {/* #getting-scores-by-span */}
+## 按跨度取得分數 {/* #getting-scores-by-span */}
 
-取得 Trace 內指定 span 的評分：
+檢索追蹤中特定跨度的分數：
 
 ```typescript
 const scores = await mastraClient.listScoresBySpan({
@@ -95,13 +412,54 @@ const scores = await mastraClient.listScoresBySpan({
 })
 ```
 
-## 意見回饋 {/* #feedback */}
+## 透過ID獲取分數 {/* #get-a-score-by-id */}
 
-意見回饋方法可建立、列出及查詢評分、讚好／不讚好、留言及修正等人工介入訊號。範例請參閱[意見回饋指南](/docs/observability/feedback)，完整結構描述則請參閱[意見回饋參考](/reference/observability/feedback)。
+使用`getScore()` to retrieve one observability score:
 
-### 建立意見回饋 {/* #creating-feedback */}
+```typescript
+const { score } = await mastraClient.getScore('score-id-123')
+```
 
-建立與 Trace 或 span 關聯的意見回饋記錄：
+響應是`{ score: record | null }`. A missing score returns HTTP 200 with `{ score: null }`.
+The return type is `GetScoreResponse`, exported from `@mastra/client-js`.
+
+## 創建分數 {/* #creating-scores */}
+
+為追蹤建立一個分數，可以選擇標識其中的跨度：
+
+```typescript
+const response = await mastraClient.createScore({
+  score: {
+    traceId: 'trace-123',
+    spanId: 'span-456',
+    scorerId: 'accuracy',
+    score: 0.95,
+  },
+})
+```
+
+`createScore()`需要一個非空白`score.traceId`, with an optional `spanId`. The client generates a missing `scoreId` and ISO `timestamp` once per call and preserves them across retries. Supply these fields to reuse an existing identity. See [signal write options](#signal-write-options) for context resolution and retry behavior.
+
+## 回饋 {/* #feedback */}
+
+回饋方法透過配置的 API 伺服器建立、列出和查詢人機互動訊號，例如評分、按讚、評論和更正。建立方法支援OSS和Platform。平台和OSS伺服器支援完全替換，並提供回饋替換支援。請參閱[feedback guide](/docs/observability/feedback) for examples and the [feedback reference](/reference/observability/feedback) for full schemas.
+
+### 透過ID獲取回饋 {/* #get-feedback-by-id */}
+
+使用`getFeedback()` to retrieve one feedback record:
+
+```typescript
+const { feedback } = await mastraClient.getFeedback('feedback-id-123')
+```
+
+響應是`{ feedback: record | null }`. A missing record returns HTTP 200 with `{ feedback: null }`.
+The return type is `GetFeedbackResponse`, exported from `@mastra/client-js`.
+
+兩個 getter 都接受未編碼的 ID 並將其編碼為 URL 路徑段。它們使用客戶端配置的 API 前綴、憑證和標頭。記錄時間戳記是 JSON 回應中的 ISO 字串。
+
+### 創建回饋 {/* #creating-feedback */}
+
+為追蹤建立回饋記錄，可以選擇標識其中的跨度：
 
 ```typescript
 const response = await mastraClient.createFeedback({
@@ -116,9 +474,77 @@ const response = await mastraClient.createFeedback({
 })
 ```
 
-### 列出意見回饋 {/* #listing-feedback */}
+`createFeedback()`需要一個非空白`feedback.traceId`, with an optional `spanId`. The client generates a missing `feedbackId` and ISO `timestamp` once per call and preserves them across retries. Set `feedbackUserId` to identify the feedback author. `userId` identifies the span's user. An authenticated OSS user takes precedence over a submitted feedback author.
 
-取得意見回饋記錄的分頁清單，並可選擇篩選條件：
+### 訊號寫入選項 {/* #signal-write-options */}
+
+兩種建立方法都接受可選的頂級`contextMode` alongside the `feedback` or `score` wrapper:
+
+* `"provided"`使用記錄的扁平化上下文欄位而不查找跨度。缺少的上下文欄位不會得到豐富。
+* `"resolve"`從儲存的根和可選的目標跨度中取得上下文。根標籤是繼承的。記錄元資料會覆蓋匹配的儲存元資料鍵。丟失的根返回`TRACE_NOT_FOUND`. A missing target returns `SPAN_NOT_FOUND`.
+
+省略`contextMode` uses the server's default: `"provided"` on OSS and `"resolve"` on Platform. The client preserves omission. Select a mode explicitly when the same behavior is required on both servers. On OSS, each configured trusted scope field overrides caller input. In provided mode, other context fields remain caller-supplied. For example, a trusted organization ID overrides `organizationId` but doesn't clear `resourceId` when no trusted resource scope is configured.
+
+```typescript
+const result = await mastraClient.createFeedback({
+  contextMode: 'resolve',
+  feedback: {
+    traceId: 'trace-123',
+    feedbackUserId: 'reviewer-1',
+    feedbackType: 'thumbs',
+    value: 1,
+  },
+})
+```
+
+使用`retries` and `anchorRetryTimeoutMs` in the optional second argument to control retries. Network and server errors use the client's transport retry settings. Only 404s with `TRACE_NOT_FOUND` or `SPAN_NOT_FOUND` receive anchor retries, for at most 30 seconds after the first such response. Set `anchorRetryTimeoutMs` to a shorter window or `0` to disable them. Other 404s and authentication or validation errors are terminal.
+
+建立回應包含`success` and optional `data` with the generated or supplied `feedbackId`/`scoreId`, `traceId`, nullable `spanId`, and normalized UTC `timestamp`. The client also accepts success-only responses. Platform success confirms publication. The record may not be immediately visible to reads. Direct OSS HTTP callers can omit the ID and timestamp to have the server generate them.
+
+顯式模式需要伺服器支援。較舊的伺服器可能會忽略`contextMode`. Deploy Platform's supplied-context support before sending `"provided"` there.
+
+### 更換回饋 {/* #replacing-feedback */}
+
+`replaceFeedback()`將完整替換發送至`PUT /api/observability/feedback/:feedbackId`. Include the original `feedbackId`, `traceId`, and normalized `timestamp`, along with all feedback fields to retain. Platform and OSS servers with feedback replacement support accept this method. OSS returns `501` when its storage adapter doesn't support replacement. For OSS, check `capabilities.feedbackReplacement` before offering edits. A missing capability means unavailable.
+
+```typescript
+await mastraClient.replaceFeedback({
+  feedback: {
+    feedbackId: 'feedback-1',
+    traceId: 'trace-123',
+    timestamp: '2026-01-01T00:00:00.123Z',
+    feedbackType: 'thumbs',
+    value: -1,
+    feedbackUserId: 'reviewer-1',
+  },
+})
+```
+
+使用創建回應的標準化時間戳`data` when available. OSS rejects changes to the original trace or timestamp with `409`. Platform uses the timestamp as part of record identity, so preserve it there too. The client preserves the replacement body across retries, but each accepted PUT retry is a new replacement and can supersede another edit. Pass `{ retries: 0, anchorRetryTimeoutMs: 0 }` as the second argument to disable automatic retries.
+
+### 刪除回饋和分數 {/* #deleting-feedback-and-scores */}
+
+按id刪除回饋或評分記錄。刪除是冪等的，因此遺失的 id 會被忽略。每個請求最多接受 1,000 個`feedbackIds` or 1,000 `scoreIds`. Optional `organizationId` and `resourceId` fields restrict each deletion to records with matching scope fields:
+
+```typescript
+await mastraClient.deleteFeedback({
+  feedbackIds: ['feedback-1', 'feedback-2'],
+  organizationId: 'org-1',
+  resourceId: 'resource-1',
+})
+
+await mastraClient.deleteScores({
+  scoreIds: ['score-1', 'score-2'],
+  organizationId: 'org-1',
+  resourceId: 'resource-1',
+})
+```
+
+兩種方法都返回`{ success: boolean }` from OSS or `{ accepted: true }` from a Platform backend that supports queued batch deletion. See [Deleting traces](#deleting-traces) for response handling. Accepted records can remain readable until cleanup runs. Platform uses authenticated organization/project scope, which request-body scope fields can't override.
+
+### 清單回饋 {/* #listing-feedback */}
+
+使用可選過濾器檢索分頁回饋記錄：
 
 ```typescript
 const feedback = await mastraClient.listFeedback({
@@ -131,9 +557,11 @@ const feedback = await mastraClient.listFeedback({
 })
 ```
 
-### 彙總意見回饋 {/* #aggregating-feedback */}
+`filters`接受每一個[`FeedbackFilter`](/reference/observability/feedback#feedbackfilter) field. The client sends them as query parameters on `GET /api/observability/feedback`. See [list query parameters](/reference/observability/feedback#list-query-parameters).
 
-彙總數值意見回饋，例如評分，或以 `1` 及 `-1` 表示的讚好／不讚好：
+### 匯總回饋 {/* #aggregating-feedback */}
+
+聚合數字回饋值，例如編碼為的評級或拇指`1` and `-1`:
 
 ```typescript
 const averageRating = await mastraClient.getFeedbackAggregate({
@@ -143,9 +571,9 @@ const averageRating = await mastraClient.getFeedbackAggregate({
 })
 ```
 
-### 分組意見回饋 {/* #grouping-feedback */}
+### 分組回饋 {/* #grouping-feedback */}
 
-按可觀測性維度將數值意見回饋分組：
+依可觀察性維度將數位回饋分組：
 
 ```typescript
 const ratingsByAgent = await mastraClient.getFeedbackBreakdown({
@@ -155,9 +583,9 @@ const ratingsByAgent = await mastraClient.getFeedbackBreakdown({
 })
 ```
 
-### 按時間查詢意見回饋 {/* #querying-feedback-over-time */}
+### 隨著時間的推移查詢回饋 {/* #querying-feedback-over-time */}
 
-按時間間隔將數值意見回饋分桶：
+按間隔儲存數字回饋：
 
 ```typescript
 const ratingsOverTime = await mastraClient.getFeedbackTimeSeries({
@@ -168,9 +596,9 @@ const ratingsOverTime = await mastraClient.getFeedbackTimeSeries({
 })
 ```
 
-### 查詢意見回饋百分位數 {/* #querying-feedback-percentiles */}
+### 查詢回饋百分位數 {/* #querying-feedback-percentiles */}
 
-傳回數值意見回饋的百分位數序列：
+傳回數字回饋值的百分位數系列：
 
 ```typescript
 const ratingPercentiles = await mastraClient.getFeedbackPercentiles({
@@ -180,9 +608,10 @@ const ratingPercentiles = await mastraClient.getFeedbackPercentiles({
 })
 ```
 
-## 相關內容 {/* #related */}
+## 有關的 {/* #related */}
 
-- [意見回饋指南](/docs/observability/feedback)：了解如何建立、列出及查詢意見回饋
-- [意見回饋參考](/reference/observability/feedback)：查看意見回饋結構描述及 HTTP 路由
-- [Agents API](./agents)：了解會產生 Trace 的 Agent 互動
-- [Workflows API](./workflows)：了解如何監察 Workflow 執行
+* [查詢軌跡和跨度](/reference/observability/tracing/advanced-queries)：過濾和聚合已完成的軌跡或跨度
+* [回饋指導](/docs/observability/feedback)：了解如何建立、列出和查詢回饋
+* [回饋參考](/reference/observability/feedback)：查看回饋架構和 HTTP 路由
+* [AgentAPI](./agents)：了解生成痕蹟的Agent交互
+* [WorkflowAPI](./workflows)：了解Workflow執行監控

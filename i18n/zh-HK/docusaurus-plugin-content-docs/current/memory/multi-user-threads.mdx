@@ -1,68 +1,58 @@
 ---
-title: "多用戶對話串 | Memory"
-description: "透過在訊息正文中加入發言者身分，讓多名用戶共享同一個 Mastra 對話串。"
+title: 'Multi-user threads | Memory'
+description: 'Share one Mastra memory thread across multiple users by sending each message as a signal with the speaker in its attributes.'
 packages:
-  - "@mastra/core"
-  - "@mastra/libsql"
-  - "@mastra/memory"
+  - '@mastra/core'
+  - '@mastra/libsql'
+  - '@mastra/memory'
 ---
 
-# 多用戶對話串
+# 多用戶執行緒
 
-一個 Mastra 對話串可由多名用戶共享，而每名用戶都有自己的名稱和職能角色。你可在訊息正文中加入發言者身分，讓 Agent 從同一個共享對話串讀取內容時，仍能分辨不同用戶。
+單一 Mastra 執行緒可以由多個使用者共用。發送每個用戶的消息[`sendMessage()`](/docs/signals/sending-signals)並將揚聲器放入訊息中`attributes`。 Mastra 將訊息呈現為`<user>`標籤攜帶這些屬性，因此Agent可以在現在以及稍後從歷史記錄中載入訊息時區分參與者。
 
-## 何時使用多用戶對話串 {/* #when-to-use-multi-user-threads */}
+## 何時使用多用戶執行緒 {/* #when-to-use-multi-user-threads */}
 
-當多人透過同一個 Agent 就相同主題協作時，可使用多用戶對話串：
+當多人透過一個Agent處理同一主題時，請使用多用戶線程：
 
-- 由編輯、審閱者和審批者共同處理的協作文檔
-- 由一個助手服務多名參與者的群組聊天
-- 不同角色擁有不同權限的多持份者審閱流程
+* 與編輯、審閱者和批准者協作的文檔
+* 一名助手為多名參與者提供服務的群聊
+* 審查不同角色具有不同權限的情況
 
-## 所有參與者共享一個 `resourceId` {/* #share-one-resourceid-across-all-participants */}
+## 分享一個`resourceId` across all participants {/* #share-one-resourceid-across-all-participants */}
 
-一個對話串只屬於一個 `resourceId`，因此共享對話串上的所有參與者都需要傳入相同的值。不要使用用戶 ID（單用戶應用程式的預設做法），而應以對話本身作為 `resourceId` 的鍵值，例如共享文檔可使用 `doc_${docId}`，群組聊天則可使用 `room_${roomId}`。所有人都指向同一個 `resourceId`，便會讀寫相同的歷史記錄。
+一個線程恰好屬於一個`resourceId`, so everyone on a shared thread needs to pass the same value. Instead of a user ID (the default for single-user apps), key `resourceId` on the conversation itself, for example `doc_${docId}` for a shared document or `room_${roomId}` for a group chat. With everyone pointing at the same `resourceId` and `threadId`, they read and write the same history.
 
-## 為每則用戶訊息標記發言者身分 {/* #tag-each-user-message-with-the-speakers-identity */}
+## 發送帶有說話者身份的每個訊息 {/* #send-each-message-with-the-speakers-identity */}
 
-模型需要知道每一輪由誰發言。由於訊息正文是唯一會保留在歷史記錄中並重新載入至上下文的位置，因此可使用一個小型 `<turn>` 標籤包裹每則用戶訊息，並加入發言者的 ID、名稱和角色。標籤會一直附在訊息上，所以在重新載入過往輪次時，模型仍可看到每句說話出自誰人。
+`contents` and `attributes`. Each attribute becomes an XML attribute on the `<user>` tag the model reads:
 
-使用一個小型輔助函式建立標籤。以下範例是其中一種做法；請將它複製到你的項目，並按用戶資料的結構作出調整：
-
-```typescript title="src/mastra/identity.ts"
-export type Speaker = {
-  id: string
-  name: string
-  role: string
-}
-
-function escapeAttr(value: string) {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/"/g, '&quot;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-}
-
-export function asUserTurn(speaker: Speaker, text: string) {
-  const id = escapeAttr(speaker.id)
-  const name = escapeAttr(speaker.name)
-  const role = escapeAttr(speaker.role)
-  return {
-    role: 'user' as const,
-    content: `<turn author_id="${id}" author_name="${name}" functional_role="${role}">
-${text}
-</turn>`,
-  }
-}
+```typescript title="src/mastra/send.ts"
+agent.sendMessage(
+  {
+    contents: 'Please make the cover page teal.',
+    attributes: { name: 'Alice', role: 'editor' },
+  },
+  { resourceId: 'doc_42', threadId: 'doc_42' },
+)
 ```
 
-在 Agent 的指示中教它如何讀取 `<turn>` 標籤。Agent 必須已設定 `memory`，才能使用 `thread` 和 `resource` 呼叫：
+此模型接收：
+
+```xml
+<user name="Alice" role="editor">Please make the cover page teal.</user>
+```
+
+Mastra 為您轉義屬性值。屬性名稱必須是有效的 XML 名稱，例如`name`, `role` or `user_id`. Any other name fails with `Invalid signal XML attribute name` when the message is rendered for the model. The attributes are stored with the message, so when history loads on a later turn, the model still sees who said what.
+
+## 告訴Agent如何讀取標籤 {/* #tell-the-agent-how-to-read-the-tag */}
+
+描述`<user>` tag and its attributes in the agent's instructions. The agent needs `memory` so its messages are stored on the thread:
 
 ```typescript title="src/mastra/agents/collab.ts"
 import { Agent } from '@mastra/core/agent'
-import { Memory } from '@mastra/memory'
 import { LibSQLStore } from '@mastra/libsql'
+import { Memory } from '@mastra/memory'
 
 const memory = new Memory({
   storage: new LibSQLStore({ id: 'collab-storage', url: 'file:./collab.db' }),
@@ -74,146 +64,82 @@ const memory = new Memory({
 export const collabAgent = new Agent({
   id: 'collab',
   name: 'CollabAgent',
-  model: '__GATEWAY_OPENAI_MODEL_MINI__',
+  model: '__GATEWAY_OPENAI_MODEL_LUNA__',
   memory,
   instructions: `
-You are a collaborative document assistant. Multiple users talk to you in the SAME thread.
+You are a collaborative document assistant. Several people talk to you in the same thread.
 
-Every user message is wrapped in a <turn> tag carrying the user's identity:
+Each user message arrives in a <user> tag whose attributes say who sent it:
 
-  <turn author_id="u_alice" author_name="Alice" functional_role="editor">
-  ...message text...
-  </turn>
+  <user name="Alice" role="editor">...message text...</user>
 
-Rules:
-1. Address users by their author_name.
-2. Respect functional_role: editors propose changes, reviewers approve.
-3. When attributing past statements, read author_name from the surrounding <turn> tag.
-4. Do not echo the <turn> tags back at users.
+Address people by name. Editors propose changes and reviewers approve them.
+When you refer to something said earlier, name the person who said it.
   `.trim(),
 })
 ```
 
-使用包裹後的訊息呼叫 Agent。每名參與者會共享相同的 `thread` 和 `resource`：
+將每個參與者的消息傳送到同一個執行緒。當線程空閒時，`sendMessage()` starts a run and `accepted` resolves with its output:
 
-```typescript title="src/mastra/call.ts"
-import { asUserTurn } from './identity'
+```typescript title="src/mastra/send.ts"
+import { collabAgent } from './agents/collab'
 
-const docResourceId = 'doc_42'
-const docThreadId = 'doc_42'
+const doc = { resourceId: 'doc_42', threadId: 'doc_42' }
 
-const alice = { id: 'u_alice', name: 'Alice', role: 'editor' }
-const bob = { id: 'u_bob', name: 'Bob', role: 'reviewer' }
+async function send(speaker: { name: string; role: string }, text: string) {
+  const { accepted } = collabAgent.sendMessage({ contents: text, attributes: speaker }, doc)
+  const result = await accepted
+  if (result.action === 'wake') {
+    return (await result.output.getFullOutput()).text
+  }
+}
 
-await collabAgent.generate([asUserTurn(alice, 'My favorite color is teal.')], {
-  memory: { thread: docThreadId, resource: docResourceId },
-})
-
-await collabAgent.generate([asUserTurn(bob, 'I want QA sign-off before publish.')], {
-  memory: { thread: docThreadId, resource: docResourceId },
-})
+await send({ name: 'Alice', role: 'editor' }, 'Please make the cover page teal.')
+await send({ name: 'Bob', role: 'reviewer' }, 'I want QA sign-off before we publish.')
+await send({ name: 'Alice', role: 'editor' }, 'Who asked for QA sign-off?')
+// The agent answers that Bob asked for it.
 ```
 
-`<turn>` 標籤會保留在訊息正文中，因此在往後的輪次重新載入歷史記錄時，模型仍可看到每句說話出自誰人。
+當客服人員仍在回覆其他人時收到訊息時，Mastra 將其傳遞到正在運行的回合中，而不是開始新的回合，並且`accepted` resolves with `action: 'deliver'`. In a live app, render replies from the [thread stream](/docs/signals/thread-streams) rather than from each `sendMessage()` call. That way every participant sees the same conversation.
 
-## 與不同記憶層配合使用 {/* #combining-with-memory-layers */}
+## 與記憶層結合 {/* #combining-with-memory-layers */}
 
-用戶標記模式可與每個記憶層配合使用。請按對話需要記住每名用戶資料的時間長度選擇記憶層：
+根據對話需要記住每個參與者的時間來選擇記憶層：
 
-- **短對話**（單一工作階段，或對話串的內容足夠少，可完全容納於 `lastMessages`），或需要逐字記錄每句說話出自誰人時：只使用[訊息歷史記錄](#message-history-alone)。歷史記錄中的用戶標籤已經足夠，毋須額外的記憶層。
-- **長時間運作的對話串**（對話內容超出 `lastMessages`，而且需要在歷史記錄被移除後仍保留每名用戶的資料）：使用[觀察式記憶](#with-observational-memory-recommended)。
-- **需要結構化的參與者名單，或儲存空間適配器不支援 OM**（OM 需要 LibSQL、PG 或 MongoDB）：使用[工作記憶](#with-working-memory)。
+* **簡短的對話**，或者當您需要逐字記錄誰說了什麼時：使用[message history alone](#message-history-alone).
+* **長時間運行的執行緒**超出上下文視窗：使用[Observational Memory](#with-observational-memory).
 
-我們建議使用觀察式記憶或工作記憶，因為兩者涵蓋的需要有所重疊。同時運行兩者會增加延遲和 token 成本，卻沒有太大裨益。
+### 僅訊息歷史記錄 {/* #message-history-alone */}
 
-### 只使用訊息歷史記錄 {/* #message-history-alone */}
+`lastMessages`將較早的消息帶回上下文中`<user>` attributes, so attribution survives across turns. The agent example above uses this setup.
 
-對於短對話，或需要逐字記錄每句說話出自誰人時，歷史記錄中的用戶標籤已經足夠。`lastMessages` 會將過往輪次及其完整的發言者資料重新載入至上下文：
+### 具有觀察記憶 {/* #with-observational-memory */}
 
-```typescript title="src/mastra/agents/collab-basic.ts"
-import { Memory } from '@mastra/memory'
-import { LibSQLStore } from '@mastra/libsql'
-
-const memory = new Memory({
-  storage: new LibSQLStore({ id: 'collab-storage', url: 'file:./collab.db' }),
-  options: {
-    lastMessages: 20,
-  },
-})
-```
-
-模型會從目前訊息的 `<turn>` 標籤，以及透過 `lastMessages` 載入的過往已標記訊息中讀取身分資料。
-
-### 使用 Observational Memory（建議） {/* #with-observational-memory-recommended */}
-
-[Observational Memory](../memory/observational-memory)（OM）會將每名用戶的資料擷取至背景記錄，而不會佔用 Agent 的 Tool 預算。預設 Observer 模型可直接讀取 `<turn>` 標籤，並產生如 `Alice stated her favorite color is teal.` 和 `Bob asked for QA sign-off before publish.` 的歸屬資料。
-
-如果你的儲存空間支援 OM，多用戶對話串應優先使用 OM，而非工作記憶。OM 會自動擷取資料，可擴展至任意數量的參與者，而且毋須維護範本。啟用時不需要覆寫任何設定：
+[觀察記憶](/docs/memory/observational-memory)(OM) 透過用觀察取代舊訊息，在上下文視窗內保留一個長共享執行緒。在相同的情況下啟用它`Memory`:
 
 ```typescript title="src/mastra/agents/collab-om.ts"
-import { Memory } from '@mastra/memory'
 import { LibSQLStore } from '@mastra/libsql'
+import { Memory } from '@mastra/memory'
 
 const memory = new Memory({
   storage: new LibSQLStore({ id: 'collab-storage', url: 'file:./collab.db' }),
   options: {
-    lastMessages: 20,
     observationalMemory: true,
   },
 })
 ```
 
-OM 需要支援它的儲存空間適配器：`@mastra/libsql`、`@mastra/pg`、`@mastra/mongodb` 或 `@mastra/oracledb`。
+OM 取代`lastMessages` history loading, so leave `lastMessages` out when OM is on.
 
-:::note
+觀察者保留說話者的屬性，因此觀察結果顯示誰說了什麼。發送的訊息`attributes: { name: 'Alice', role: 'editor' }` is labeled `User (name="Alice" role="editor")`. Messages sent without attributes are labeled plain `User`.
 
-如果你將 Observer 切換至能力較弱的模型，並看到資料被合併為通用的 `User`，請使用 [`observation.instruction`](/reference/memory/observational-memory) 教 Observer 如何讀取 `<turn>` 標籤。
+## 安全 {/* #security */}
 
-:::
+從經過身份驗證的使用者（而不是請求正文）設定伺服器上的屬性。如果客戶可以選擇自己的`name`, one user can impersonate another. Use [request context](/docs/server/request-context) to read the verified user from your auth layer and build the `attributes` before calling `sendMessage()`.
 
-### 使用工作記憶 {/* #with-working-memory */}
+## 有關的 {/* #related */}
 
-當 OM 不適用時，可使用工作記憶，例如儲存空間適配器不支援 OM，或你需要 Agent 在每一輪都能讀寫結構化且結果可預期的參與者名單。
-
-預設的[工作記憶](../memory/working-memory)範本假設每個對話串只有一名用戶（「First Name」、「Last Name」等）。對於多用戶對話串，請提供包含參與者名單的範本：
-
-```typescript title="src/mastra/agents/collab-wm.ts"
-import { Memory } from '@mastra/memory'
-import { LibSQLStore } from '@mastra/libsql'
-
-const memory = new Memory({
-  storage: new LibSQLStore({ id: 'collab-storage', url: 'file:./collab.db' }),
-  options: {
-    lastMessages: 20,
-    workingMemory: {
-      enabled: true,
-      scope: 'thread',
-      template: `# Document Collaboration State
-
-## Participants
-<!-- One entry per known collaborator. Use author_id as the stable key. -->
-<!-- - **<author_name>** (<author_id>, <functional_role>): <their position> -->
-
-## Open Questions
-
-## Decisions
-`,
-    },
-  },
-})
-```
-
-設定 `scope: 'thread'`，讓參與者名單屬於文檔，而非任何個別用戶。加入一項指示，要求 Agent 每當有新的 `author_id` 出現在 `<turn>` 中時，便將新參與者加入名單。
-
-如需進一步了解範本，請參閱[自訂範本](../memory/working-memory#custom-templates)。
-
-## 安全性 {/* #security */}
-
-請從已驗證身分的請求上下文設定 `speaker`，切勿從請求正文設定。如果客戶端可自行選擇 `author_id`，一名用戶便可冒充另一名用戶。使用 [Request Context](/docs/server/request-context) 從驗證層讀取已驗證的用戶，並在呼叫 Agent 前於伺服器上建立 `<turn>` 標籤。
-
-## 相關內容 {/* #related */}
-
-- [工作記憶](../memory/working-memory)
-- [Observational Memory](../memory/observational-memory)
-- [在 Agent 之間共享記憶](../memory/overview#share-memory-between-agents)
-- [`Memory` 參考資料](/reference/memory/memory-class)
+* [發送訊號](/docs/signals/sending-signals)
+* [Agent`sendMessage()` reference](/reference/agents/agent#sendmessagemessage-options)
+* [觀察記憶](/docs/memory/observational-memory)
+* [`Memory`參考](/reference/memory/memory-class)

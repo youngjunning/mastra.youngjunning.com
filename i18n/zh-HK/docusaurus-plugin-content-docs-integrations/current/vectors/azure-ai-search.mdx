@@ -1,0 +1,317 @@
+---
+title: "Azure AI Search | Vector Stores"
+description: "Query an existing Azure AI Search resource from Mastra with vector search, hybrid vector and text search, semantic ranking, and metadata filters."
+packages:
+  - "@mastra/azure-ai-search"
+---
+
+# Azure AI 搜尋向量儲存
+
+這`AzureAISearchVector`類別提供向量搜尋使用[Azure 人工智慧搜尋](https://learn.microsoft.com/azure/search/vector-search-overview)，微軟的雲端搜尋服務，具有原生向量搜尋支援。它在現有的 Azure AI 搜尋資源之上提供元資料過濾、混合（向量 + 文字）搜尋和語義排名。
+
+## 建構函數選項 {/* #constructor-options */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'id',
+  type: 'string',
+  description: 'Unique identifier for this vector store instance.',
+},
+{
+  name: 'endpoint',
+  type: 'string',
+  description: "The endpoint URL of your Azure AI Search service, e.g. 'https://your-service.search.windows.net'.",
+},
+{
+  name: 'credential',
+  type: 'string | AzureKeyCredential | TokenCredential',
+  description:
+    'An admin API key string, an AzureKeyCredential, or an Azure Identity TokenCredential (e.g. DefaultAzureCredential) for Azure AD authentication.',
+},
+{
+  name: 'apiVersion',
+  type: 'string',
+  isOptional: true,
+  description: 'Azure AI Search REST API version to use. Defaults to the SDK default.',
+},
+{
+  name: 'clientOptions',
+  type: "Omit<SearchClientOptions, 'apiVersion'>",
+  isOptional: true,
+  description:
+    'Additional options passed to the underlying SearchClient/SearchIndexClient, such as additionalPolicies for proxies, custom headers, or retry behavior.',
+},
+{
+  name: 'autoIndexMetadata',
+  type: 'boolean',
+  isOptional: true,
+  defaultValue: 'true',
+  description:
+    'Add a filterable field to the index the first time a top-level string, number, or boolean metadata key is seen in upsert() or updateVector(). Azure AI Search can only filter on declared fields, so this is required for Memory semantic recall (which filters by thread_id and resource_id) unless you declare those keys via metadataIndexes. Set to false to manage the schema yourself.',
+},
+]}
+/>
+
+```typescript
+import { AzureAISearchVector } from '@mastra/azure-ai-search'
+
+const vectorStore = new AzureAISearchVector({
+  id: 'azure-search-vectors',
+  endpoint: process.env.AZURE_AI_SEARCH_ENDPOINT!,
+  credential: process.env.AZURE_AI_SEARCH_CREDENTIAL!,
+})
+```
+
+## 方法 {/* #methods */}
+
+### `createIndex()` {/* #createindex */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index to create',
+},
+{
+  name: 'dimension',
+  type: 'number',
+  description: 'Vector dimension (must match your embedding model)',
+},
+{
+  name: 'metric',
+  type: "'cosine' | 'euclidean' | 'dotproduct'",
+  isOptional: true,
+  defaultValue: 'cosine',
+  description: 'Distance metric for similarity search',
+},
+{
+  name: 'metadataIndexes',
+  type: "Array<string | { name: string; type: 'string' | 'number' | 'boolean' }>",
+  isOptional: true,
+  description:
+    'Metadata keys to declare as explicit filterable fields up front. Optional when autoIndexMetadata is enabled (the default), since fields are then added on first write. Values whose JavaScript type does not match the declared field type are kept in the JSON metadata blob only.',
+},
+]}
+/>
+
+對於 Azure AI 搜尋特定的索引功能（自訂向量欄位名稱、附加架構欄位、HNSW 參數、語義配置），請使用`createAdvancedIndex()` with `AzureAISearchCreateIndexParams`.
+
+### `upsert()` {/* #upsert */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index to upsert into',
+},
+{
+  name: 'vectors',
+  type: 'number[][]',
+  description: 'Array of embedding vectors',
+},
+{
+  name: 'metadata',
+  type: 'Record<string, any>[]',
+  isOptional: true,
+  description: 'Metadata for each vector',
+},
+{
+  name: 'ids',
+  type: 'string[]',
+  isOptional: true,
+  description:
+    'Optional vector IDs (auto-generated if not provided). IDs containing characters other than letters, digits, _, - and = are stored base64url-encoded and decoded back on read, so any string is accepted.',
+},
+{
+  name: 'deleteFilter',
+  type: 'AzureAISearchVectorFilter',
+  isOptional: true,
+  description: 'Azure AI Search-specific: delete documents matching this filter before upserting.',
+},
+]}
+/>
+
+### `query()` {/* #query */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index to query',
+},
+{
+  name: 'queryVector',
+  type: 'number[]',
+  description: 'Query vector to find similar vectors',
+},
+{
+  name: 'topK',
+  type: 'number',
+  isOptional: true,
+  defaultValue: '10',
+  description: 'Number of results to return',
+},
+{
+  name: 'filter',
+  type: 'AzureAISearchVectorFilter',
+  isOptional: true,
+  description:
+    'Metadata filter for the query, using Mastra operators ($eq, $ne, $gt, $gte, $lt, $lte, $in, $nin, $exists, $and, $or, $not). Translated to an Azure OData $filter; raw OData strings are not accepted.',
+},
+{
+  name: 'includeVector',
+  type: 'boolean',
+  isOptional: true,
+  defaultValue: 'false',
+  description: 'Whether to include vectors in the results',
+},
+]}
+/>
+
+不支援的過濾器運算子（例如`$regex`, `$size`, or `$all`, none of which map to Azure AI Search's OData filter syntax) throw an error rather than being silently dropped from the query.
+
+### `listIndexes()` {/* #listindexes */}
+
+以字串形式傳回索引名稱數組。
+
+### `describeIndex()` {/* #describeindex */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index to describe',
+},
+]}
+/>
+
+返回：
+
+```typescript
+interface IndexStats {
+  dimension: number
+  count: number
+  metric: 'cosine' | 'euclidean' | 'dotproduct'
+}
+```
+
+### `deleteIndex()` {/* #deleteindex */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index to delete',
+},
+]}
+/>
+
+### `updateVector()` {/* #updatevector */}
+
+透過 ID 或元資料過濾器更新單一向量。任何一個`id` or `filter` must be provided, but not both.
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index containing the vector to update',
+},
+{
+  name: 'id',
+  type: 'string',
+  isOptional: true,
+  description: 'ID of the vector to update (mutually exclusive with filter)',
+},
+{
+  name: 'filter',
+  type: 'AzureAISearchVectorFilter',
+  isOptional: true,
+  description: 'Metadata filter to identify vector(s) to update (mutually exclusive with id)',
+},
+{
+  name: 'update',
+  type: 'object',
+  description: 'Update parameters: { vector?: number[]; metadata?: Record<string, any> }',
+},
+]}
+/>
+
+### `deleteVector()` {/* #deletevector */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index containing the vector to delete',
+},
+{
+  name: 'id',
+  type: 'string',
+  description: 'ID of the vector to delete',
+},
+]}
+/>
+
+### `deleteVectors()` {/* #deletevectors */}
+
+透過 ID 或元資料過濾器刪除多個向量。任何一個`ids` or `filter` must be provided, but not both.
+
+<PropertiesTable
+  content={[
+{
+  name: 'indexName',
+  type: 'string',
+  description: 'Name of the index containing the vectors to delete',
+},
+{
+  name: 'ids',
+  type: 'string[]',
+  isOptional: true,
+  description: 'Array of vector IDs to delete (mutually exclusive with filter)',
+},
+{
+  name: 'filter',
+  type: 'AzureAISearchVectorFilter',
+  isOptional: true,
+  description: 'Metadata filter to identify vectors to delete (mutually exclusive with ids)',
+},
+]}
+/>
+
+## Azure 特定的查詢方法 {/* #azure-specific-query-methods */}
+
+超出標準`query()` method, `AzureAISearchVector` exposes Azure AI Search-specific capabilities:
+
+* **`advancedQuery()`**：直接公開 Azure AI 搜尋向量查詢參數，包括窮舉搜尋、查詢加權、過採樣、多向量搜尋的附加向量查詢、預/後過濾模式和基於文字的查詢類型（`semantic`, `hybrid`).
+* **`semanticQuery()`**：方便的包裝`advancedQuery()` for semantic ranking with a configured semantic configuration.
+* **`hybridQuery()`**：將向量搜尋與全文查詢結合的便捷包裝器。
+* **`multiVectorQuery()`**：方便的包裝器，用於一次查詢多個加權向量。
+* **`exactQuery()`**：方便包裝`advancedQuery()` with exhaustive (non-approximate) search enabled.
+
+這些方法是附加的：`query()` remains the Memory-compatible entry point used by Mastra's semantic recall.
+
+## 回應類型 {/* #response-types */}
+
+查詢結果以如下格式傳回：
+
+```typescript
+interface QueryResult {
+  id: string
+  score: number
+  metadata: Record<string, any>
+  document?: string // Matched document content
+  vector?: number[] // Only included if includeVector is true
+}
+```
+
+## 有關的 {/* #related */}
+
+* [元資料過濾器](/reference/rag/metadata-filters)

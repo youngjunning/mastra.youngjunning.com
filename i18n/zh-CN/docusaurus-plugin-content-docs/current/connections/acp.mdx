@@ -1,0 +1,154 @@
+---
+title: "Agent Client Protocol (ACP) | Connections"
+description: "Connect ACP-compatible coding agents to Mastra as tools or subagents, with configured models and sessions that stream Agent Client Protocol interactions."
+packages:
+  - "@mastra/acp"
+  - "@mastra/core"
+---
+
+# Agent客户端协议
+
+马斯特拉支持[Agent Client Protocol (ACP)](https://agentclientprotocol.com/overview/introduction)用于从 Mastra Agent运行 ACP 兼容的编码Agent。使用`@mastra/acp`将编码Agent进程包装为 Mastra Tool或子Agent。
+
+ACP 对于 Claude Code、Cline、OpenCode、Amp、Codex 或通过标准输入和输出实现 ACP 的任何其他可执行文件等编码Agent非常有用。
+
+## 何时使用 ACP {/* #when-to-use-acp */}
+
+* Mastra Agent应将代码检查、编辑或存储库任务委托给外部编码Agent。
+* 与 ACP 兼容的Agent进程应该在调用之间保持活动状态，以便它可以保留会话上下文。
+* 任务运行时，父Agent需要来自编码Agent的实时输出。
+* 与 ACP 兼容的Agent在读取文件或写入文件或运行操作之前需要权限提示。
+* 文件访问应该通过 Mastra 的工作空间抽象，而不是直接的仅进程文件访问。
+
+## ACP 的工作原理 {/* #how-acp-works */}
+
+`@mastra/acp`将配置的 ACP Agent命令作为子进程启动，并通过标准输入和输出使用换行符分隔的 JSON 与其进行通信。
+
+流程是：
+
+1. 配置`command`, `args`, and optional connection settings.
+2. `@mastra/acp`首次使用时生成 ACP Agent进程。
+3. 客户端发送ACP`initialize` and `session/new` requests.
+4. Mastra 将用户任务发送到 ACP Agent`session/prompt`.
+5. ACP Agent将会话更新和消息块流式传输回 Mastra。
+6. Mastra 返回缓冲的输出或发出流数据块，或者处理权限输入。
+7. ACP 连接在出现提示后停止进程：`persistSession` is `false`. `AcpAgent` can keep a reusable process alive across calls by default.
+
+在执行期间，ACP客户端还处理权限请求和文件操作。Agent通过协议请求的文件读写经过Mastra的`Workspace`. The workspace covers only those requests: the agent process runs with the configured `cwd` and isn't sandboxed or isolated, and it can still reach files through its own tools and shell commands.
+
+## 兼容Agent {/* #compatible-agents */}
+
+任何通过标准输入和输出实现 ACP 的可执行文件都可以与`@mastra/acp`. You don't need a dedicated Mastra package for each agent. Install the agent, then pass its launch command through `command` and `args`.
+
+|Agent|`command` | `args` |
+| - | - | - |
+| Cline | `cline` | `['--acp']` |
+| OpenCode | `opencode` | `['acp']` |
+| Gemini CLI | `gemini` | `['--acp']` |
+
+每个Agent都会记录其自己的 ACP 模式，并且启动标志在版本之间会发生变化。检查当前命令的Agent文档，例如[Cline ACP](https://docs.cline.bot/usage/acp) or [OpenCode ACP](https://opencode.ai/docs/acp/).
+
+## 入门 {/* #getting-started */}
+
+安装`@mastra/acp` in a project that already uses `@mastra/core`. The package requires `@mastra/core` version `1.34.0` or later.
+
+```bash npm2yarn
+npm install @mastra/acp
+```
+
+`@mastra/acp`导出两个API：
+
+* [`createACPTool()`](/reference/acp/create-acp-tool)：创建一个 Mastra Tool来发送`task` string to an ACP agent and returns an `output` string.
+* [`AcpAgent`](/reference/acp/acp-agent)：将 ACP Agent包装为 Mastra 子Agent`generate()` and `stream()` support.
+
+## 使用 ACP 作为子Agent {/* #use-acp-as-a-subagent */}
+
+使用`AcpAgent` when a parent Mastra agent should delegate directly to an ACP-compatible coding agent as a subagent.
+
+```typescript title="src/mastra/agents/code-supervisor.ts"
+import { AcpAgent } from '@mastra/acp'
+import { Agent } from '@mastra/core/agent'
+
+const codeAgent = new AcpAgent({
+  id: 'code-agent',
+  name: 'Code Agent',
+  description: 'An ACP-compatible coding agent that can inspect and edit files',
+  command: 'opencode',
+  args: ['acp'],
+  cwd: process.cwd(),
+})
+
+export const codeSupervisor = new Agent({
+  id: 'code-supervisor',
+  name: 'Code Supervisor',
+  instructions: 'Delegate code editing tasks to the code-agent subagent.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  agents: {
+    codeAgent,
+  },
+})
+```
+
+请参阅[AcpAgent reference](/reference/acp/acp-agent) for all options, methods, and configuration.
+
+## 使用 ACP 作为Tool {/* #use-acp-as-a-tool */}
+
+使用`createACPTool()` when the parent Mastra agent should decide when to call the ACP agent as a tool.
+
+```typescript title="src/mastra/agents/code-supervisor.ts"
+import { createACPTool } from '@mastra/acp'
+import { Agent } from '@mastra/core/agent'
+
+const codeAgentTool = createACPTool({
+  id: 'code-agent',
+  description: 'Use an ACP-compatible coding agent to inspect and edit code',
+  command: 'opencode',
+  args: ['acp'],
+  cwd: process.cwd(),
+})
+
+export const codeSupervisor = new Agent({
+  id: 'code-supervisor',
+  name: 'Code Supervisor',
+  instructions: 'Use the code-agent tool when a task requires repository inspection or code edits.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  tools: {
+    codeAgentTool,
+  },
+})
+```
+
+请参阅[createACPTool() reference](/reference/acp/create-acp-tool) for all options and configuration.
+
+## 选型 {/* #model-selection */}
+
+ACP Agent可以公开可选择的模型。经过`model` in the ACP configuration to select a model after session creation, or use `AcpAgent.getAvailableModels()` and `AcpAgent.setModel()` to manage models at runtime.
+
+请参阅[AcpAgent model management methods](/reference/acp/acp-agent#model-management) for examples.
+
+## 会话生命周期 {/* #session-lifecycle */}
+
+`AcpAgent`首次使用时启动配置的命令并创建 ACP 会话。默认情况下，`persistSession` is `true`. The child process stays alive across calls. Set `persistSession: false` when each prompt should run in an isolated process.
+
+请参阅[AcpAgent session lifecycle](/reference/acp/acp-agent#session-lifecycle) section for details.
+
+## 权限处理 {/* #permission-handling */}
+
+ACP Agent可能会要求客户在继续之前选择一个权限选项。默认情况下，`@mastra/acp` selects the first option returned by the ACP agent. Pass `onPermissionRequest` when you need custom permission behavior.
+
+请参阅[createACPTool() permission handling](/reference/acp/create-acp-tool#permission-handling) section for a complete example.
+
+## 工作空间集成 {/* #workspace-integration */}
+
+ACP 文件请求通过 Mastra 的Workspace抽象。`AcpAgent` can use a `workspace` option, and `createACPTool()` uses the current Mastra workspace from the tool execution context when one is available. Without a workspace, `@mastra/acp` falls back to a `Workspace` backed by `LocalFilesystem` at `cwd` or `process.cwd()`.
+
+请参阅[AcpAgent workspace integration](/reference/acp/acp-agent#workspace-integration) section for custom workspace examples.
+
+## 有关的 {/* #related */}
+
+* [AcpAgent 参考](/reference/acp/acp-agent)
+* [createACPTool() 参考](/reference/acp/create-acp-tool)
+* [Agent参考](/reference/agents/agent)
+* [子Agent](/docs/subagents)
+* [Agent客户端协议介绍](https://agentclientprotocol.com/overview/introduction)
+* [Agent客户端协议架构](https://agentclientprotocol.com/protocol/schema)

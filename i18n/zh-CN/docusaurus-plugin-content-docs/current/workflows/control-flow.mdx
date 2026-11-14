@@ -1,30 +1,42 @@
 ---
-title: "控制流 | Workflows"
-description: "Mastra Workflow 中的控制流允许你管理分支、合并和条件，从而构建符合逻辑要求的 Workflow。"
+title: "Control flow | Workflows"
+description: "Control Mastra workflow execution with sequential steps, parallel branches, conditional logic, loops, nested workflows, mapping, and output merging."
 packages:
   - "@mastra/core"
 ---
 
-# 控制流
+# 控制流程
 
-Workflow 会运行一系列预定义任务，你可以控制该流程的执行方式。任务被划分为**步骤**，可根据需求以不同方式执行：可以依次或并行运行，也可以根据条件采用不同路径。
+Workflow程让您可以通过将每个任务划分为多个任务来控制预定义的任务**steps**。这些步骤可以顺序或并行运行，并且它们可以遵循条件路径。
 
-每个步骤通过定义的 Schema 连接到 Workflow 中的下一步骤，使数据保持受控和一致。
+每个步骤都通过定义的模式连接到Workflow程中的下一个步骤，以保持数据受控和一致。
 
 ## 核心原则 {/* #core-principles */}
 
-- 第一个步骤的 `inputSchema` 必须与 Workflow 的 `inputSchema` 匹配。
-- 最后一个步骤的 `outputSchema` 必须与 Workflow 的 `outputSchema` 匹配。
-- 每个步骤的 `outputSchema` 必须与下一步骤的 `inputSchema` 匹配。
-  - 如果不匹配，请使用[输入数据映射](#input-data-mapping)将数据转换为所需结构。
+* 第一步的`inputSchema` must match the workflow’s `inputSchema`.
+* 最后一步的`outputSchema` must match the workflow’s `outputSchema`.
+* 每一步的`outputSchema` must match the next step’s `inputSchema`.
+  * 如果没有，请使用[Input data mapping](#input-data-mapping) to transform the data into the required shape.
 
-## 使用 `.then()` 链接步骤 {/* #chaining-steps-with-then */}
+## 链接步骤`.then()` {/* #chaining-steps-with-then */}
 
-使用 `.then()` 按顺序运行步骤，让每个步骤都能访问上一步的结果。
+使用`.then()` to run steps in order, allowing each step to access the result of the step before it.
 
-![使用 .then() 链接步骤](/img/workflows/workflows-control-flow-then.jpg)
+```mermaid
+flowchart LR
+  accTitle: Running workflow steps in sequence
+  accDescr: The workflow passes its input to step1, then passes step1's output to step2 before completing.
+  start(( start )) -- in --> step1([step1])
+  step1 -- out --> step2([step2])
+  step2 -- out --> stop(( end ))
 
-```typescript {27-28} title="src/mastra/workflows/test-workflow.ts"
+  class stop accent
+```
+
+```typescript {30-31} title="src/mastra/workflows/test-workflow.ts"
+import { createWorkflow, createStep } from '@mastra/core/workflows'
+import { z } from 'zod'
+
 const step1 = createStep({
   inputSchema: z.object({
     message: z.string(),
@@ -56,13 +68,27 @@ export const testWorkflow = createWorkflow({
   .commit()
 ```
 
-## 使用 `.parallel()` 同时运行步骤 {/* #simultaneous-steps-with-parallel */}
+## 同时进行的步骤`.parallel()` {/* #simultaneous-steps-with-parallel */}
 
-使用 `.parallel()` 同时运行多个步骤。所有并行步骤都必须完成，Workflow 才会继续执行下一步骤。定义后续步骤的 `inputSchema` 时会使用每个步骤的 `id`；该 ID 也会成为 `inputData` 对象上的键，用于访问先前步骤的值。后续步骤可以引用或合并并行步骤的输出。
+使用`.parallel()` to run steps simultaneously. All parallel steps must complete before the workflow continues to the next step. Each step's `id` is used when defining a following step's `inputSchema` and becomes the key on the `inputData` object used to access the previous step's values. The outputs of parallel steps can then be referenced or combined by a following step.
 
-![使用 .parallel() 并发运行步骤](/img/workflows/workflows-control-flow-parallel.jpg)
+```mermaid
+flowchart LR
+  accTitle: Running workflow steps in parallel
+  accDescr: The workflow runs step1 and step2 in parallel. Their outputs join at step3 before the workflow completes.
+  start(( start )) -- in --> step1([step1])
+  start -- in --> step2([step2])
+  step1 -- out --> step3([step3])
+  step2 -- out --> step3
+  step3 -- out --> stop(( end ))
 
-```typescript {39} title="src/mastra/workflows/test-workflow.ts"
+  class stop accent
+```
+
+```typescript {42} title="src/mastra/workflows/test-workflow.ts"
+import { createWorkflow, createStep } from '@mastra/core/workflows'
+import { z } from 'zod'
+
 const step1 = createStep({
   id: 'step-1',
 })
@@ -108,9 +134,12 @@ export const testWorkflow = createWorkflow({
 
 ### 输出结构 {/* #output-structure */}
 
-多个步骤并行运行时，输出是一个对象，每个键是步骤的 `id`，值是该步骤的输出。可以独立访问每个并行步骤的结果。
+当步骤并行运行时，输出是一个对象，其中每个键都是该步骤的`id` and the value is that step's output. You can access each parallel step's result independently.
 
 ```typescript title="src/mastra/workflows/test-workflow.ts"
+import { createWorkflow, createStep } from '@mastra/core/workflows'
+import { z } from 'zod'
+
 const step1 = createStep({
   id: 'format-step',
   inputSchema: z.object({ message: z.string() }),
@@ -166,16 +195,19 @@ export const testWorkflow = createWorkflow({
 
 **要点：**
 
-- 每个并行步骤的输出都以其 `id` 为键
-- 所有并行步骤同时执行
-- 下一步骤接收包含所有并行步骤输出的对象
-- 必须定义后续步骤的 `inputSchema`，使其与该结构匹配
+* 每个并行步骤的输出由其键控`id`
+* 所有并行步骤同时执行
+* 下一步接收包含所有并行步骤输出的对象
+* 您必须定义`inputSchema` of the following step to match this structure
 
 ### 处理步骤失败 {/* #handling-step-failures */}
 
-如果任意并行步骤抛出错误，整个并行区块都会失败。若要构建部分步骤可能失败的弹性并行 Workflow（例如多个研究 Agent 中有一个身份验证 token 过期），请在步骤内部使用 try/catch 处理错误：
+如果任何并行步骤抛出错误，则整个并行块都会失败。要构建某些步骤可能失败的弹性并行Workflow程（例如，多个研究Agent可能具有过期的身份验证令牌），请使用 try/catch 处理步骤本身内部的错误：
 
 ```typescript title="src/mastra/workflows/test-workflow.ts"
+import { createStep } from '@mastra/core/workflows'
+import { z } from 'zod'
+
 const resilientStep = createStep({
   id: 'researcher',
   inputSchema: z.object({ query: z.string() }),
@@ -194,9 +226,12 @@ const resilientStep = createStep({
 })
 ```
 
-这样步骤始终会以类型化结果成功完成，下游步骤可以筛除失败的结果：
+这样，该步骤始终会成功并获得键入的结果，并且下游步骤可以过滤掉失败的结果：
 
 ```typescript title="src/mastra/workflows/test-workflow.ts"
+import { createStep } from '@mastra/core/workflows'
+import { z } from 'zod'
+
 const writerStep = createStep({
   id: 'writer',
   inputSchema: z.object({
@@ -213,15 +248,31 @@ const writerStep = createStep({
 })
 ```
 
-有关何时使用 `.parallel()` 或 `.foreach()`，请参阅[选择正确模式](#choosing-the-right-pattern)。
+访问[Choosing the right pattern](#choosing-the-right-pattern) to understand when to use `.parallel()` vs `.foreach()`.
 
-## 使用 `.branch()` 实现条件逻辑 {/* #conditional-logic-with-branch */}
+## 条件逻辑与`.branch()` {/* #conditional-logic-with-branch */}
 
-使用 `.branch()` 根据条件选择要运行的步骤。分支中的所有步骤都需要相同的 `inputSchema` 和 `outputSchema`，因为分支需要一致的 Schema，Workflow 才能采用不同路径。
+使用`.branch()` to run the steps whose conditions evaluate to `true`. Every condition is evaluated, and every condition that returns `true` runs its step, so a run can execute more than one branch. All steps in a branch need the same `inputSchema` and `outputSchema` because branching requires consistent schemas so workflows can follow different paths.
 
-![使用 .branch() 实现条件分支](/img/workflows/workflows-control-flow-branch.jpg)
+```mermaid
+flowchart LR
+  accTitle: Choosing workflow steps with conditional branching
+  accDescr: The workflow runs step1, then runs every branch whose condition is true before committing and ending.
 
-```typescript {30-33} title="src/mastra/workflows/test-workflow.ts" prettier:false
+  start(( start )) -- ".then(step1)" --> step1([step1])
+  step1 -- out --> branchCall@{ shape: text, label: ".branch([A, B])" }
+  branchCall --> stepA([A])
+  branchCall --> stepB([B])
+  stepA accent2@-- "out<br/>.commit()" --> stop(( end ))
+  stepB accent2@-- "out<br/>.commit()" --> stop(( end ))
+
+  class stepA,stepB,stop accent
+```
+
+```typescript {33-36} title="src/mastra/workflows/test-workflow.ts" oxfmt:false
+import { createWorkflow, createStep } from '@mastra/core/workflows';
+import { z } from 'zod';
+
 const step1 = createStep({...})
 
 const stepA = createStep({
@@ -258,11 +309,58 @@ export const testWorkflow = createWorkflow({
   .commit();
 ```
 
+### 带分类器的路由 {/* #route-with-a-classifier */}
+
+已配置的[classifier](/docs/classifier) can produce typed answers before `.branch()`. Route on the answer field that matches each question type: `choice`, `score`, or `probability`.
+
+```typescript title="src/mastra/workflows/ticket-triage.ts"
+import { Classifier } from '@mastra/core/classifier'
+import { typeSafeAi } from '@ai-sdk/typesafe-ai'
+import { createWorkflow } from '@mastra/core/workflows'
+import { z } from 'zod'
+
+const router = new Classifier({
+  id: 'ticket-router',
+  model: typeSafeAi.decisionModel('__AI_SDK_TYPESAFE_DECISION_MODEL__'),
+  questions: {
+    route: {
+      type: 'choice',
+      criteria: {
+        billing: 'Billing, invoices, refunds, and payments',
+        support: 'Account access and product help',
+        other: 'Anything else',
+      },
+    },
+  },
+})
+
+export const ticketTriage = createWorkflow({
+  id: 'ticket-triage',
+  inputSchema: z.object({ message: z.string() }),
+  outputSchema: z.any(),
+})
+  .map({ message: { initData: true, path: 'message' } })
+  .classifier(router)
+  .branch([
+    [async ({ inputData }) => inputData.answers.route.choice === 'billing', billingStep],
+    [async ({ inputData }) => inputData.answers.route.choice === 'support', supportStep],
+    [async ({ inputData }) => inputData.answers.route.choice === 'other', fallbackStep],
+  ])
+  .commit()
+```
+
+这`choice` field retains the configured criteria-key union, so `inputData.answers.route.choice` is typed as `'billing' | 'support' | 'other' | undefined`. Score answers expose `score`. Boolean answers expose the `P(true)` value as `probability`. Apply an explicit threshold when routing.
+
+当决策模型拒绝一个问题时，它的答案是`{ type: 'refusal' }` and `choice`, `score`, and `probability` are `undefined`. In the example above, a refused `route` question matches no condition. Add a condition on `inputData.answers.route.type === 'refusal'` to handle it explicitly.
+
 ### 输出结构 {/* #output-structure-1 */}
 
-使用条件分支时，只会执行条件最先求值为 `true` 的一个分支。输出结构与 `.parallel()` 类似，结果以已执行步骤的 `id` 为键。
+使用条件分支时，每个计算结果为`true` runs its step. The output structure is similar to `.parallel()`, where the result is keyed by each executed step's `id`. Because more than one condition can be true, write mutually exclusive conditions when exactly one path should run, and don't end with an unconditional `true` fallback unless you want that fallback to run alongside the matching branch.
 
 ```typescript title="src/mastra/workflows/test-workflow.ts"
+import { createWorkflow, createStep } from '@mastra/core/workflows'
+import { z } from 'zod'
+
 const step1 = createStep({
   id: 'initial-step',
   inputSchema: z.object({ value: z.number() }),
@@ -297,7 +395,7 @@ const finalStep = createStep({
   }),
   outputSchema: z.object({ message: z.string() }),
   execute: async ({ inputData }) => {
-    // Only one branch will have executed
+    // Conditions here are mutually exclusive, so only one branch runs
     const result = inputData['high-value-step']?.result || inputData['low-value-step']?.result
     return { message: result }
   },
@@ -317,13 +415,13 @@ export const testWorkflow = createWorkflow({
   .commit()
 
 // When executed with { value: 15 }
-// Only the high-value-step executes, output structure:
+// The high-value-step condition is true, so that step executes, output structure:
 // {
 //   "high-value-step": { result: "High value: 15" }
 // }
 
 // When executed with { value: 5 }
-// Only the low-value-step executes, output structure:
+// The low-value-step condition is true, so that step executes, output structure:
 // {
 //   "low-value-step": { result: "Low value: 5" }
 // }
@@ -331,19 +429,31 @@ export const testWorkflow = createWorkflow({
 
 **要点：**
 
-- 根据条件求值顺序只执行一个分支
-- 输出以已执行步骤的 `id` 为键
-- 后续步骤应处理所有可能的分支输出
-- 下一步骤需要处理多个可能分支时，请在 `inputSchema` 中使用可选字段
-- 条件按定义顺序求值
+* 每个评估为的条件`true` runs its step, so a run can execute more than one branch
+* 当只应执行一条路径时，使用互斥条件
+* 输出由每个执行步骤的键控`id`
+* 后续步骤应处理所有可能的分支输出
+* 使用可选字段`inputSchema` when the next step needs to handle multiple possible branches
 
 ## 输入数据映射 {/* #input-data-mapping */}
 
-使用 `.then()`、`.parallel()` 或 `.branch()` 时，有时需要转换上一步的输出，使其与下一步骤的输入匹配。这时可以使用 `.map()` 访问 `inputData` 并进行转换，为下一步骤创建合适的数据结构。
+使用时`.then()`, `.parallel()`, or `.branch()`, it's sometimes necessary to transform the output of a previous step to match the input of the next. In these cases you can use `.map()` to access the `inputData` and transform it to create a suitable data shape for the next step.
 
-![使用 .map() 映射](/img/workflows/workflows-data-mapping-map.jpg)
+```mermaid
+flowchart LR
+  accTitle: Mapping data between workflow steps
+  accDescr: The workflow runs step1, which invokes an agent and outputs foo. The map operation transforms foo into an object with a bar property before the workflow commits and ends.
+  start(( start )) -->|".then(step1)"<br/>in| step1([step1])
+  step1 -- ".map()"<br/>out --> mapping["&quot;foo&quot; → { bar: &quot;foo&quot; }"]
+  mapping -->|".commit()<br/>out"| endNode(( end ))
+  step1 <--> agent([agent])
 
-```typescript {9} title="src/mastra/workflows/test-workflow.ts" prettier:false
+  class endNode accent
+```
+
+```typescript {11} title="src/mastra/workflows/test-workflow.ts" oxfmt:false
+import { createWorkflow, createStep } from '@mastra/core/workflows';
+
 const step1 = createStep({...});
 const step2 = createStep({...});
 
@@ -359,62 +469,110 @@ export const testWorkflow = createWorkflow({...})
   .commit();
 ```
 
-`.map()` 方法还提供用于复杂映射场景的辅助函数。
+这`.map()` method provides additional helper functions for more complex mapping scenarios.
 
-**可用辅助函数：**
+**可用的辅助函数：**
 
-- [`getStepResult()`](/reference/workflows/workflow-methods/map#using-getstepresult)：访问特定步骤的完整输出
-- [`getInitData<any>()`](/reference/workflows/workflow-methods/map#using-getinitdata)：访问 Workflow 的初始输入数据
-- [`mapVariable()`](/reference/workflows/workflow-methods/map#using-mapvariable)：使用声明式对象语法提取和重命名字段
+* [`getStepResultAsync()`](/reference/workflows/workflow-methods/map#using-getstepresultasync)：访问特定步骤的完整输出
+* [`getInitData<any>()`](/reference/workflows/workflow-methods/map#using-getinitdata)：访问Workflow的初始输入数据
+* [`mapVariable()`](/reference/workflows/workflow-methods/map#using-mapvariable)：使用声明性对象语法来提取和重命名字段
 
-### Parallel 和 Branch 输出 {/* #parallel-and-branch-outputs */}
+### 并行和分支输出 {/* #parallel-and-branch-outputs */}
 
-处理 `.parallel()` 或 `.branch()` 输出时，可以使用 `.map()` 转换数据结构，然后再传给下一步骤。需要扁平化或重构输出时尤其有用。
+两个都`.parallel()` and `.branch()` return an object keyed by child step `id`. Use `.map()` to reshape that output for the next operation. This example maps two parallel results into the shared input required by `.branch()`:
 
-```typescript prettier:false title="src/mastra/workflows/test-workflow.ts"
-export const testWorkflow = createWorkflow({...})
-  .parallel([step1, step2])
-  .map(async ({ inputData }) => {
-    // Transform the parallel output structure
-    return {
-      combined: `${inputData["step1"].value} - ${inputData["step2"].value}`
-    };
-  })
-  .then(nextStep)
-  .commit();
-```
+```typescript title="src/mastra/workflows/order-routing-workflow.ts"
+import { createStep, createWorkflow } from '@mastra/core/workflows'
+import { z } from 'zod'
 
-也可以使用 `.map()` 提供的辅助函数：
+const orderSchema = z.object({ amount: z.number(), inventory: z.number() })
+const routingSchema = z.object({ riskScore: z.number(), inStock: z.boolean() })
+const decisionSchema = z.object({ action: z.enum(['review', 'approve']) })
 
-```typescript prettier:false title="src/mastra/workflows/test-workflow.ts"
-export const testWorkflow = createWorkflow({...})
+const scoreRisk = createStep({
+  id: 'score-risk',
+  inputSchema: orderSchema,
+  outputSchema: z.object({ riskScore: z.number() }),
+  execute: async ({ inputData }) => ({
+    riskScore: inputData.amount >= 1_000 ? 80 : 20,
+  }),
+})
+
+const checkInventory = createStep({
+  id: 'check-inventory',
+  inputSchema: orderSchema,
+  outputSchema: z.object({ inStock: z.boolean() }),
+  execute: async ({ inputData }) => ({ inStock: inputData.inventory > 0 }),
+})
+
+const manualReview = createStep({
+  id: 'manual-review',
+  inputSchema: routingSchema,
+  outputSchema: decisionSchema,
+  execute: async () => ({ action: 'review' as const }),
+})
+
+const autoApprove = createStep({
+  id: 'auto-approve',
+  inputSchema: routingSchema,
+  outputSchema: decisionSchema,
+  execute: async () => ({ action: 'approve' as const }),
+})
+
+export const orderRoutingWorkflow = createWorkflow({
+  id: 'order-routing',
+  inputSchema: orderSchema,
+  outputSchema: z.object({
+    'manual-review': decisionSchema.optional(),
+    'auto-approve': decisionSchema.optional(),
+  }),
+})
+  .parallel([scoreRisk, checkInventory])
+  .map(async ({ inputData }) => ({
+    riskScore: inputData['score-risk'].riskScore,
+    inStock: inputData['check-inventory'].inStock,
+  }))
   .branch([
-    [condition1, stepA],
-    [condition2, stepB]
+    [async ({ inputData }) => inputData.riskScore >= 70 || !inputData.inStock, manualReview],
+    [async ({ inputData }) => inputData.riskScore < 70 && inputData.inStock, autoApprove],
   ])
-  .map(async ({ inputData, getStepResult }) => {
-    // Access specific step results
-    const stepAResult = getStepResult("stepA");
-    const stepBResult = getStepResult("stepB");
-    
-    // Return the result from whichever branch executed
-    return stepAResult || stepBResult;
-  })
-  .then(nextStep)
-  .commit();
+  .commit()
 ```
+
+并行输出之前有这个形状`.map()`:
+
+```typescript oxfmt:false
+{
+  'score-risk': { riskScore: 80 },
+  'check-inventory': { inStock: true },
+}
+```
+
+映射的`{ riskScore, inStock }` object is passed to every branch condition and branch step, so their `inputSchema` values must match `routingSchema`. A `.map()` placed after `.branch()` works the same way. Read branch output with `inputData['manual-review']` or `await getStepResultAsync(manualReview)`.
 
 ## 循环步骤 {/* #looping-steps */}
 
-Workflow 支持多种循环方法，可以重复步骤直到或只要条件满足，也可以迭代数组。循环可以与 `.then()` 等其他控制方法组合。
+Workflow支持不同的循环方法，使您可以重复步骤，直到满足条件或在满足条件时重复步骤，或者迭代数组。循环可以与其他控制方法结合使用，例如`.then()`.
 
-### 使用 `.dountil()` 循环 {/* #looping-with-dountil */}
+### 循环使用`.dountil()` {/* #looping-with-dountil */}
 
-使用 `.dountil()` 重复运行步骤，直到条件变为 true。
+使用`.dountil()` to run a step repeatedly until a condition becomes true.
 
-![使用 .dountil() 重复](/img/workflows/workflows-control-flow-dountil.jpg)
+```mermaid
+flowchart LR
+  accTitle: Repeat a workflow step with dountil
+  accDescr: The workflow runs step1, then repeats step2 until its condition becomes true before continuing to the end.
+  start(( start )) -->|".then(step1)"<br/>in| step1([step1])
+  step1 -->|".dountil(step2)"<br/>out| step2([step2])
+  step2 -->|".commit()"<br/>out| endNode(( end ))
+  step2 -- dountil --> step2
 
-```typescript prettier:false {14} title="src/mastra/workflows/test-workflow.ts"
+  class endNode accent
+```
+
+```typescript oxfmt:false {16} title="src/mastra/workflows/test-workflow.ts"
+import { createWorkflow, createStep } from '@mastra/core/workflows';
+
 const step1 = createStep({...});
 
 const step2 = createStep({
@@ -432,13 +590,25 @@ export const testWorkflow = createWorkflow({})
   .commit();
 ```
 
-### 使用 `.dowhile()` 循环 {/* #looping-with-dowhile */}
+### 循环使用`.dowhile()` {/* #looping-with-dowhile */}
 
-使用 `.dowhile()` 在条件保持为 true 时重复运行步骤。
+使用`.dowhile()` to run a step repeatedly while a condition remains true.
 
-![使用 .dowhile() 重复](/img/workflows/workflows-control-flow-dowhile.jpg)
+```mermaid
+flowchart LR
+  accTitle: Repeat a workflow step with dowhile
+  accDescr: The workflow runs step1, then repeats step2 while its condition remains true before continuing to the end.
+  start(( start )) -->|".then(step1)"<br/>in| step1([step1])
+  step1 -->|".dowhile(step2)"<br/>out| step2([step2])
+  step2 -->|".commit()"<br/>out| endNode(( end ))
+  step2 -- dowhile --> step2
 
-```typescript prettier:false {14} title="src/mastra/workflows/test-workflow.ts"
+  class endNode accent
+```
+
+```typescript oxfmt:false {16} title="src/mastra/workflows/test-workflow.ts"
+import { createWorkflow, createStep } from '@mastra/core/workflows';
+
 const step1 = createStep({...});
 
 const step2 = createStep({
@@ -456,13 +626,65 @@ export const testWorkflow = createWorkflow({})
   .commit();
 ```
 
-### 使用 `.foreach()` 循环 {/* #looping-with-foreach */}
+### 在迭代之间传递数据 {/* #passing-data-between-iterations */}
 
-使用 `.foreach()` 为数组中的每个条目运行相同步骤。输入必须为 `array` 类型，循环才能迭代其中的值并对每个值应用步骤逻辑。何时使用 `.foreach()` 或其他方法，请参阅[选择正确模式](#choosing-the-right-pattern)。
+每次迭代`.dountil()` or `.dowhile()` receives the previous iteration's output as its `inputData`. When input validation is enabled (the default), that output is validated against the loop body's `inputSchema` before the body runs. With an object schema such as `z.object()`, keys the schema doesn't declare are removed. Schemas that allow unknown keys, such as `.passthrough()`, keep them.
 
-![使用 .foreach() 重复](/img/workflows/workflows-control-flow-foreach.jpg)
+当循环体是嵌套Workflow程时，将根据嵌套Workflow程的输出进行验证`inputSchema` and then against its first step's `inputSchema`. A value is only available on the next iteration if the nested workflow returns it and both schemas declare it. This includes values produced inside the nested workflow, such as feedback from a step that suspended and resumed.
 
-```typescript prettier:false {15} title="src/mastra/workflows/test-workflow.ts"
+要跨迭代携带数据，请在主体中声明它`inputSchema` and return it from the body's last step:
+
+```typescript title="src/mastra/workflows/test-workflow.ts"
+import { createStep } from '@mastra/core/workflows'
+import { z } from 'zod'
+
+const loopSchema = z.object({
+  draft: z.string(),
+  feedback: z.string().optional(),
+  attempts: z.number(),
+})
+
+const reviewStep = createStep({
+  id: 'review',
+  inputSchema: loopSchema,
+  outputSchema: loopSchema,
+  execute: async ({ inputData }) => {
+    // ...
+    return { draft, feedback, attempts: inputData.attempts + 1 }
+  },
+})
+```
+
+对于不属于步骤输入的值（例如计数器或审核数据），请使用[workflow state](/docs/workflows/workflow-state) instead.
+
+### 循环使用`.foreach()` {/* #looping-with-foreach */}
+
+使用`.foreach()` to run the same step for each item in an array. The input must be of type `array` so the loop can iterate over its values, applying the step's logic to each one. See [Choosing the right pattern](#choosing-the-right-pattern) for guidance on when to use `.foreach()` vs other methods.
+
+```mermaid
+flowchart LR
+  accTitle: Run a workflow step for each array item
+  accDescr: The foreach operation passes three example items into separate runs of step1, then passes their collected results to step2 before the workflow ends.
+  subgraph foreach[".foreach()"]
+    direction TB
+    step1a([step1])
+    step1b([step1])
+    step1c([step1])
+  end
+
+  start(( start )) -->|in| step1a
+  start -->|in| step1b
+  start -->|in| step1c
+  foreach -->|".then(step2)"<br/>out| step2([step2])
+  step2 -->|".commit()"<br/>out| endNode(( end ))
+
+  class endNode accent
+```
+
+```typescript oxfmt:false {18} title="src/mastra/workflows/test-workflow.ts"
+import { createWorkflow, createStep } from '@mastra/core/workflows';
+import { z } from 'zod';
+
 const step1 = createStep({
   inputSchema: z.string(),
   outputSchema: z.string(),
@@ -484,9 +706,12 @@ export const testWorkflow = createWorkflow({
 
 #### 输出结构 {/* #output-structure-2 */}
 
-`.foreach()` 方法始终返回包含每次迭代输出的数组，输出顺序与输入顺序一致。
+这`.foreach()` method always returns an array containing the output of each iteration. The order of outputs matches the order of inputs.
 
 ```typescript title="src/mastra/workflows/test-workflow.ts"
+import { createWorkflow, createStep } from '@mastra/core/workflows'
+import { z } from 'zod'
+
 const addTenStep = createStep({
   id: 'add-ten',
   inputSchema: z.object({ value: z.number() }),
@@ -510,9 +735,11 @@ export const testWorkflow = createWorkflow({
 
 #### 并发限制 {/* #concurrency-limits */}
 
-使用 `concurrency` 控制处理的数组条目数。默认值为 `1`，即依次运行步骤。增大该值可让 `.foreach()` 同时处理多个条目。
+使用`concurrency` to control the number of array items processed. The default is `1`, which runs steps sequentially. Increasing the value allows `.foreach()` to process multiple items simultaneously.
 
-```typescript prettier:false title="src/mastra/workflows/test-workflow.ts"
+```typescript oxfmt:false title="src/mastra/workflows/test-workflow.ts"
+import { createWorkflow, createStep } from '@mastra/core/workflows';
+
 const step1 = createStep({...})
 
 export const testWorkflow = createWorkflow({...})
@@ -520,11 +747,14 @@ export const testWorkflow = createWorkflow({...})
   .commit();
 ```
 
-#### 在 `.foreach()` 后聚合结果 {/* #aggregating-results-after-foreach */}
+#### 之后汇总结果`.foreach()` {/* #aggregating-results-after-foreach */}
 
-由于 `.foreach()` 输出数组，可以使用 `.then()` 或 `.map()` 聚合或转换结果。`.foreach()` 后的步骤会接收完整数组作为输入。
+自从`.foreach()` outputs an array, you can use `.then()` or `.map()` to aggregate or transform the results. The step following `.foreach()` receives the entire array as its input.
 
 ```typescript title="src/mastra/workflows/test-workflow.ts"
+import { createWorkflow, createStep } from '@mastra/core/workflows'
+import { z } from 'zod'
+
 const processItemStep = createStep({
   id: 'process-item',
   inputSchema: z.object({ value: z.number() }),
@@ -559,9 +789,11 @@ export const testWorkflow = createWorkflow({
 // After aggregate: { total: 12 }
 ```
 
-也可以使用 `.map()` 转换数组输出：
+您还可以使用`.map()` to transform the array output:
 
-```typescript prettier:false title="src/mastra/workflows/test-workflow.ts"
+```typescript oxfmt:false title="src/mastra/workflows/test-workflow.ts"
+import { createWorkflow } from '@mastra/core/workflows';
+
 export const testWorkflow = createWorkflow({...})
   .foreach(processItemStep)
   .map(async ({ inputData }) => ({
@@ -573,11 +805,14 @@ export const testWorkflow = createWorkflow({...})
   .commit();
 ```
 
-#### 链接多个 `.foreach()` 调用 {/* #chaining-multiple-foreach-calls */}
+#### 链接多个`.foreach()` calls {/* #chaining-multiple-foreach-calls */}
 
-链接多个 `.foreach()` 调用时，每个调用都作用于上一步的数组输出。这适合数组中的每个条目都需要依次经过多个步骤转换的情况。
+当你连锁`.foreach()` calls, each operates on the array output of the previous step. This is useful when each item in your array needs to be transformed by multiple steps in sequence.
 
 ```typescript title="src/mastra/workflows/test-workflow.ts"
+import { createWorkflow, createStep } from '@mastra/core/workflows'
+import { z } from 'zod'
+
 const chunkStep = createStep({
   id: 'chunk',
   // Takes a document, returns an array of chunks
@@ -611,11 +846,14 @@ export const singleDocWorkflow = createWorkflow({
   .commit()
 ```
 
-对于每个文档都会产生多个 chunk 的多文档处理，有以下选择：
+要处理多个文档（每个文档生成多个块），您可以选择：
 
-**选项 1：在单个步骤中处理所有文档并控制批处理**
+**选项 1：通过批处理控制一步处理所有文档**
 
-```typescript prettier:false title="src/mastra/workflows/test-workflow.ts"
+```typescript oxfmt:false title="src/mastra/workflows/test-workflow.ts"
+import { createWorkflow, createStep } from '@mastra/core/workflows';
+import { z } from 'zod';
+
 const downloadAndChunkStep = createStep({
   id: "download-and-chunk",
   inputSchema: z.array(z.string()),  // Array of URLs
@@ -638,9 +876,12 @@ export const multiDocWorkflow = createWorkflow({...})
   .commit();
 ```
 
-**选项 2：对文档使用 foreach 并聚合 chunk，再使用 foreach 生成嵌入**
+**选项 2：使用 foreach 处理文档和聚合块，然后使用 foreach 进行嵌入**
 
 ```typescript title="src/mastra/workflows/test-workflow.ts"
+import { createWorkflow, createStep } from '@mastra/core/workflows'
+import { z } from 'zod'
+
 const downloadStep = createStep({
   id: 'download',
   inputSchema: z.string(), // Single URL
@@ -676,18 +917,21 @@ export const multiDocWorkflow = createWorkflow({
   .commit()
 ```
 
-**链接 `.foreach()` 的要点：**
+**关于链接的要点`.foreach()`:**
 
-- 每个 `.foreach()` 都作用于上一步的数组
-- 如果 `.foreach()` 内的步骤返回数组，输出将成为数组的数组
-- 必要时使用带 `.flat()` 的 `.map()` 扁平化嵌套数组
-- 对于复杂 RAG 管道，选项 1（在单个步骤中处理批次）通常能提供更好的控制
+* 每个`.foreach()` operates on the array from the previous step
+* 如果迈入一步`.foreach()` returns an array, the output becomes an array of arrays
+* 使用`.map()` with `.flat()` to flatten nested arrays when needed
+* 对于复杂的 RAG 管道，选项 1（在单个步骤中处理批处理）通常提供更好的控制
 
-#### foreach 内的嵌套 Workflow {/* #nested-workflows-inside-foreach */}
+#### foreach 内的嵌套Workflow程 {/* #nested-workflows-inside-foreach */}
 
-`.foreach()` 后的步骤只会在所有迭代完成后执行。如果每个条目都需要运行多个连续操作，请使用嵌套 Workflow，而不是链接多个 `.foreach()` 调用。这样可以将一个条目的所有操作放在一起，让数据流更清晰。
+之后的步骤`.foreach()` only executes after all iterations complete. If you need to run multiple sequential operations per item, use a nested workflow instead of chaining multiple `.foreach()` calls. This keeps all operations for each item together and makes the data flow clearer.
 
 ```typescript title="src/mastra/workflows/test-workflow.ts"
+import { createWorkflow } from '@mastra/core/workflows'
+import { z } from 'zod'
+
 // Define a workflow that processes a single document
 const processDocumentWorkflow = createWorkflow({
   id: 'process-document',
@@ -721,56 +965,72 @@ export const batchProcessWorkflow = createWorkflow({
 // With concurrency: 3, up to 3 documents process their full pipelines in parallel
 ```
 
-**使用嵌套 Workflow 的原因：**
+**为什么使用嵌套Workflow程：**
 
-- **并行性更好**：使用 `concurrency: N` 时，多个条目可以同时运行完整管道。链接 `.foreach().foreach()` 会等待所有条目完成步骤 1，再让所有条目进入步骤 2；嵌套 Workflow 则让每个条目独立推进
-- 收集结果前，一个条目的所有步骤会一起完成
-- 比创建嵌套数组的多个 `.foreach()` 调用更简洁
-- 每次嵌套 Workflow 执行相互独立，并有自己的数据流
-- 更容易单独测试和复用每个条目的逻辑
+* **更好的并行性**： 和`concurrency: N`, multiple items run their full pipelines simultaneously. Chained `.foreach().foreach()` processes all items through step 1, waits, then all through step 2 - nested workflows let each item progress independently
+* 在收集结果之前，要同时完成一项的所有步骤
+* 比多个更干净`.foreach()` calls which create nested arrays
+* 每个嵌套Workflow执行都独立于其自己的数据流
+* 更容易单独测试和重用每项逻辑
 
-**工作方式：**
+**工作原理：**
 
-1. 父 Workflow 将每个数组条目传给一个嵌套 Workflow 实例
-1. 每个嵌套 Workflow 为该条目运行完整步骤序列
-1. 使用 `concurrency > 1` 时，多个嵌套 Workflow 并行执行
-1. 嵌套 Workflow 的最终输出成为结果数组中的一个元素
-1. 所有嵌套 Workflow 完成后，父级的下一步骤接收完整数组
+1. 父Workflow将每个数组项传递给嵌套Workflow的实例
+2. 每个嵌套Workflow程都会运行该项目的完整步骤序列
+3. 和`concurrency > 1`, multiple nested workflows execute in parallel
+4. 嵌套Workflow的最终输出成为结果数组中的一个元素
+5. 所有嵌套Workflow程完成后，父级中的下一步接收完整数组
 
-## 选择正确模式 {/* #choosing-the-right-pattern */}
+## 标记控制流条目 {/* #labeling-control-flow-entries */}
 
-本节可作为选择适当控制流方法的参考。
+每个控制流方法都接受一个可选的最终参数，并且具有稳定的`id`, a `description`, and JSON-serializable `metadata`. These fields identify and describe the graph entry itself, separate from the steps inside it. They survive serialization and storage and appear in `serializedStepGraph`. They have no effect on execution.
+
+```typescript
+workflow
+  .parallel([validateStep, enrichStep], {
+    id: 'independent-enrichment',
+    description: 'Run independent enrichment tasks concurrently',
+    metadata: { title: 'Independent enrichment' },
+  })
+  .sleep(5000, { id: 'wait-before-retry', description: 'Pause before retrying' })
+```
+
+可视化编辑器和审阅Tool可以通过以下方式设置布局和选择状态`id` and render `metadata.title` as a display label. For `.foreach()`, pass the fields in the same options object as `concurrency`. For `.map()`, `.sleep()`, and `.sleepUntil()`, a supplied `id` replaces the generated entry id.
+
+## 选择正确的图案 {/* #choosing-the-right-pattern */}
+
+使用本节作为选择适当的控制流方法的参考。
 
 ### 快速参考 {/* #quick-reference */}
 
-| 方法 | 用途 | 输入 | 输出 | 并发 |
+|方法|目的|输入 |输出|并发 |
 | - | - | - | - | - |
-| `.then(step)` | 顺序处理 | `T` | `U` | 不适用（一次一个） |
-| `.parallel([a, b])` | 对同一输入执行不同操作 | `T` | `{ a: U, b: V }` | 全部同时运行 |
-| `.foreach(step)` | 对每个数组条目执行相同操作 | `T[]` | `U[]` | 可配置（默认 1） |
-| `.branch([...])` | 选择条件路径 | `T` | `{ selectedStep: U }` | 只运行一个分支 |
+|`.then(step)` | Sequential processing | `T` | `U` | N/A (one at a time) |
+| `.parallel([a, b])` | Different operations on same input | `T` | `{ a: U, b: V }` | All run simultaneously |
+| `.foreach(step)` | Same operation on each array item | `T[]` | `U[]` | Configurable (default: 1) |
+| `.branch([...])` | Conditional path selection | `T` | `{ stepId: U }` | All branches whose condition is true run simultaneously by default; `perStep: true` schedules only the first matching branch |
 
-### `.parallel()` 与 `.foreach()` {/* #parallel-vs-foreach */}
+### `.parallel()`与`.foreach()` {/* #parallel-vs-foreach */}
 
-**当一个输入需要经过不同处理时，请使用 `.parallel()`：**
+**使用`.parallel()` when you have one input that needs different processing:**
 
 ```typescript
 // Same user data processed differently in parallel
 workflow.parallel([validateStep, enrichStep, scoreStep]).then(combineResultsStep)
 ```
 
-**当多个输入需要经过相同处理时，请使用 `.foreach()`：**
+**使用`.foreach()` when you have many inputs that need the same processing:**
 
 ```typescript
 // Multiple URLs each processed the same way
 workflow.foreach(downloadStep, { concurrency: 5 }).then(aggregateStep)
 ```
 
-### 何时使用嵌套 Workflow {/* #when-to-use-nested-workflows */}
+### 何时使用嵌套Workflow程 {/* #when-to-use-nested-workflows */}
 
-**在 `.foreach()` 内**——当每个数组条目都需要多个连续步骤时：
+**里面`.foreach()`**- 当每个数组项需要多个连续步骤时：
 
-```typescript prettier:false
+```typescript oxfmt:false
 // Each document goes through a full pipeline
 const processDocWorkflow = createWorkflow({...})
   .then(downloadStep)
@@ -781,11 +1041,11 @@ const processDocWorkflow = createWorkflow({...})
 workflow.foreach(processDocWorkflow, { concurrency: 3 })
 ```
 
-单个 `.foreach()` 会使结果保持扁平；链接 `.foreach().foreach()` 会创建嵌套数组。
+单人`.foreach()` keeps the result flat. Chaining `.foreach().foreach()` creates nested arrays.
 
-**在 `.parallel()` 内**——当一个并行分支需要自己的多步管道时：
+**里面`.parallel()`**- 当并行分支需要自己的多步管道时：
 
-```typescript prettier:false
+```typescript oxfmt:false
 const pipelineA = createWorkflow({...}).then(step1).then(step2).commit();
 const pipelineB = createWorkflow({...}).then(step3).then(step4).commit();
 
@@ -794,17 +1054,17 @@ workflow.parallel([pipelineA, pipelineB])
 
 ### 链接模式 {/* #chaining-patterns */}
 
-| 模式 | 发生的行为 | 常见使用场景 |
+|图案|会发生什么 |常见用例 |
 | - | - | - |
-| `.then().then()` | 顺序步骤 | 简单管道 |
-| `.parallel().then()` | 并行运行，然后合并 | 扇出/扇入 |
-| `.foreach().then()` | 处理所有条目，然后聚合 | Map-reduce |
-| `.foreach().foreach()` | 创建数组的数组 | 避免使用——改用嵌套 Workflow 或带 `.flat()` 的 `.map()` |
-| `.foreach(workflow)` | 每个条目运行完整管道 | 每个数组条目的多步处理 |
+|`.then().then()` | Sequential steps | Simple pipelines |
+| `.parallel().then()` | Run in parallel, then combine | Fan-out/fan-in |
+| `.foreach().then()` | Process all items, then aggregate | Map-reduce |
+| `.foreach().foreach()` | Creates array of arrays | Avoid - use nested workflow or `.map()` with `.flat()` |
+| `.foreach(workflow)` | Full pipeline per item | Multi-step processing per array item |
 
-### 同步：下一步骤何时运行？ {/* #synchronization-when-does-the-next-step-run */}
+### 同步：下一步什么时候运行？ {/* #synchronization-when-does-the-next-step-run */}
 
-`.parallel()` 和 `.foreach()` 都是同步点。只有所有并行分支或所有数组迭代完成后，Workflow 中的下一步骤才会执行。
+两个都`.parallel()` and `.foreach()` are synchronization points. The next step in the workflow only executes after all parallel branches or all array iterations have completed.
 
 ```typescript
 workflow
@@ -820,20 +1080,20 @@ workflow
 
 这意味着：
 
-- `.parallel()` 将所有分支输出收集到对象，再传给下一步骤
-- `.foreach()` 将所有迭代输出收集到数组，再传给下一步骤
-- 结果完成时无法逐个“以 Stream 形式”传给下一步骤
+* `.parallel()`将所有分支输出收集到一个对象中，然后将其传递到下一步
+* `.foreach()`将所有迭代输出收集到一个数组中，然后将其传递到下一步
+* 结果完成后无法“流式传输”到下一步
 
 ### 并发行为 {/* #concurrency-behavior */}
 
-| 方法 | 行为 |
+|方法|行为 |
 | - | - |
-| `.then()` | 顺序执行——一次一个步骤 |
-| `.parallel()` | 所有分支同时运行（没有限制选项） |
-| `.foreach()` | 通过 `{ concurrency: N }` 控制——默认值为 1（顺序执行） |
-| `.foreach()` 中的嵌套 Workflow | 遵循父级的并发设置 |
+|`.then()` | Sequential - one step at a time |
+| `.parallel()` | All branches run simultaneously (no limit option) |
+| `.foreach()` | Controlled via `{ concurrency: N }` - default is 1 (sequential) |
+| Nested workflow in `.foreach()` | Respects parent's concurrency setting |
 
-\*\*性能提示：\*\*对于 `.foreach()` 中受 I/O 限制的操作，请提高并发数以并行处理条目：
+**性能提示：**&#x5BF9;于 I/O 密集型操作`.foreach()`, increase concurrency to process items in parallel:
 
 ```typescript
 // Process up to 10 items simultaneously
@@ -842,15 +1102,17 @@ workflow.foreach(fetchDataStep, { concurrency: 10 })
 
 ## 循环管理 {/* #loop-management */}
 
-可以根据希望循环如何结束，以不同方式实现循环条件。
+循环条件可以通过不同的方式实现，具体取决于您希望循环如何结束。
 
-常见模式会检查 `inputData` 中返回的值并设置最大迭代次数，也可以在达到限制时中止执行。
+常见模式检查返回的值`inputData` and set a maximum number of iterations. They can also abort execution when a limit is reached.
 
 ### 中止循环 {/* #aborting-loops */}
 
-使用 `iterationCount` 限制循环运行次数。如果计数超过阈值，请抛出错误使步骤失败并停止 Workflow。
+使用`iterationCount` to limit how many times a loop runs. If the count exceeds your threshold, throw an error to fail the step and stop the workflow.
 
-```typescript prettier:false title="src/mastra/workflows/test-workflow.ts"
+```typescript oxfmt:false title="src/mastra/workflows/test-workflow.ts"
+import { createWorkflow, createStep } from '@mastra/core/workflows';
+
 const step1 = createStep({...});
 
 export const testWorkflow = createWorkflow({...})
@@ -863,7 +1125,7 @@ export const testWorkflow = createWorkflow({...})
   .commit();
 ```
 
-## 相关内容 {/* #related */}
+## 有关的 {/* #related */}
 
-- [挂起与恢复](/docs/workflows/suspend-and-resume)
-- [Human-in-the-loop](/docs/workflows/human-in-the-loop)
+* [暂停和恢复](/docs/workflows/suspend-and-resume)
+* [人在回路](/docs/workflows/human-in-the-loop)

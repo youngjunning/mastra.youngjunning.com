@@ -1,50 +1,55 @@
 ---
-title: "Memory processor | Memory"
-description: "瞭解如何在 Mastra 中使用 Memory processor，在訊息送往語言模型前加以篩選、裁減與轉換，以管理 context window 上限。"
+title: "Memory processors | Memory"
+description: "Configure Mastra memory processors to filter, trim, transform, and deduplicate messages before they reach the model while managing context limits."
 packages:
   - "@mastra/core"
-  - "@mastra/libsql"
   - "@mastra/memory"
-  - "@mastra/openai"
-  - "@mastra/pinecone"
 ---
 
-# Memory processor
+# 記憶體處理器
 
-Memory processor 會在訊息通過已啟用 Memory 的 Agent 時轉換並篩選訊息。它們可管理 context window 上限、移除不必要的內容，並最佳化送往語言模型的資訊。
+當訊息通過啟用了記憶體的Agent程式時，記憶體處理器會轉換和過濾訊息。它們管理上下文視窗限制並刪除不必要的內容，並優化發送到語言模型的資訊。
 
-在 Agent 上啟用 Memory 後，Mastra 會將 Memory processor 加入 Agent 的 processor pipeline。這些 processor 會擷取訊息歷史、working memory 與語意相關的訊息，然後在模型回應後保存新訊息。
+當Agent程式上啟用記憶體時，Mastra 會將記憶體處理器新增至Agent程式的處理器管道。這些處理器會檢索訊息歷史記錄和工作記憶，以及語義相關的訊息，然後在模型回應後保留新訊息。
 
-Memory processor 是專門處理 Memory 相關訊息與狀態的 [processor](/docs/agents/processors)。
+記憶體處理器是[processors](/docs/agents/processors) that operate specifically on memory-related messages and state.
 
-## 內建 Memory processor {/* #built-in-memory-processors */}
+## 內建記憶體處理器 {/* #built-in-memory-processors */}
 
-啟用 Memory 後，Mastra 會自動加入下列 processor：
+當記憶體啟用時，Mastra 會自動添加這些處理器。`MemoryInputFilter` is added only when a memory store is available and stored history will be loaded:
+
+### `MemoryInputFilter` {/* #memoryinputfilter */}
+
+在記憶體載入器運行之前修剪客戶端回顯的歷史記錄。對於現有線程，它僅保留當前用戶輪次或新Tool結果。對於空線程，它保留完整的初始輸入，並從可能引用儲存中不存在的項目的輔助部分中刪除Provider項目元資料。什麼時候`retainFullInput: true` is set, it skips both the trim and the metadata strip and processes the input exactly as supplied, while stored history still loads.
+
+預設情況下，該處理器首先運行，因此`MessageHistory`, `SemanticRecall`, and Observational Memory receive only the new input they need.
 
 ### `MessageHistory` {/* #messagehistory */}
 
-擷取訊息歷史並保存新訊息。
+檢索訊息歷史記錄並保留新訊息。
 
-**進行以下設定時：**
+**當您配置：**
 
 ```typescript
 memory: new Memory({
-  lastMessages: 10,
+  options: {
+    lastMessages: 10,
+  },
 })
 ```
 
-**Mastra 內部會：**
+**馬斯特拉內部：**
 
-1. 建立 `limit: 10` 的 `MessageHistory` processor
-1. 將它加入 Agent 的輸入 processor（在 LLM 前執行）
-1. 將它加入 Agent 的輸出 processor（在 LLM 後執行）
+1. 創建一個`MessageHistory` processor with `lastMessages: 10`
+2. 將其新增至Agent程式的輸入處理器（在 LLM 之前執行）
+3. 將其新增至Agent程式的輸出處理器（在 LLM 之後運行）
 
-**執行內容：**
+**它的作用：**
 
-- **輸入**：從儲存空間擷取最近 10 則訊息，並放到對話前方
-- **輸出**：模型回應後，將新訊息保存至儲存空間
+* **輸入**：從儲存中取得最後 10 則訊息並將它們新增至對話中
+* **輸出**：模型回應後將新訊息持久保存到儲存中
 
-**範例：**
+**例子：**
 
 ```typescript
 import { Agent } from '@mastra/core/agent'
@@ -62,16 +67,18 @@ const agent = new Agent({
       id: 'memory-store',
       url: 'file:memory.db',
     }),
-    lastMessages: 10, // MessageHistory processor automatically added
+    options: {
+      lastMessages: 10, // MessageHistory processor automatically added
+    },
   }),
 })
 ```
 
 ### `SemanticRecall` {/* #semanticrecall */}
 
-依據目前輸入擷取語意相關的訊息，並為新訊息建立嵌入向量。
+根據目前輸入檢索語義相關的訊息並為新訊息建立嵌入。
 
-**進行以下設定時：**
+**當您配置：**
 
 ```typescript
 memory: new Memory({
@@ -81,26 +88,26 @@ memory: new Memory({
 })
 ```
 
-**Mastra 內部會：**
+**馬斯特拉內部：**
 
-1. 建立 `SemanticRecall` processor
-1. 將它加入 Agent 的輸入 processor（在 LLM 前執行）
-1. 將它加入 Agent 的輸出 processor（在 LLM 後執行）
-1. 要求同時設定向量儲存與 embedder
+1. 創建一個`SemanticRecall` processor
+2. 將其新增至Agent程式的輸入處理器（在 LLM 之前執行）
+3. 將其新增至Agent程式的輸出處理器（在 LLM 之後運行）
+4.
 
-**執行內容：**
+**它的作用：**
 
-- **輸入**：執行向量相似度搜尋以找出相關的過往訊息，並將它們放到對話前方
-- **輸出**：為新訊息建立嵌入向量並儲存至向量儲存，以供日後擷取
+* **輸入**：執行向量相似性搜尋以尋找相關的過去訊息並將其新增至對話中
+* **輸出**：為新訊息建立嵌入並將其儲存在向量儲存中以供將來檢索
 
-**範例：**
+**例子：**
 
 ```typescript
 import { Agent } from '@mastra/core/agent'
 import { Memory } from '@mastra/memory'
 import { LibSQLStore } from '@mastra/libsql'
 import { PineconeVector } from '@mastra/pinecone'
-import { OpenAIEmbedder } from '@mastra/openai'
+import { ModelRouterEmbeddingModel } from '@mastra/core/llm'
 import { openai } from '@ai-sdk/openai'
 
 const agent = new Agent({
@@ -116,10 +123,7 @@ const agent = new Agent({
       id: 'memory-vector',
       apiKey: process.env.PINECONE_API_KEY!,
     }),
-    embedder: new OpenAIEmbedder({
-      model: 'text-embedding-3-small',
-      apiKey: process.env.OPENAI_API_KEY!,
-    }),
+    embedder: new ModelRouterEmbeddingModel('openai/text-embedding-3-small'),
     semanticRecall: { enabled: true }, // SemanticRecall processor automatically added
   }),
 })
@@ -127,9 +131,9 @@ const agent = new Agent({
 
 ### `WorkingMemory` {/* #workingmemory */}
 
-管理跨對話的 working memory 狀態。
+管理對話中的工作記憶狀態。
 
-**進行以下設定時：**
+**當您配置：**
 
 ```typescript
 memory: new Memory({
@@ -137,18 +141,18 @@ memory: new Memory({
 })
 ```
 
-**Mastra 內部會：**
+**馬斯特拉內部：**
 
-1. 建立 `WorkingMemory` processor
-1. 將它加入 Agent 的輸入 processor（在 LLM 前執行）
-1. 要求設定儲存 adapter
+1. 創建一個`WorkingMemory` processor
+2. 將其新增至Agent程式的輸入處理器（在 LLM 之前執行）
+3. 需要配置儲存適配器
 
-**執行內容：**
+**它的作用：**
 
-- **輸入**：擷取目前 thread 的 working memory 狀態，並放到對話前方
-- **輸出**：不執行輸出處理
+* **輸入**：檢索目前執行緒的工作記憶體狀態並將其新增至對話中
+* **輸出**：無輸出處理
 
-**範例：**
+**例子：**
 
 ```typescript
 import { Agent } from '@mastra/core/agent'
@@ -170,9 +174,9 @@ const agent = new Agent({
 })
 ```
 
-## 手動控制與去除重複項目 {/* #manual-control-and-deduplication */}
+## 手動控制和重複資料刪除 {/* #manual-control-and-deduplication */}
 
-若手動將 Memory processor 加入 `inputProcessors` 或 `outputProcessors`，Mastra **不會**再自動加入該 processor。你可以藉此完整控制 processor 的順序：
+`inputProcessors` or `outputProcessors`, Mastra **won't** automatically add it. Manual configuration gives you full control over processor ordering:
 
 ```typescript
 import { Agent } from '@mastra/core/agent'
@@ -194,7 +198,9 @@ const agent = new Agent({
   model: '__GATEWAY_OPENAI_MODEL__',
   memory: new Memory({
     storage: new LibSQLStore({ id: 'memory-store', url: 'file:memory.db' }),
-    lastMessages: 10, // This would normally add MessageHistory(10)
+    options: {
+      lastMessages: 10, // This would normally add MessageHistory(10)
+    },
   }),
   inputProcessors: [
     customMessageHistory, // Your custom one is used instead
@@ -203,43 +209,43 @@ const agent = new Agent({
 })
 ```
 
-## Processor 執行順序 {/* #processor-execution-order */}
+## 處理器執行順序 {/* #processor-execution-order */}
 
-將 guardrail 與 Memory 搭配使用時，瞭解執行順序相當重要：
+將護欄與記憶體結合時，了解執行順序非常重要：
 
-### 輸入 processor {/* #input-processors */}
+### 輸入處理器 {/* #input-processors */}
 
-```
+```text
 [Memory Processors] → [Your inputProcessors]
 ```
 
-1. **Memory processor 最先執行**：`WorkingMemory`、`MessageHistory`、`SemanticRecall`
-1. **你的輸入 processor 隨後執行**：guardrail、篩選器、驗證器
+1. **記憶體處理器首先運行**: `MemoryInputFilter`, then `WorkingMemory`, `MessageHistory`, and `SemanticRecall`
+2. **您的輸入處理器在之後運行**：護欄、過濾器、驗證器
 
-因此，Memory 會在你的 processor 驗證或篩選輸入前載入訊息歷史。
+因此，記憶體會在處理器驗證或過濾輸入之前載入訊息歷史記錄。
 
-### 輸出 processor {/* #output-processors */}
+### 輸出處理器 {/* #output-processors */}
 
-```
+```text
 [Your outputProcessors] → [Memory Processors]
 ```
 
-1. **你的輸出 processor 最先執行**：guardrail、篩選器、驗證器
-1. **Memory processor 隨後執行**：`SemanticRecall`（嵌入向量）、`MessageHistory`（保存）
+1. **您的輸出處理器首先運行**：護欄、過濾器、驗證器
+2. **記憶體處理器運作後**: `SemanticRecall` (embeddings), `MessageHistory` (persistence)
 
-此順序的設計是為了**確保預設安全**：若輸出 guardrail 呼叫 `abort()`，Memory processor 便不會執行，且**不會儲存任何訊息**。
+該排序的目的是**safe by default**: if your output guardrail calls `abort()`, the memory processors never run and **no messages are saved**.
 
-## Guardrail 與 Memory {/* #guardrails-and-memory */}
+## 護欄和記憶 {/* #guardrails-and-memory */}
 
-預設執行順序可提供安全的 guardrail 行為：
+預設執行順序提供安全的護欄行為：
 
-### 輸出 guardrail（建議） {/* #output-guardrails-recommended */}
+### 輸出護欄（推薦） {/* #output-guardrails-recommended */}
 
-輸出 guardrail 會在 Memory processor 儲存訊息**之前**執行。若 guardrail 中止：
+輸出護欄運行**before** memory processors save messages. If a guardrail aborts:
 
-- 觸發 tripwire
-- 跳過 Memory processor
-- **不會將任何訊息保存至儲存空間**
+* 絆線被觸發
+* 記憶體處理器被跳過
+* **沒有訊息持久保存到儲存中**
 
 ```typescript
 import { Agent } from '@mastra/core/agent'
@@ -263,7 +269,7 @@ const agent = new Agent({
   name: 'safe-agent',
   instructions: 'You are a helpful assistant',
   model: '__GATEWAY_OPENAI_MODEL__',
-  memory: new Memory({ lastMessages: 10 }),
+  memory: new Memory({ options: { lastMessages: 10 } }),
   // Your guardrail runs BEFORE memory saves
   outputProcessors: [contentBlocker],
 })
@@ -276,14 +282,14 @@ if (result.tripwire) {
 }
 ```
 
-### 輸入 guardrail {/* #input-guardrails */}
+### 輸入護欄 {/* #input-guardrails */}
 
-輸入 guardrail 會在 Memory processor 載入歷史**之後**執行。若 guardrail 中止：
+輸入護欄運行**after** memory processors load history. If a guardrail aborts:
 
-- 觸發 tripwire
-- 絕不呼叫 LLM
-- 跳過輸出 processor（包括 Memory 保存）
-- **不會將任何訊息保存至儲存空間**
+* 絆線被觸發
+* LLM從未被召喚
+* 跳過輸出處理器（包括記憶體持久性）
+* **沒有訊息持久保存到儲存中**
 
 ```typescript
 // Input guardrail that validates user input
@@ -303,34 +309,80 @@ const agent = new Agent({
   name: 'validated-agent',
   instructions: 'You are a helpful assistant',
   model: '__GATEWAY_OPENAI_MODEL__',
-  memory: new Memory({ lastMessages: 10 }),
+  memory: new Memory({ options: { lastMessages: 10 } }),
   // Your guardrail runs AFTER memory loads history
   inputProcessors: [inputValidator],
 })
 ```
 
-### 摘要 {/* #summary */}
+### 概括 {/* #summary */}
 
-| Guardrail 類型 | 執行時間 | 中止時的結果 |
+|護欄類型|當它運作時 |如果中止 |
 | - | - | - |
-| 輸入 | Memory 載入歷史後 | 不呼叫 LLM，也不儲存內容 |
-| 輸出 | Memory 儲存前 | 不將任何內容儲存至儲存空間 |
+|輸入 |記憶體載入歷史記錄後| LLM沒有被召喚，沒有儲存任何東西|
+|輸出|節省記憶體之前 |沒有任何內容儲存到儲存 |
 
-兩種情境都很安全，guardrail 會防止不當內容保存至 Memory。
+這兩種情況都是安全的 - 護欄可防止不適當的內容被持久保存到記憶體中
 
-## 處理大型附件 {/* #handling-large-attachments */}
+## 中止運行並保存訊息 {/* #aborted-runs-and-saved-messages */}
 
-部分儲存 Provider 會限制記錄大小，而 Base64 編碼的檔案附件可能超過該限制：
+取消運行並用處理器阻止它`abort()` both stop generation, but they save different things:
 
-| Provider | 記錄大小上限 |
+|是什麼讓跑步停止？內存處理器|堅持了什麼 |
+| - | - | - |
+|`abortSignal` from the caller | Still run | The user message and the assistant text the user already saw |
+| `abort()` inside a processor | Skipped | Nothing; the tripwire blocks the save |
+
+呼叫者取消像任何其他運行一樣通過輸出處理器，因此內置`MessageHistory` processor saves the thread. The partial answer is stored as an ordinary assistant message with no error part, which means the next turn starts from what the user actually read.
+
+```typescript
+import { Agent } from '@mastra/core/agent'
+import { Memory } from '@mastra/memory'
+
+const memory = new Memory({ options: { lastMessages: 20 } })
+const agent = new Agent({
+  id: 'writer',
+  name: 'writer',
+  instructions: 'You write step-by-step migration guides.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  memory,
+})
+
+const controller = new AbortController()
+const stream = await agent.stream('Write the migration guide.', {
+  memory: { thread: 'thread-1', resource: 'user-1' },
+  abortSignal: controller.signal,
+  onAbort: ({ steps, text }) => {
+    console.log(`Aborted after ${steps.length} steps with ${text?.length ?? 0} characters streamed`)
+  },
+})
+
+let streamed = ''
+for await (const chunk of stream.fullStream) {
+  if (chunk.type !== 'text-delta') continue
+  streamed += chunk.payload.text
+  if (streamed.length > 200) controller.abort()
+}
+
+// The partial answer is already in the thread
+const { messages } = await memory.recall({ threadId: 'thread-1', resourceId: 'user-1' })
+```
+
+`onAbort`接收取消之前完成的步驟以及為進行中的步驟傳輸的助理文字。對於中止生命週期本身，包括中止的持久運行`runId`, see the [`stream()` reference](/reference/streaming/agents/stream#aborting-a-run).
+
+## 處理大型配件 {/* #handling-large-attachments */}
+
+一些儲存Provider強制執行 base64 編碼的檔案附件可以超出的記錄大小限制：
+
+|Provider|記錄大小限制 |
 | - | - |
-| [DynamoDB](/reference/storage/dynamodb) | 400 KB |
-| [Convex](/reference/storage/convex) | 1 MiB |
-| [Cloudflare D1](/reference/storage/cloudflare-d1) | 1 MiB |
+|[DynamoDB](/integrations/databases/dynamodb) | 400 KB |
+| [Convex](/integrations/databases/convex) | 1 MiB |
+| [Cloudflare D1](/integrations/databases/cloudflare-d1) | 1 MiB |
 
-PostgreSQL、MongoDB 與 libSQL 的上限較高，通常不受影響。
+PostgreSQL、MongoDB 和 libSQL 具有更高的限制，並且通常不受影響。
 
-請使用輸入 processor 將附件上傳至外部儲存空間，接著以 URL 參照取代附件，再保存訊息。
+使用輸入處理器將附件上傳到外部存儲，然後在保留訊息之前將其替換為 URL 引用。
 
 ```typescript title="src/mastra/processors/attachment-uploader.ts"
 import type { Processor } from '@mastra/core/processors'
@@ -368,7 +420,7 @@ export class AttachmentUploader implements Processor {
 }
 ```
 
-在 Agent 中使用此 processor：
+與您的Agent程式一起使用處理器：
 
 ```typescript title="src/mastra/agents/support-agent.ts"
 import { Agent } from '@mastra/core/agent'
@@ -380,15 +432,15 @@ export const supportAgent = new Agent({
   name: 'Support agent',
   instructions: 'Answer customer support questions.',
   model: '__GATEWAY_OPENAI_MODEL__',
-  memory: new Memory({ lastMessages: 10 }),
+  memory: new Memory({ options: { lastMessages: 10 } }),
   inputProcessors: [new AttachmentUploader()],
 })
 ```
 
 ## 相關文件 {/* #related-documentation */}
 
-- [Processor](/docs/agents/processors)：一般 processor 概念與自訂 processor 的建立方式
-- [Guardrail](/docs/agents/guardrails)：安全性與驗證 processor
-- [Memory 概覽](/docs/memory/overview)：Memory 類型與設定
+* [處理器](/docs/agents/processors)：一般處理器概念和自訂處理器創建
+* [護欄](/docs/agents/guardrails)：安全性和驗證處理器
+* [記憶體概覽](/docs/memory/overview)：記憶體類型和配置
 
-建立自訂 processor 時，請避免直接修改輸入的 `messages` 陣列或其中的物件。
+建立自訂處理器時避免改變輸入`messages` array or its objects directly.

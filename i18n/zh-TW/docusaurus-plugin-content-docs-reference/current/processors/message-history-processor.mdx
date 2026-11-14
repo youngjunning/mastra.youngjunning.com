@@ -1,14 +1,14 @@
 ---
-title: "參考：MessageHistory | 處理器"
-description: "Mastra MessageHistory 處理器的文件；此處理器負責擷取及保存對話記錄。"
+title: "Reference: MessageHistory | Processors"
+description: "The MessageHistory is a hybrid processor that handles both retrieval and persistence of message history."
 packages:
   - "@mastra/core"
   - "@mastra/pg"
 ---
 
-# MessageHistory
+# 訊息歷史記錄
 
-`MessageHistory` 是一種**混合式處理器**，同時負責擷取及保存訊息記錄。處理輸入時，它會從儲存空間擷取歷史訊息，並將其加到對話前方。處理輸出時，它會將新訊息保存至儲存空間。
+這`MessageHistory`是一個**混合處理器**它處理訊息歷史記錄的檢索和持久化。輸入時，它從儲存中獲取歷史訊息並將其添加到對話中。在輸出時，它將新訊息保存到儲存中。
 
 ## 使用範例 {/* #usage-example */}
 
@@ -21,77 +21,79 @@ const processor = new MessageHistory({
 })
 ```
 
-## 建構函式參數 {/* #constructor-parameters */}
+## 建構函數參數 {/* #constructor-parameters */}
 
 <PropertiesTable
   content={[
-  {
-    name: 'options',
-    type: 'MessageHistoryOptions',
-    description: '訊息記錄處理器的設定選項',
-    isOptional: false,
-    properties: [
-      {
-        type: 'MessageHistoryOptions',
-        parameters: [
-          {
-            name: 'storage',
-            type: 'MemoryStorage',
-            description: '用於擷取及保存訊息的儲存空間執行個體',
-            isOptional: false,
-          },
-          {
-            name: 'lastMessages',
-            type: 'number',
-            description: '要擷取的歷史訊息數量上限。若未指定，則擷取所有訊息',
-            isOptional: true,
-          },
-        ],
-      },
-    ],
-  },
+{
+  name: 'options',
+  type: 'MessageHistoryOptions',
+  description: 'Configuration options for the message history processor',
+  isOptional: false,
+  properties: [
+    {
+      type: 'MessageHistoryOptions',
+      parameters: [
+        {
+          name: 'storage',
+          type: 'MemoryStorage',
+          description: 'Storage instance for retrieving and persisting messages',
+          isOptional: false,
+        },
+        {
+          name: 'lastMessages',
+          type: 'number | false',
+          description:
+            "Maximum number of historical messages to retrieve. Set to false to retrieve all messages. If omitted, the storage adapter's default page size applies (40 messages for built-in adapters)",
+          isOptional: true,
+        },
+      ],
+    },
+  ],
+},
 ]}
 />
 
-## 回傳值 {/* #returns */}
+## 退貨 {/* #returns */}
 
 <PropertiesTable
   content={[
-  {
-    name: 'id',
-    type: 'string',
-    description: "設為 'message-history' 的處理器識別碼",
-    isOptional: false,
-  },
-  {
-    name: 'name',
-    type: 'string',
-    description: "設為 'MessageHistory' 的處理器顯示名稱",
-    isOptional: false,
-  },
-  {
-    name: 'processInput',
-    type: '(args: { messages: MastraDBMessage[]; messageList: MessageList; abort: (reason?: string) => never; tracingContext?: TracingContext; requestContext?: RequestContext }) => Promise<MessageList | MastraDBMessage[]>',
-    description: '從儲存空間擷取歷史訊息，並將其加入訊息清單',
-    isOptional: false,
-  },
-  {
-    name: 'processOutputResult',
-    type: '(args: { messages: MastraDBMessage[]; messageList: MessageList; abort: (reason?: string) => never; tracingContext?: TracingContext; requestContext?: RequestContext }) => Promise<MessageList>',
-    description: '將新訊息（使用者輸入及助理回應）保存至儲存空間，但不包含系統訊息',
-    isOptional: false,
-  },
+{
+  name: 'id',
+  type: 'string',
+  description: "Processor identifier set to 'message-history'",
+  isOptional: false,
+},
+{
+  name: 'name',
+  type: 'string',
+  description: "Processor display name set to 'MessageHistory'",
+  isOptional: false,
+},
+{
+  name: 'processInput',
+  type: '(args: { messages: MastraDBMessage[]; messageList: MessageList; abort: (reason?: string) => never; tracingContext?: TracingContext; requestContext?: RequestContext }) => Promise<MessageList | MastraDBMessage[]>',
+  description: 'Fetches historical messages from storage and adds them to the message list',
+  isOptional: false,
+},
+{
+  name: 'processOutputResult',
+  type: '(args: { messages: MastraDBMessage[]; messageList: MessageList; abort: (reason?: string) => never; tracingContext?: TracingContext; requestContext?: RequestContext; result?: OutputResult }) => Promise<MessageList>',
+  description: 'Persists new messages (user input and assistant response) to storage, excluding system messages',
+  isOptional: false,
+},
 ]}
 />
 
-## 進階使用範例 {/* #extended-usage-example */}
+## 擴充使用範例 {/* #extended-usage-example */}
 
 ```typescript title="src/mastra/agents/memory-agent.ts"
 import { Agent } from '@mastra/core/agent'
 import { MessageHistory } from '@mastra/core/processors'
-import { PostgresStorage } from '@mastra/pg'
+import { PostgresStore } from '@mastra/pg'
 
-const storage = new PostgresStorage({
+const storage = new PostgresStore({
+  id: 'pg-storage',
   connectionString: process.env.DATABASE_URL,
 })
 
@@ -118,20 +120,20 @@ export const agent = new Agent({
 
 ### 輸入處理 {/* #input-processing */}
 
-1. 從請求內容中擷取 `threadId`
-1. 從儲存空間擷取歷史訊息（依建立日期降冪排列）
-1. 篩除系統訊息（這些訊息不應儲存在資料庫中）
-1. 將歷史訊息與傳入訊息合併，並依 ID 避免重複
-1. 為歷史訊息加入 `source: 'memory'` 標籤
+1. 檢索`threadId` from the request context
+2. 從儲存中取得歷史訊息（按建立日期降序排列）
+3. 過濾掉系統訊息（它們不應儲存在資料庫中）
+4. 將歷史訊息與傳入訊息合併，避免按 ID 重複
+5. 新增歷史消息`source: 'memory'` tag
 
 ### 輸出處理 {/* #output-processing */}
 
-1. 從請求內容中擷取 `threadId`
-1. 若記憶體設定中已設定 `readOnly`，則略過保存
-1. 從訊息中篩除未完成的 Tool 呼叫
-1. 將新的使用者輸入與助理回應訊息保存至儲存空間
-1. 更新討論串的 `updatedAt` 時間戳記
+1. 檢索`threadId` from the request context
+2. 跳過持久性，如果`readOnly` is set in memory config
+3. 從訊息中過濾掉不完整的Tool調用
+4. 將新的用戶輸入和助理回應訊息儲存到儲存中
+5. 更新線程的`updatedAt` timestamp
 
-## 相關資源 {/* #related */}
+## 有關的 {/* #related */}
 
-- [防護機制](/docs/agents/guardrails)
+* [護欄](/docs/agents/guardrails)

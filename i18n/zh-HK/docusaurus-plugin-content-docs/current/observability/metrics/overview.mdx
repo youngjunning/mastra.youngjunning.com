@@ -1,46 +1,50 @@
 ---
-title: "指標概覽 | 可觀測性"
-description: "了解 Mastra 從追蹤執行中自動發出的指標。"
+title: "Metrics"
+description: "Collect automatic duration, token usage, and cost metrics from Mastra traces, store them in supported databases, and analyze them in Studio."
 packages:
   - "@mastra/observability"
 ---
 
-# 指標概覽
+# 指標
 
-Mastra 會從追蹤執行中自動發出效能及使用量指標，毋須手動檢測。指標會在 span 完成時從中衍生。
+當追蹤操作完成時，Mastra 會自動從跨度中匯出指標。不需要單獨的計量儀器。
 
-以下類別的指標會自動發出：
+馬斯特拉發出：
 
-- **持續時間指標**：Agent、Workflow、Tool、模型調用及處理器的執行時間。
-- **Token 使用量指標**：按類型（文字、快取、音訊、圖像、推理）細分的輸入及輸出 token 數量。
-- **成本估算**：根據內置價格登記資料估算每次模型調用的成本。
+* **持續時間指標**用於Agent運行、Workflow、Tool、模型呼叫和處理器
+* **代幣使用指標**用於模型輸入和輸出，包括提供者報告時的詳細令牌類別
+* **成本估算**根據代幣使用情況、提供者、模型和模型價格計算得出[models.dev](https://models.dev) or from a [custom gateway](/models/gateways/custom-gateways#model-pricing)
 
-:::note
-
-指標需要使用支援分析的儲存區來實現可觀測性。大部分關聯式資料庫（LibSQL、MSSQL）都不支援指標。記憶體內儲存會在重新啟動時重設。
-
-本機開發時，請透過 `@mastra/duckdb` 使用 [DuckDB](https://duckdb.org/)。在生產環境中，請透過 `@mastra/clickhouse` 使用 [ClickHouse](https://clickhouse.com/)。啟用 observability domain 的 `PostgresStoreVNext` 亦支援指標，但必須提供時間範圍，以免進行完整分區掃描。
-
-Google Cloud Spanner 支援指標，但不建議用於繁重的指標工作負載。由於指標涉及大量寫入及掃描，Spanner 轉接器預設會停用指標。只有在工作負載較輕時才設定 `disableMetrics: false`，否則應將指標轉送至 OLAP 儲存區。
-
-:::
+指標保留追蹤關聯上下文，因此您可以透過尋找相關跨度來調查圖表中的變更。請參閱[Automatic metrics reference](/reference/observability/metrics/automatic-metrics) for metric names, labels, and cost fields.
 
 ## 何時使用指標 {/* #when-to-use-metrics */}
 
-- 監察 Agent、Tool、Workflow 及模型調用的延遲
-- 追蹤 token 消耗量及成本隨時間變化的趨勢
-- 透過比較成功率與錯誤率，找出經常出錯的 Agent 或 Tool
-- 比較修改 prompt、模型或程式碼前後的效能
+* 監控Agent、Tool、Workflow和模型呼叫之間的延遲
+* 隨著時間的推移追蹤代幣消耗和估計成本
+* 比較不同Agent或Tool的成功率和錯誤率
+* 衡量提示、模型或程式碼變更的效果
 
-## 開始使用 {/* #get-started */}
+## 儲存支援 {/* #storage-support */}
 
-安裝所需依賴套件：
+指標需要具有分析能力的可觀察性儲存：
+
+* **鴨資料庫**透過`@mastra/duckdb` is recommended for local development.
+* **克利克屋**透過`@mastra/clickhouse` is recommended for high-volume production workloads.
+* **PostgresStoreVNext**當其可觀測域啟用時支援指標。
+* **記憶體儲存**支援指標，但當進程重新啟動時其資料會遺失。
+* **谷歌雲端扳手**預設情況下禁用指標。放`disableMetrics: false` only for light workloads, or route metrics to a dedicated OLAP store.
+
+其他儲存適配器（包括 LibSQL、MSSQL 和 MongoDB）可以儲存其他Observability訊號，但不會實現指標儲存和查詢。
+
+## 設定本地指標 {/* #set-up-local-metrics */}
+
+安裝Observability、應用程式儲存和 DuckDB 套件：
 
 ```bash npm2yarn
 npm install @mastra/observability @mastra/libsql @mastra/duckdb
 ```
 
-然後使用複合儲存區設定可觀測性，將 observability domain 路由至 DuckDB：
+配置將可觀察域路由到 DuckDB 的組合儲存：
 
 ```ts title="src/mastra/index.ts"
 import { Mastra } from '@mastra/core/mastra'
@@ -72,37 +76,16 @@ export const mastra = new Mastra({
 })
 ```
 
-## Studio {/* #studio */}
+`MastraStorageExporter`將指標儲存到配置的可觀察性儲存中並使它們可供 Studio 使用。使用`MastraPlatformExporter` instead, or alongside it, to send metrics to Mastra Platform.
 
-Studio 指標儀表板透過 KPI 卡、詳細細分資料、token 使用量時間軸及可設定的時間範圍，將所有自動指標可視化。完整操作說明請參閱 [Studio 可觀測性](/docs/studio/observability)。
+## 查看和查詢指標 {/* #view-and-query-metrics */}
 
-## Mastra 量度的內容 {/* #what-mastra-measures */}
+使用[Studio observability dashboard](/docs/studio/observability) to inspect KPI cards, breakdowns, and time-series charts. For custom dashboards and analysis, use the observability store, `@mastra/client-js`, HTTP endpoints, or CLI described in the [Metric queries reference](/reference/observability/metrics/queries).
 
-Mastra 會自動發出三類指標：
+在生產中，始終在指標查詢中包含時間戳範圍。時間限制限制了掃描的數據，並允許分區後端跳過不相關的分區或區塊。
 
-- **持續時間**：Agent、Workflow、Tool、模型調用及處理器的執行時間（以毫秒為單位）。
-- **Token 使用量**：按類型（文字、快取、音訊、圖像、推理）細分的輸入及輸出 token 數量。
-- **成本估算**：根據內置價格登記資料估算每次模型調用的成本。
+## 有關的 {/* #related */}
 
-每項指標都帶有 Trace 關聯內容，讓你可以從儀表板上的峰值深入追查至造成該峰值的確切 span。
-
-如要查看指標名稱、標籤及成本欄位的完整清單，請參閱[自動指標參考](/reference/observability/metrics/automatic-metrics)。
-
-## 自動指標的運作方式 {/* #how-automatic-metrics-work */}
-
-Mastra 會自動檢測 Agent 執行、Workflow 步驟、Tool 調用及模型生成，並將它們記錄為 span。當 span 結束時，可觀測性層會從中擷取指標：
-
-1. **持續時間**：根據 span 的開始及結束時間戳記計算。
-1. **Token 使用量**：從模型生成 span 的 `usage` 屬性擷取。
-1. **成本估算**：透過按 Provider 及模型名稱配對的內置價格登記資料，計算每項 token 指標的成本。
-
-儲存前，所有指標標籤都會通過基數篩選器，阻擋已知的高基數值（例如 Trace ID 及 UUID），以維持儲存效率。其後，指標會由內部事件緩衝區分批處理，再由 `MastraStorageExporter` 寫入儲存區。
-
-## 後續步驟 {/* #next-steps */}
-
-- [自動指標參考](/reference/observability/metrics/automatic-metrics)
-- [查詢指標](/docs/observability/metrics/querying)
-- [追蹤概覽](/docs/observability/tracing/overview)
-- [Studio 可觀測性](/docs/studio/observability)
-- [可觀測性概覽](/docs/observability/overview)
-- [MastraStorageExporter 參考](/docs/observability/integrations/exporters/mastra-storage)
+* [Observability概述](/docs/observability/overview)
+* [追蹤使用情況](/docs/observability/tracing/overview)
+* [MastraStorageExporter](/docs/observability/integrations/exporters/mastra-storage)

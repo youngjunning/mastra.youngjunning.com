@@ -1,0 +1,433 @@
+---
+title: "AWS Nova Sonic | Voice"
+description: "Add real-time speech-to-speech to Mastra with AWS Bedrock Nova 2 Sonic, bidirectional audio, transcripts, tool calls, interruptions, and session controls."
+packages:
+  - "@mastra/node-audio"
+  - "@mastra/voice-aws-nova-sonic"
+---
+
+# AWS 新星索尼克
+
+這`NovaSonicVoice`類提供即時語音到語音功能的支持[AWS Bedrock Nova 2 索尼克](https://docs.aws.amazon.com/nova/latest/userguide/speech.html)。它打開模型的雙向流，並發出輔助音訊、轉錄文字、Tool呼叫、轉彎邊界和中斷的事件。
+
+## 使用範例 {/* #usage-example */}
+
+```typescript title="src/mastra/voice.ts"
+import { NovaSonicVoice } from '@mastra/voice-aws-nova-sonic'
+import { playAudio, getMicrophoneStream } from '@mastra/node-audio'
+
+// Initialize using the default AWS credential provider chain
+const voice = new NovaSonicVoice({
+  region: 'us-east-1',
+  speaker: 'matthew',
+})
+
+// Or pass explicit credentials
+const voiceWithCredentials = new NovaSonicVoice({
+  region: 'us-east-1',
+  speaker: 'tiffany',
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
+  },
+})
+
+// Establish the bidirectional stream
+await voice.connect()
+
+// Listen for assistant audio (Int16Array PCM)
+voice.on('speaking', ({ audioData }) => {
+  if (audioData) playAudio(audioData)
+})
+
+// Listen for transcribed text from the user and assistant
+voice.on('writing', ({ text, role, generationStage }) => {
+  console.log(`${role} (${generationStage ?? 'FINAL'}): ${text}`)
+})
+
+// Stream microphone audio in real time
+const microphoneStream = getMicrophoneStream()
+await voice.send(microphoneStream)
+
+// Disconnect when done
+voice.close()
+```
+
+## 驗證 {/* #authentication */}
+
+`NovaSonicVoice`沒有時使用 AWS 開發Tool包憑證解析鏈`credentials` option is passed. Mastra calls `defaultProvider()` from `@aws-sdk/credential-provider-node`, which checks (in order) environment variables, shared credentials files, IAM role for EC2, ECS, EKS, and other standard sources.
+
+要使用靜態憑證，請將它們傳遞給建構函式：
+
+```typescript
+new NovaSonicVoice({
+  region: 'us-east-1',
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
+    sessionToken: process.env.AWS_SESSION_TOKEN,
+  },
+})
+```
+
+語音提供者從不記錄憑證值。
+
+## 配置 {/* #configuration */}
+
+### 建構函數選項 {/* #constructor-options */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'region',
+  type: "'us-east-1' | 'us-west-2' | 'ap-northeast-1'",
+  description: 'AWS region that hosts the Nova Sonic model.',
+  isOptional: true,
+  defaultValue: "'us-east-1'",
+},
+{
+  name: 'model',
+  type: 'string',
+  description: 'Bedrock model ID for the bidirectional stream.',
+  isOptional: true,
+  defaultValue: "'amazon.nova-2-sonic-v1:0'",
+},
+{
+  name: 'credentials',
+  type: 'AwsCredentialIdentity',
+  description: 'Static AWS credentials. When omitted the default AWS credential provider chain is used.',
+  isOptional: true,
+},
+{
+  name: 'speaker',
+  type: 'string | NovaSonicVoiceConfigDetails',
+  description:
+    "Default voice for the assistant. Pass a voice ID string such as 'matthew' or an object that includes a language code and gender.",
+  isOptional: true,
+  defaultValue: "'matthew'",
+},
+{
+  name: 'languageCode',
+  type: 'NovaSonicLanguageCode',
+  description: 'Language code used for the session. Polyglot voices support all listed languages.',
+  isOptional: true,
+},
+{
+  name: 'instructions',
+  type: 'string',
+  description: 'System prompt sent at session start. Equivalent to calling addInstructions() before connect().',
+  isOptional: true,
+},
+{
+  name: 'tools',
+  type: 'NovaSonicToolConfig[]',
+  description:
+    "Tools exposed to the model. When the voice instance is attached to an Agent, the Agent's tools are added automatically.",
+  isOptional: true,
+},
+{
+  name: 'sessionConfig',
+  type: 'NovaSonicSessionConfig',
+  description: 'Inference, turn-detection, and tool-choice configuration. See Session configuration below.',
+  isOptional: true,
+},
+{
+  name: 'debug',
+  type: 'boolean',
+  description: 'Enable verbose logging for stream events. Sensitive fields are masked.',
+  isOptional: true,
+  defaultValue: 'false',
+},
+]}
+/>
+
+### 會話配置 {/* #session-configuration */}
+
+`sessionConfig`控制推理參數和輪流行為。所有欄位都是可選的。
+
+<PropertiesTable
+  content={[
+{
+  name: 'inferenceConfiguration',
+  type: 'object',
+  description: 'Sampling and decoding parameters.',
+  isOptional: true,
+  properties: [
+    {
+      type: 'object',
+      parameters: [
+        { name: 'maxTokens', type: 'number', description: 'Maximum tokens generated per turn.', isOptional: true },
+        { name: 'temperature', type: 'number', description: 'Sampling temperature.', isOptional: true },
+        { name: 'topP', type: 'number', description: 'Nucleus sampling probability.', isOptional: true },
+        { name: 'topK', type: 'number', description: 'Top-k sampling.', isOptional: true },
+        { name: 'stopSequences', type: 'string[]', description: 'Sequences that end generation.', isOptional: true },
+      ],
+    },
+  ],
+},
+{
+  name: 'turnDetectionConfiguration',
+  type: 'object',
+  description: 'Endpointing sensitivity for turn detection.',
+  isOptional: true,
+  properties: [
+    {
+      type: 'object',
+      parameters: [
+        {
+          name: 'endpointingSensitivity',
+          type: "'HIGH' | 'MEDIUM' | 'LOW'",
+          description:
+            'Pause duration before the model considers a turn complete. HIGH ends turns fastest (about 1.5s pause), MEDIUM is balanced (about 1.75s), LOW waits longest (about 2s).',
+          isOptional: true,
+        },
+      ],
+    },
+  ],
+},
+{
+  name: 'toolChoice',
+  type: "'auto' | 'any' | { tool: { name: string } }",
+  description: 'How the model decides whether to call a tool.',
+  isOptional: true,
+},
+{
+  name: 'enableKnowledgeGrounding',
+  type: 'boolean',
+  description: 'Enable retrieval-augmented grounding against a Bedrock knowledge base.',
+  isOptional: true,
+},
+{
+  name: 'knowledgeBaseConfig',
+  type: '{ knowledgeBaseId?: string; dataSourceId?: string }',
+  description: 'Knowledge base used when knowledge grounding is enabled.',
+  isOptional: true,
+},
+]}
+/>
+
+## 方法 {/* #methods */}
+
+### `connect()` {/* #connect */}
+
+開啟到 AWS Bedrock 的雙向流並傳送初始會話、提示和系統事件。之前調用這個`speak`, `listen`, or `send`.
+
+<PropertiesTable
+  content={[
+{
+  name: 'options',
+  type: '{ requestContext?: RequestContext }',
+  description: 'Optional request context propagated to tool calls made during the session.',
+  isOptional: true,
+},
+]}
+/>
+
+返回：`Promise<void>`
+
+### `speak()` {/* #speak */}
+
+合成文字提示的語音並發出`speaking` events as audio is produced.
+
+<PropertiesTable
+  content={[
+{
+  name: 'input',
+  type: 'string | NodeJS.ReadableStream',
+  description: 'Text or text stream to synthesize.',
+  isOptional: false,
+},
+{
+  name: 'options',
+  type: 'NovaSonicVoiceOptions',
+  description: 'Per-call overrides such as the speaker or language code.',
+  isOptional: true,
+},
+]}
+/>
+
+返回：`Promise<void>`
+
+### `send()` {/* #send */}
+
+將麥克風音訊（或任何 PCM 來源）傳送到模型。使用它進行即時、連續的對話。
+
+<PropertiesTable
+  content={[
+{
+  name: 'audioData',
+  type: 'NodeJS.ReadableStream | Int16Array',
+  description: '16-bit PCM audio to forward to the model.',
+  isOptional: false,
+},
+]}
+/>
+
+返回：`Promise<void>`
+
+### `listen()` {/* #listen */}
+
+委託給的便利包裝器`send()`. Use it when you want a single transcription pass over a finite audio stream.
+
+<PropertiesTable
+  content={[
+{
+  name: 'audioData',
+  type: 'NodeJS.ReadableStream',
+  description: 'Audio stream to transcribe.',
+  isOptional: false,
+},
+]}
+/>
+
+返回：`Promise<void>`
+
+### `endAudioInput()` {/* #endaudioinput */}
+
+發出當前音訊回合結束的訊號，以便模型可以最終確定其響應。當使用者停止說話並且提供者未配置伺服器端轉彎檢測時呼叫此方法。
+
+返回：`Promise<void>`
+
+### `addInstructions()` {/* #addinstructions */}
+
+更新活動會話的系統提示。
+
+<PropertiesTable
+  content={[
+{
+  name: 'instructions',
+  type: 'string',
+  description: 'System prompt to apply to the session.',
+  isOptional: true,
+},
+]}
+/>
+
+返回：`void`
+
+### `addTools()` {/* #addtools */}
+
+向語音實例註冊Tool。什麼時候`NovaSonicVoice` is attached to an Agent, the Agent's tools are added automatically.
+
+<PropertiesTable
+  content={[
+{
+  name: 'tools',
+  type: 'ToolsInput',
+  description: 'Tools exposed to the model.',
+  isOptional: true,
+},
+]}
+/>
+
+返回：`void`
+
+### `getSpeakers()` {/* #getspeakers */}
+
+傳回 Nova 2 Sonic 支援的聲音清單。
+
+返回：`Promise<Array<{ voiceId: string; name: string; language: string; locale: string; gender: 'masculine' | 'feminine'; polyglot: boolean }>>`
+
+### `getListener()` {/* #getlistener */}
+
+傳回語音實例目前是否擁有開放流。
+
+返回：`Promise<{ enabled: boolean }>`
+
+### `close()` {/* #close */}
+
+關閉雙向流並銷毀底層基岩客戶端。對話結束時呼叫此命令。
+
+返回：`void`
+
+### `on()` / `off()` {/* #on--off */}
+
+註冊和刪除事件偵聽器。看[Voice events](/reference/voice/voice.events) for the shared event API.
+
+## 活動 {/* #events */}
+
+`NovaSonicVoice`發出以下事件：
+
+<PropertiesTable
+  content={[
+{
+  name: 'speaking',
+  type: 'event',
+  description: 'Assistant audio chunk. Callback receives { audioData: Int16Array, sampleRate?: number }.',
+},
+{
+  name: 'writing',
+  type: 'event',
+  description:
+    "Transcribed text from the user or assistant. Callback receives { text: string, role: 'assistant' | 'user', generationStage?: 'SPECULATIVE' | 'FINAL' }.",
+},
+{
+  name: 'toolCall',
+  type: 'event',
+  description:
+    'Model requested a tool call. Callback receives { name: string, args: Record<string, any>, id: string }.',
+},
+{
+  name: 'interrupt',
+  type: 'event',
+  description:
+    "User or model interrupted the current turn. Callback receives { type: 'user' | 'model', timestamp: number }.",
+},
+{
+  name: 'turnComplete',
+  type: 'event',
+  description: 'Model finished its turn. Callback receives { timestamp: number }.',
+},
+{
+  name: 'session',
+  type: 'event',
+  description:
+    "Session state transition. Callback receives { state: 'connecting' | 'connected' | 'disconnected' | 'disconnecting' | 'error' }.",
+},
+{
+  name: 'usage',
+  type: 'event',
+  description:
+    'Token usage for the turn. Callback receives { inputTokens: number, outputTokens: number, totalTokens: number }.',
+},
+{
+  name: 'error',
+  type: 'event',
+  description: 'Stream or provider error. Callback receives { message: string, code?: string, details?: unknown }.',
+},
+]}
+/>
+
+`generationStage`區分臨時成績單（`'SPECULATIVE'`) from finalized ones (`'FINAL'`). Use `'FINAL'` text for persistent storage and `'SPECULATIVE'` text for live captions.
+
+## 可用的聲音 {/* #available-voices */}
+
+Nova 2 Sonic 提供十種語言環境的聲音。蒂芙尼和馬修精通多種語言，可以說任何支持的語言。
+
+|語音辨識 |名稱 |語言 |語言環境 |性別 |多語言 |
+| - | - | - | - | - | - |
+|`tiffany` | Tiffany | English | en-US | feminine | yes |
+| `matthew` | Matthew | English | en-US | masculine | yes |
+| `amy` | Amy | English | en-GB | feminine | no |
+| `olivia` | Olivia | English | en-AU | feminine | no |
+| `kiara` | Kiara | English | en-IN | feminine | no |
+| `arjun` | Arjun | English | en-IN | masculine | no |
+| `ambre` | Ambre | French | fr-FR | feminine | no |
+| `florian` | Florian | French | fr-FR | masculine | no |
+| `beatrice` | Beatrice | Italian | it-IT | feminine | no |
+| `lorenzo` | Lorenzo | Italian | it-IT | masculine | no |
+| `tina` | Tina | German | de-DE | feminine | no |
+| `lennart` | Lennart | German | de-DE | masculine | no |
+| `lupe` | Lupe | Spanish | es-US | feminine | no |
+| `carlos` | Carlos | Spanish | es-US | masculine | no |
+| `carolina` | Carolina | Portuguese | pt-BR | feminine | no |
+| `leo` | Leo | Portuguese | pt-BR | masculine | no |
+| `kiara` | Kiara | Hindi | hi-IN | feminine | no |
+| `arjun` | Arjun | Hindi | hi-IN | masculine | no |
+
+## 筆記 {/* #notes */}
+
+* 音訊以 16 位元 PCM 形式傳輸。助理音頻發出為`Int16Array` on the `speaking` event.
+* 語音實例必須調用`connect()` before any other streaming method.
+* `close()`破壞底層`BedrockRuntimeClient` to release the HTTP/2 session.
+* Nova 2 Sonic 有賣`us-east-1`, `us-west-2`, and `ap-northeast-1`. Other regions throw a configuration error during construction.

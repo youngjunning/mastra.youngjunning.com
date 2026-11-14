@@ -1,21 +1,16 @@
 import React, { type ReactNode } from 'react'
 import OriginalFooter from '@theme-original/Footer'
-import SiteVisitStats from '@site/src/components/SiteVisitStats'
 
-export default function Footer(): ReactNode {
-  return <>
-    <OriginalFooter />
-    <footer className="border-t border-slate-200 px-6 py-5 text-center text-sm">
-      <nav aria-label="关联站点" className="flex flex-wrap justify-center gap-5">
-        <a href="https://youngjunning.com/">俊宁官网 ↗</a>
-        <a href="https://design.youngjunning.com/">设计图鉴 ↗</a>
-      </nav>
-      <div className="mt-3 text-slate-500"><SiteVisitStats /></div>
-    </footer>
-  </>
-}
+export { default } from '@theme-original/Footer'
 
-// The documentation layout may render the footer inside the content column.
+/**
+ * `@mastra/docusaurus-plugin-kapa`'s `DocRoot/Layout/Main` override imports a
+ * named `FooterContent` from `@theme/Footer` and renders it inside the doc
+ * content column. Docusaurus' classic theme only exports a default `Footer`,
+ * so this named export is required for the plugin to build regardless of the
+ * Docusaurus version. The `inColumn` prop the plugin passes is accepted but
+ * unused here — we simply render the standard site footer.
+ */
 export function FooterContent(_props: { inColumn?: boolean } = {}): ReactNode {
-  return <Footer />
+  return <OriginalFooter />
 }

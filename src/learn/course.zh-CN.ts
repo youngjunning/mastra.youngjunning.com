@@ -25,7 +25,7 @@ AI Agent 正在带来新一轮平台变革。掌握其构建方法已成为工�
           '了解 Agent 与普通聊天体验的区别，认识 Mastra 以及可以用 TypeScript 构建的 AI 应用，并预览贯穿本课程的主题公园伴侣 Agent。',
         bullets: [
           'Agent 与 chatbot 的关键区别',
-          'Mastra 的核心构建模块：Agent、Tool、Workflow、Memory、检索和可观测性',
+          'Mastra 的核心构建模块：Agent、Tool、Workflow、Memory、检索和Observability',
           '快速演示在 Studio 中运行的完整 Agent',
         ],
       },
@@ -130,7 +130,7 @@ AI Agent 正在带来新一轮平台变革。掌握其构建方法已成为工�
       module: 'Tool',
       preview: {
         intro:
-          '补充说明：如果你正在使用 Cursor、Windsurf、Claude Code、VS Code、Codex 或其他支持 MCP 的工具，建议启用 Mastra MCP Docs Server。',
+          '补充说明：如果你正在使用 Cursor、Windsurf、Claude Code、VS Code、Codex 或其他支持 MCP 的Tool，建议启用 Mastra MCP Docs Server。',
         bullets: ['Mastra MCP Docs Server 是什么', '如何在编辑器中启用它', '编写代码时获取与上下文相关的 Mastra 文档'],
       },
     },

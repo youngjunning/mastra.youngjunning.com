@@ -1,0 +1,445 @@
+---
+title: 'Reference: RingSignals | Signals'
+description: 'API reference for RingSignals, which turns Ring doorbell events into notification signals and adds snapshot and clip tools to an agent.'
+packages:
+  - '@mastra/ring-signals'
+---
+
+# 振鈴訊號
+
+`RingSignals`將 Ring 門鈴和攝影機連接到Agent。它接收 Ring webhooks，將每個事件作為Agent線程傳遞到Agent線程[通知訊號](/reference/signals/notifications)，並添加`ring_snapshot`和`ring_clip`Tool，以便Agent商可以取得事件的媒體。它還為帳戶連結和 Webhooks 的路由 Ring 呼叫提供服務。
+
+有關 Ring 開發者控制台和ring.com 中的設置，請參閱[Ring integration guide](/integrations/channels/ring).
+
+## 使用範例 {/* #usage-example */}
+
+```typescript title="src/mastra/agents/home-agent.ts"
+import { Agent } from '@mastra/core/agent'
+import { Memory } from '@mastra/memory'
+import { RingSignals } from '@mastra/ring-signals'
+
+export const homeAgent = new Agent({
+  id: 'home-agent',
+  name: 'Home Agent',
+  instructions: 'Watch the front door and say briefly whether each event needs attention.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  memory: new Memory(),
+  signals: [
+    new RingSignals({
+      events: {
+        device_offline: { priority: 'low', summary: 'Device went offline.', coalesce: true },
+      },
+      tools: {
+        clip: { visibleToModel: true },
+      },
+    }),
+  ],
+})
+```
+
+關聯帳戶保存在通道儲存域中。 Mastra 實例需要儲存適配器。
+
+## 建構函數參數 {/* #constructor-parameters */}
+
+所有欄位都是可選的。憑證又依賴環境變數。如果`clientId`, `clientSecret`, or `hmacKey` is missing, a warning is logged when the agent is registered, and account linking, webhooks, and media requests fail.
+
+<PropertiesTable
+  content={[
+{
+  name: 'clientId',
+  type: 'string',
+  isOptional: true,
+  defaultValue: 'process.env.RING_CLIENT_ID',
+  description: 'Client ID of your app in the Ring Developer Console.',
+},
+{
+  name: 'clientSecret',
+  type: 'string',
+  isOptional: true,
+  defaultValue: 'process.env.RING_CLIENT_SECRET',
+  description: 'Client secret of your app in the Ring Developer Console.',
+},
+{
+  name: 'hmacKey',
+  type: 'string',
+  isOptional: true,
+  defaultValue: 'process.env.RING_HMAC_KEY',
+  description:
+    'HMAC signature key of your Ring app. Verifies link nonces and webhook signatures, and derives the key that signs media links.',
+},
+{
+  name: 'baseUrl',
+  type: 'string',
+  isOptional: true,
+  defaultValue: 'process.env.RING_BASE_URL',
+  description:
+    'Public URL of your Mastra server, used to build signed snapshot and clip links. Without it, the tools return no links. The agent still sees snapshots, and chat channels still receive attachments.',
+},
+{
+  name: 'encryptionKey',
+  type: 'string',
+  isOptional: true,
+  defaultValue: 'process.env.MASTRA_ENCRYPTION_KEY',
+  description:
+    'Key used to encrypt stored Ring tokens. When unset, tokens are stored unencrypted and a warning is logged.',
+},
+{
+  name: 'mediaUrlTtlMs',
+  type: 'number',
+  isOptional: true,
+  defaultValue: '604800000 (7 days)',
+  description: 'How long signed snapshot and clip links stay valid, in milliseconds.',
+},
+{
+  name: 'routePrefix',
+  type: 'string',
+  isOptional: true,
+  defaultValue: "'/ring'",
+  description: 'Path prefix for the Ring routes added to the server.',
+},
+{
+  name: 'userAgent',
+  type: 'string',
+  isOptional: true,
+  defaultValue: "'MastraRingSignals/1.0'",
+  description: '`User-Agent` header sent to the Ring API.',
+},
+{
+  name: 'hardwareId',
+  type: 'string',
+  isOptional: true,
+  description:
+    "`Hardware_Id` sent to the Ring API. By default, a UUID is generated when an account is linked and stored with that account's tokens.",
+},
+{
+  name: 'target',
+  type: 'SignalProviderTarget | RingTargetResolver',
+  isOptional: true,
+  defaultValue: '{ resourceId: <agent id>, threadId: <device id> }',
+  description:
+    'Where events are delivered when no thread has subscribed to the device with `subscribeThread()`. Pass a fixed target, or a function that receives the `RingWebhookEvent` and returns a target, or `undefined` to drop the event. The function can be async.',
+},
+{
+  name: 'events',
+  type: 'Partial<Record<RingEventType, RingEventNotification | false>>',
+  isOptional: true,
+  defaultValue: 'DEFAULT_RING_EVENTS',
+  description:
+    'How each Ring event type becomes a notification. Entries are merged over the defaults. Set an event to `false` to disable it. See [Events](#events).',
+  properties: [
+    {
+      type: 'RingEventNotification',
+      parameters: [
+        {
+          name: 'priority',
+          type: "'urgent' | 'high' | 'medium' | 'low'",
+          description: 'Notification priority.',
+        },
+        {
+          name: 'summary',
+          type: 'string',
+          description: 'Short text the model sees for the event.',
+        },
+        {
+          name: 'coalesce',
+          type: 'boolean',
+          isOptional: true,
+          defaultValue: 'false',
+          description:
+            'Merge repeats of this event from the same device into one pending notification, counted by `coalescedCount`.',
+        },
+        {
+          name: 'attributes',
+          type: '(event: RingWebhookEvent) => Record<string, unknown>',
+          isOptional: true,
+          description:
+            "Extra attributes the model sees on the notification, merged over the defaults. Values that aren't strings, numbers, booleans, or `null` are dropped.",
+        },
+      ],
+    },
+  ],
+},
+{
+  name: 'instructions',
+  type: 'string | false',
+  isOptional: true,
+  defaultValue: 'buildRingInstructions() for the enabled tools',
+  description:
+    "Fixed text added to the agent's system prompt that tells it how to handle Ring notifications. It doesn't change between requests, so it doesn't invalidate the prompt cache. Set to `false` to leave it out.",
+},
+{
+  name: 'tools',
+  type: 'RingToolsOptions',
+  isOptional: true,
+  description:
+    'Which tools the agent gets, and their options. Both tools are enabled by default. Set a tool to `false` to remove it, or to an options object to configure it. See [Tools](#tools).',
+  properties: [
+    {
+      type: 'RingToolsOptions',
+      parameters: [
+        {
+          name: 'snapshot',
+          type: 'boolean | RingSnapshotToolOptions',
+          isOptional: true,
+          defaultValue: 'true',
+          description: 'Adds `ring_snapshot`. Set to `false` to remove it.',
+        },
+        {
+          name: 'clip',
+          type: 'boolean | RingClipToolOptions',
+          isOptional: true,
+          defaultValue: 'true',
+          description: 'Adds `ring_clip`. Set to `false` to remove it.',
+        },
+      ],
+    },
+  ],
+},
+]}
+/>
+
+## 活動 {/* #events */}
+
+Ring 傳送這些事件類型。無需報名的活動`DEFAULT_RING_EVENTS` are disabled until you configure them in `events`.
+
+|活動 |傳送時間 |預設優先權 |預設摘要 |
+| - | - | - | - |
+|`button_press` | The doorbell button is pressed | `high` | Doorbell was pressed. |
+| `motion_detected` | A device camera detects motion | `medium` | Motion was detected. |
+| `device_added` | A device becomes accessible to your app | Disabled | |
+| `device_removed` | A device is no longer accessible to your app | Disabled | |
+| `device_online` | A device comes online | Disabled | |
+| `device_offline`|设备离线 |已禁用 | |
+|`app_integration_added`| Ring 帳戶連結您的應用程式 |已停用 | |
+|`app_integration_removed`| Ring 帳戶取消與您的應用程式的連結 |已停用 | |
+|`subscription_activated`| Ring 付費訂閱或試用開始 |已停用 | |
+|`subscription_deactivated`| Ring 付費訂閱或試用結束 |已停用 | |
+
+設備事件有`deviceId` and `timestamp` attributes. Subscription events have no `timestamp`, and app integration and subscription events have no `deviceId`. Motion events also have `motionType`: `human`, `vehicle`, `package_delivery`, or `other_motion` when Ring Smart Alerts are on, and `motion` when they're off.
+
+有些事件也有副作用，無論是否啟用。`app_integration_removed` deletes the account's stored tokens, and `subscription_deactivated` logs a warning that media is no longer available.
+
+### `RingWebhookEvent` {/* #ringwebhookevent */}
+
+Ring 為每個事件發送的 Webhook 負載。這`target` function and the `attributes` function in `events` receive it.
+
+```typescript
+type RingWebhookEvent = {
+  meta: {
+    version: string
+    time: string
+    request_id: string
+    account_id?: string
+  }
+  data: {
+    id: string
+    type: RingEventType
+    attributes: {
+      source: string
+      source_id?: string
+      source_type?: string
+      timestamp?: number
+      sub_type?: RingMotionType | RingSubscriptionType
+      plan_id?: string | null
+      expires_at?: string
+      component_ids?: string[]
+    }
+  }
+}
+```
+
+* `meta.account_id`：與事件關聯的環帳戶。
+* `data.type`：事件類型，來自上表。
+* `data.attributes.source`：設備事件的設備ID、設備事件的帳戶ID`app_integration_added` and `app_integration_removed`, or `subscriptions` for subscription events.
+* `data.attributes.source_id`：訂閱 ID，針對訂閱事件。
+* `data.attributes.source_type`: 來源種類:`devices` for device events, `users` for app integration events.
+* `data.attributes.timestamp`：事件發生的時間，以紀元毫秒為單位。它在訂閱事件中遺失。
+* `data.attributes.sub_type`：導致運動事件的原因：`human`, `vehicle`, `package_delivery`, `other_motion`, or `motion` when Smart Alerts are off. `paid` or `trial` on subscription events.
+* `data.attributes.plan_id`：訂閱計劃 ID，關於訂閱事件。`null` for trials.
+* `data.attributes.expires_at`：計費週期或試用結束時，採用 ISO 8601 日期。始終存在於`subscription_activated`.
+* `data.attributes.component_ids`：涉及的攝像頭，在擁有多個攝像頭的設備上。
+
+## Tool {/* #tools */}
+
+### `ring_snapshot` {/* #ring_snapshot */}
+
+取得事件的靜態影像。如果 Ring 在事件發生後沒有圖像，它將使用該事件之前的最新圖像（最多 24 小時）。
+
+輸入：`{ deviceId: string, timestamp: number }`, taken from the notification's attributes.
+
+<PropertiesTable
+  content={[
+{
+  name: 'attachment',
+  type: 'boolean | string[]',
+  isOptional: true,
+  defaultValue: 'true',
+  description:
+    'Send the snapshot as a file attachment on channel threads. `true` attaches on every channel platform, `false` never attaches, and a list of platform names attaches only on those. Studio, web, and API threads never get attachments.',
+},
+{
+  name: 'maxAttachmentBytes',
+  type: 'number | Record<string, number>',
+  isOptional: true,
+  defaultValue: '10000000 (10 MB)',
+  description:
+    'Largest snapshot to attach. A number applies to every platform. An object sets a limit per platform name, and unlisted platforms use the default.',
+},
+{
+  name: 'visibleToModel',
+  type: 'boolean',
+  isOptional: true,
+  defaultValue: 'true',
+  description:
+    'Pass the image to the model so the agent can describe it. Requires a model that supports image input.',
+},
+]}
+/>
+
+### `ring_clip` {/* #ring_clip */}
+
+取得從事件開始的影片剪輯。 Ring 需要時間來處理錄音。該Tool會重試，直到剪輯準備就緒或`processingTimeoutMs` passes.
+
+輸入：`{ deviceId: string, timestamp: number }`, taken from the notification's attributes.
+
+<PropertiesTable
+  content={[
+{
+  name: 'attachment',
+  type: 'boolean | string[]',
+  isOptional: true,
+  defaultValue: 'true',
+  description: 'Send the clip as a file attachment on channel threads. Same values as the snapshot option.',
+},
+{
+  name: 'maxAttachmentBytes',
+  type: 'number | Record<string, number>',
+  isOptional: true,
+  defaultValue: '10000000 (10 MB)',
+  description: 'Largest clip to attach. Same values as the snapshot option.',
+},
+{
+  name: 'visibleToModel',
+  type: 'boolean',
+  isOptional: true,
+  defaultValue: 'false',
+  description:
+    'Pass the video to the model so the agent can describe it. Requires a model that supports video input, for example Gemini. Video input counts toward the context window for every second of footage.',
+},
+{
+  name: 'audio',
+  type: 'boolean',
+  isOptional: true,
+  defaultValue: 'true',
+  description: 'Include audio in the clip.',
+},
+{
+  name: 'durationMs',
+  type: 'number',
+  isOptional: true,
+  defaultValue: '15000 (15 seconds)',
+  description: "Clip length in milliseconds. Capped at Ring's maximum of 15 minutes.",
+},
+{
+  name: 'processingTimeoutMs',
+  type: 'number',
+  isOptional: true,
+  defaultValue: '120000 (2 minutes)',
+  description: 'How long to wait for Ring to finish processing the recording.',
+},
+]}
+/>
+
+### Tool結果 {/* #tool-result */}
+
+兩個Tool傳回相同的形狀：
+
+<PropertiesTable
+  content={[
+{
+  name: 'mediaId',
+  type: 'string',
+  description: 'Identifier for the snapshot or clip.',
+},
+{
+  name: 'url',
+  type: 'string',
+  isOptional: true,
+  description: 'Signed link to the media on your server. Only present when `baseUrl` is set.',
+},
+{
+  name: 'attached',
+  type: 'boolean',
+  description: 'Whether the media was sent as a file attachment on the thread.',
+},
+{
+  name: 'shareLink',
+  type: 'boolean',
+  description:
+    "Whether the agent should share `url` in its reply, because the thread's platform can't show tool results and the media wasn't attached.",
+},
+]}
+/>
+
+## 路線 {/* #routes */}
+
+当Agent注册时，这些路由将添加到 Mastra 服务器。他們不使用 Mastra 身份驗證。 Webhook 使用 Ring 的签名进行验证，帐户链接使用 Ring 的链接随机数进行验证，媒体链接使用其签名和到期时间进行验证。令牌路由没有自己的检查：它将每个代码发送到 Ring，而 Ring 拒绝它未发出的代码。速率限制`<routePrefix>/token` in your server's middleware.
+
+每個實例都需要自己的`routePrefix`. When two instances use the same prefix, Mastra registers only the first instance's routes and logs a warning. The second instance gets no Ring events.
+
+|路線 |目的|
+| - | - |
+|`GET <routePrefix>/link` | Account Link URL. Finishes linking and shows the result. |
+| `GET <routePrefix>/home` | App Homepage URL. Returns `Ring Signals` as plain text. |
+| `POST <routePrefix>/token` | Token Exchange URL. Exchanges an authorization code for tokens. |
+| `POST <routePrefix>/webhook` | Webhook URL. Receives Ring events. |
+| `GET <routePrefix>/media/:kind/:deviceId/:timestamp` | Serves signed snapshot and clip links. |
+
+## 方法 {/* #methods */}
+
+### `subscribeThread(target, deviceId)` {/* #subscribethreadtarget-deviceid */}
+
+將事件從環設備傳送到特定執行緒。沒有訂閱的設備使用`target` option. Several threads can subscribe to the same device, and each one receives every event. Subscriptions are kept in memory and are lost when the server restarts.
+
+```typescript
+ringSignals.subscribeThread({ resourceId: 'user-1', threadId: 'front-door' }, deviceId)
+```
+
+返回：`SignalSubscription`
+
+<PropertiesTable
+  content={[
+{
+  name: 'target',
+  type: 'SignalProviderTarget',
+  description: 'The thread to deliver events to. Must include `threadId` and `resourceId`.',
+},
+{
+  name: 'deviceId',
+  type: 'string',
+  description: 'The Ring device ID.',
+},
+]}
+/>
+
+### `unsubscribeThread(target, deviceId)` {/* #unsubscribethreadtarget-deviceid */}
+
+停止從環設備向執行緒發送事件。
+
+返回：`boolean`, `true` if the thread was subscribed.
+
+## 出口 {/* #exports */}
+
+`@mastra/ring-signals`還出口：
+
+* `DEFAULT_RING_EVENTS`:預設`events` configuration.
+* `DEFAULT_RING_INSTRUCTIONS`：兩個Tool的預設系統指令。
+* `buildRingInstructions({ snapshot, clip })`：為啟用的Tool建立系統指令。使用它來擴展預設文字。
+* `RingApiClient`和`RingApiError`: A client for the Ring Partner API and the error it throws.
+* 類型：`RingSignalsOptions`, `RingEventType`, `RingEventNotification`, `RingMotionType`, `RingSubscriptionType`, `RingWebhookEvent`, `RingTargetResolver`, `RingToolsOptions`, `RingSnapshotToolOptions`, `RingClipToolOptions`, `RingAttachmentOption`, and `RingMaxAttachmentBytesOption`.
+
+## 有關的 {/* #related */}
+
+* [環集成指南](/integrations/channels/ring)：Ring 開發者控制台設定、帳戶連結和範例
+* [信號提供者](/reference/signals/signal-provider): 基底類`RingSignals` extends
+* [通知](/reference/signals/notifications)：通知優先順序、合併和傳遞

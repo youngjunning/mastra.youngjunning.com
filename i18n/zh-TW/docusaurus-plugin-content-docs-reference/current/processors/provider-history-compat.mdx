@@ -1,19 +1,19 @@
 ---
-title: "參考：ProviderHistoryCompat | 處理器"
-description: "ProviderHistoryCompat 處理器的 Mastra API 參考；此處理器會套用 Provider 專屬的歷史記錄相容性修正。"
+title: "Reference: ProviderHistoryCompat | Processors"
+description: "The ProviderHistoryCompat processor handles provider-specific history incompatibilities."
 packages:
   - "@mastra/core"
 ---
 
-# ProviderHistoryCompat
+# Provider歷史相容
 
-`ProviderHistoryCompat` 處理器會處理 Provider 專屬的歷史記錄不相容問題。它可以在呼叫 Provider 前改寫要送出的語言模型提示詞，也可以在發生 API 錯誤時作出反應，以修復後的訊息歷史記錄重試。
+這`ProviderHistoryCompat`處理器處理特定於Provider的歷史不相容性。它可以在提供程式呼叫之前重寫出站語言模型提示，或者對 API 錯誤做出反應並使用修復的訊息歷史記錄進行重試。
 
-當 Agent 可能在不同模型 Provider 之間切換，或跨 Provider 重複使用訊息歷史記錄時，可使用此處理器。它也能處理 Provider 拒絕其他 Provider 所產生欄位的情況。
+當Agent程式可以在模型Provider之間切換或跨Provider重用訊息歷史記錄時使用它。它還處理拒絕另一個Provider發出的欄位的Provider。
 
 ## 使用範例 {/* #usage-example */}
 
-如果要讓 Agent 使用所有內建相容性規則，請將 `ProviderHistoryCompat` 加入 `inputProcessors`：
+Mastra 將此處理器添加到每個Agent的`errorProcessors` by default when your list doesn't already contain that `id`. Among the added defaults it comes first. Its outbound prompt rules run before the other defaults, including the retry processor's blind resend. Supply your own instance to add custom rules or position it yourself:
 
 ```typescript title="src/mastra/agents/my-agent.ts"
 import { Agent } from '@mastra/core/agent'
@@ -24,89 +24,106 @@ export const agent = new Agent({
   name: 'my-agent',
   instructions: 'You are a helpful assistant.',
   model: 'anthropic/claude-sonnet-4-5',
-  inputProcessors: [new ProviderHistoryCompat()],
+  errorProcessors: [new ProviderHistoryCompat({ additionalRules: [/* ... */] })],
 })
 ```
 
-Mastra Agent 不會自動加入此處理器。需要 Provider 歷史記錄相容性規則、針對 API 錯誤的反應式復原、自訂規則，或可預期的處理器順序時，請明確加入此處理器。
+提供的`ProviderHistoryCompat` is used instead of the default. The default is only added when no processor in your list carries that `id`. Place an instance in `inputProcessors` when you want the prompt-rewriting rules to run in the input lane instead.
 
-## 建構函式參數 {/* #constructor-parameters */}
+放置位置決定了處理器的哪一半工作：
+
+* **反應式規則需要`errorProcessors`.**&#x4EE3;理將其輸入處理器包裝在單一處理器Workflow中，並且 API 錯誤傳遞僅運行`processAPIError` on error processors, so an instance registered only in `inputProcessors` never runs its reactive rules.
+* **搶佔規則從任一清單運行。** `processLLMRequest` runs over the input processors and over the resolved error processors, so a `ProviderHistoryCompat` in `errorProcessors` gets its prompt rewrites as well as its reactive recovery. An instance registered in `inputProcessors` runs once, in its input position.
+
+註冊於`errorProcessors` alone, as the example above does, covers both halves. Double registration can't cause a double retry: the runner stops at the first processor that asks for one, and each reactive rule bails once `retryCount` is above zero, so a repaired turn is attempted exactly once more.
+
+## 建構函數參數 {/* #constructor-parameters */}
 
 <PropertiesTable
   content={[
-  {
-    name: 'opts',
-    type: '{ additionalRules?: CompatRule[] }',
-    description: 'Provider 歷史記錄相容性規則的設定選項。',
-    isOptional: true,
-    properties: [
-      {
-        type: 'Options',
-        parameters: [
-          {
-            name: 'additionalRules',
-            type: 'CompatRule[]',
-            description:
-              '在內建規則之後執行的自訂相容性規則。規則可以改寫要送出的提示詞，或在比對到 API 錯誤後修復保存的訊息。',
-            isOptional: true,
-          },
-        ],
-      },
-    ],
-  },
+{
+  name: 'opts',
+  type: '{ additionalRules?: CompatRule[] }',
+  description: 'Configuration options for provider history compatibility rules.',
+  isOptional: true,
+  properties: [
+    {
+      type: 'Options',
+      parameters: [
+        {
+          name: 'additionalRules',
+          type: 'CompatRule[]',
+          description:
+            'Custom compatibility rules to run after the built-in rules. Rules can rewrite the outbound prompt or repair persisted messages after matching an API error.',
+          isOptional: true,
+        },
+      ],
+    },
+  ],
+},
 ]}
 />
 
-## 屬性 {/* #properties */}
+## 特性 {/* #properties */}
 
 <PropertiesTable
   content={[
-  {
-    name: 'id',
-    type: "'provider-history-compat'",
-    description: '處理器識別碼。',
-    isOptional: false,
-  },
-  {
-    name: 'name',
-    type: "'Provider History Compat'",
-    description: '處理器顯示名稱。',
-    isOptional: false,
-  },
-  {
-    name: 'processLLMRequest',
-    type: '(args: ProcessLLMRequestArgs) => ProcessLLMRequestResult',
-    description:
-      '在呼叫 Provider 前一刻，對轉換後的 LanguageModelV2Prompt 執行預先相容性規則。回傳的提示詞變更是暫時性的，不會保存至記憶體或訊息歷史記錄。',
-    isOptional: false,
-  },
-  {
-    name: 'processAPIError',
-    type: '(args: ProcessAPIErrorArgs) => Promise<ProcessAPIErrorResult | void>',
-    description:
-      '當 Provider 拒絕請求時，執行反應式相容性規則。比對成功的規則可以修改訊息清單，並在第一次重試時回傳 retry: true。',
-    isOptional: false,
-  },
+{
+  name: 'id',
+  type: "'provider-history-compat'",
+  description: 'Processor identifier.',
+  isOptional: false,
+},
+{
+  name: 'name',
+  type: "'Provider History Compat'",
+  description: 'Processor display name.',
+  isOptional: false,
+},
+{
+  name: 'processLLMRequest',
+  type: '(args: ProcessLLMRequestArgs) => ProcessLLMRequestResult',
+  description:
+    'Runs preemptive compatibility rules against the converted LanguageModelV2Prompt immediately before the provider call. Returned prompt changes are transient and are not persisted to memory or message history.',
+  isOptional: false,
+},
+{
+  name: 'processAPIError',
+  type: '(args: ProcessAPIErrorArgs) => Promise<ProcessAPIErrorResult | void>',
+  description:
+    'Runs reactive compatibility rules when a provider rejects the request. Matching rules can mutate the message list and return retry: true on the first retry attempt.',
+  isOptional: false,
+},
 ]}
 />
 
 ## 內建規則 {/* #built-in-rules */}
 
-`ProviderHistoryCompat` 包含下列內建相容性規則：
+`ProviderHistoryCompat`包括這些內建相容性規則：
 
-| 規則 | Provider | 執行時機 | 行為 |
+|規則|Provider|時間 |行為 |
 | - | - | - | - |
-| `anthropic-tool-id-format` | Anthropic | 反應式 API 錯誤復原 | 改寫包含 `[a-zA-Z0-9_-]` 以外字元的 Tool 呼叫 ID，並重試請求。 |
-| `cerebras-strip-reasoning-content` | Cerebras | 預先改寫提示詞 | 從要送出的提示詞移除 assistant `reasoning` 部分，避免序列化為不支援的 `reasoning_content` 欄位。 |
-| `anthropic-strip-foreign-reasoning-content` | Anthropic | 預先改寫提示詞 | 從要送出的提示詞移除非 Anthropic 的 assistant `reasoning` 部分。保留 Anthropic 原生的思考歷史記錄。 |
+|`strip-foreign-provider-executed-tools` | Anthropic, OpenAI, Azure OpenAI, Google/Vertex | Preemptive prompt rewrite | Removes provider-executed tool calls and their paired results from the outbound prompt when they came from a different provider family, since the receiving provider can't resolve another provider's tool IDs. Persisted history is left untouched. |
+| `anthropic-tool-id-format` | Anthropic | Preemptive prompt rewrite | Rewrites tool call IDs that contain characters outside `[a-zA-Z0-9_-]` in the outbound prompt, on both the call and its result. A sanitized ID that would collide with one already in the prompt gets a `_2`, `_3`, … suffix. The provider's rejection never fires, and persisted history keeps the original IDs. A reactive fallback covers providers the preemptive check doesn't recognize, such as Vertex-hosted Claude. |
+| `cerebras-strip-reasoning-content` | Cerebras | Preemptive prompt rewrite | Removes assistant `reasoning` parts from the outbound prompt so they're not serialized as unsupported `reasoning_content` fields. |
+| `anthropic-strip-empty-signed-reasoning-content`|人擇 |反應性（與 Anthropic 的 400 個拒絕修改思維塊相匹配）|刪除助理`reasoning`帶有人類簽名但具有空白文字的部分，遺留記錄可以包含來自早期訊息的內容。僅在 Anthropic 拒絕歷史記錄後運行，因為 Claude 5.x 返回空文本簽名塊作為正常輸出，並且必須按原樣重播它們以保持提示緩存。 |
+|`anthropic-strip-foreign-reasoning-content`|人擇 |搶佔式提示重寫|刪除非人類助手`reasoning`出站提示中的部分。人類本土思維歷史得以保留。 |
+|`anthropic-strip-foreign-signed-reasoning`|人類相容|搶佔式提示重寫|當出站提示的原始輪次被不同的Provider標記時，從出站提示中刪除簽名思維（例如 Kimi For Coding ↔`__GATEWAY_ANTHROPIC_MODEL_SONNET__`），因為接收Provider無法驗證另一個Provider的簽章。掉落清空所有內容的回合將從提示中刪除。未加標記的歷史未受影響。 |
+|`azure-system-reminder-transform`| Azure 開放人工智慧 |搶佔式提示重寫|重新命名`<system-reminder>`使用者文字和系統指令中的包裝`<memory-context>`對於出站請求。儲存的歷史記錄保持不變。 |
+|`openai-orphan-item-id`| OpenAI、Azure OpenAI（回應）|反應式 API 錯誤復原 |復原 OpenAI 拒絕的歷史記錄`Item 'msg_…' of type 'message' was provided without its required 'reasoning' item`。刪除回覆`itemId`來自助理訊息的每個包含項目的部分，該訊息攜帶一個但沒有`reasoning`部分，然後重試。然後該訊息按值重播，而不是作為不可滿足的訊息重播`item_reference`。修復應用於目前回合的記憶體清單。 |
+|`anthropic-orphaned-thinking-step`|人擇 |反應式 API 錯誤恢復 |恢復人類拒絕的歷史，因為`thinking`或者`redacted_thinking`最新助手訊息中的區塊無法修改。當後面有更多助理內容時，刪除只包含推理的步驟，然後再試一次。涵蓋了較舊的保存的歷史記錄`@mastra/memory`發布（[#22798](https://github.com/mastra-ai/mastra/issues/22798)). |
+| `tool-call-empty-input`|所有Provider|搶佔式提示重寫|發送一個助理Tool調用，其儲存的輸入遺失（`undefined`或者`null`） 作為`{}`在出站提示中，因為Provider拒絕沒有輸入的Tool呼叫（Anthropic：`tool_use.input: Field required`）。無法解析參數的呼叫以這種方式儲存。該呼叫保留其配對的錯誤結果，並且持久的歷史記錄保持不變。空字串輸入是真實的儲存值並按原樣發送。 |
+|`ensure-user-first-turn`|亞馬遜 Bedrock、Google/Vertex Gemini |搶佔式提示重寫|插入最小用戶回合（`.`）在主導助理輪流之前，因為這些Provider拒絕其第一個非系統輪流是助理的對話。當客服人員先打招呼或`lastMessages`切成絲。最後運行，因此它會在其他規則丟棄空回合後看到提示。 |
 
-Mastra 將訊息轉換為模型提示詞格式後，會透過 `processLLMRequest` 執行預先規則，接著才將提示詞傳送至 Provider。這些改寫只會影響目前的 Provider 呼叫。
+貫穿先發規則`processLLMRequest` after Mastra converts messages to the model prompt format and before the prompt is sent to the provider. These rewrites affect only the current provider call. Persisted history is never changed, so the IDs and content in memory and in the Studio stay exactly as written.
 
-Provider 拒絕請求後，會透過 `processAPIError` 執行反應式規則。這些規則可以更新保存的 `messageList` 並要求重試。
+反應式規則貫穿始終`processAPIError` after a provider rejection. They can update the persisted `messageList` and request a retry.
+
+`anthropic-tool-id-format`兩者都實現。它的搶佔式鉤子通常可以完全防止拒絕的發生，這使得反應式鉤子處於休眠狀態。看[Tool call ID repair is prompt-scoped](#tool-call-id-repair-is-prompt-scoped) below.
 
 ## `CompatRule` {/* #compatrule */}
 
-`CompatRule` 定義一項 Provider 歷史記錄相容性修正：
+一個`CompatRule` defines one provider history compatibility fix:
 
 ```typescript
 import type { CompatRule } from '@mastra/core/processors'
@@ -122,36 +139,39 @@ const removeUnsupportedPromptParts: CompatRule = {
 
 <PropertiesTable
   content={[
-  {
-    name: 'name',
-    type: 'string',
-    description: '供記錄與偵錯使用、適合人閱讀的規則識別碼。',
-    isOptional: false,
-  },
-  {
-    name: 'errorPatterns',
-    type: 'RegExp[]',
-    description: '用來比對 Provider API 錯誤訊息和回應主體的模式。對實作 fix 的反應式規則而言，此欄位為必填。',
-    isOptional: true,
-  },
-  {
-    name: 'fix',
-    type: '(messages: MastraDBMessage[]) => boolean',
-    description: '在比對到 API 錯誤後，修改已保存資料庫訊息的反應式修正。規則變更了訊息且應重試請求時，回傳 true。',
-    isOptional: true,
-  },
-  {
-    name: 'applyToPrompt',
-    type: '(args: { prompt: LanguageModelV2Prompt; model: unknown }) => LanguageModelV2Prompt | undefined',
-    description: '為目前的 Provider 呼叫改寫傳出提示詞的預先修正。不需變更提示詞時，回傳 undefined。',
-    isOptional: true,
-  },
+{
+  name: 'name',
+  type: 'string',
+  description: 'Human-readable rule identifier for logs and debugging.',
+  isOptional: false,
+},
+{
+  name: 'errorPatterns',
+  type: 'RegExp[]',
+  description:
+    'Patterns matched against provider API error messages and response bodies. Required for reactive rules that implement fix.',
+  isOptional: true,
+},
+{
+  name: 'fix',
+  type: '(messages: MastraDBMessage[]) => boolean',
+  description:
+    'Reactive fix that mutates persisted database messages after a matching API error. Return true when the rule changed messages and the request should retry.',
+  isOptional: true,
+},
+{
+  name: 'applyToPrompt',
+  type: '(args: { prompt: LanguageModelV2Prompt; model: unknown }) => LanguageModelV2Prompt | undefined',
+  description:
+    'Preemptive fix that rewrites the outbound prompt for the current provider call. Return undefined when no prompt change is needed.',
+  isOptional: true,
+},
 ]}
 />
 
 ## 自訂規則 {/* #custom-rules */}
 
-透過 `additionalRules` 傳入自訂規則。自訂規則會在內建規則之後執行：
+傳遞自訂規則`additionalRules`. Custom rules run after the built-in rules:
 
 ```typescript title="src/mastra/agents/custom-provider-compat.ts"
 import { Agent } from '@mastra/core/agent'
@@ -197,10 +217,29 @@ export const agent = new Agent({
 })
 ```
 
-若要執行不應儲存至記憶體的 Provider 專屬改寫，請使用 `applyToPrompt`。若 Provider 拒絕保存的訊息歷史記錄，而且修復後的歷史記錄應在後續對話輪次重複使用，請搭配 `errorPatterns` 使用 `fix`。
+使用`applyToPrompt` for provider-specific rewrites that shouldn't be saved to memory. This is what new rules should normally reach for, and it's the hook the built-in rules use. Use `fix` with `errorPatterns` only when the repaired history must persist and be reused on future turns, and when the provider can't be stopped from rejecting the request up front.
 
-## 相關資源 {/* #related */}
+## Tool呼叫 ID 修復是提示範圍內的 {/* #tool-call-id-repair-is-prompt-scoped */}
 
-- [處理器介面](/reference/processors/processor-interface)
-- [處理器](/docs/agents/processors)
-- [PrefillErrorHandler](/reference/processors/prefill-error-handler)
+人擇強制`^[a-zA-Z0-9_-]+$` on `tool_use.id`. A tool call whose ID came from another provider, containing `.` or `:`, is rejected. The rule sanitizes those IDs in the outbound request:
+
+```typescript oxfmt:false
+// What the provider receives
+tool_use.id: 'call_abc_1'
+// What stays in memory, in the returned messages, and in the Studio
+toolCallId: 'call.abc:1'
+```
+
+兩者都`tool-call` and its paired `tool-result` are rewritten from the same map, so call/result pairing survives the rewrite. Replacement IDs are assigned in encounter order and never collide with an ID the prompt already carries: if `a.b` sanitizes to `a_b` and the prompt already has an `a_b`, the rewritten ID becomes `a_b_2`.
+
+由於沒有保留任何內容，因此在稍後的輪次中重複使用相同訊息清單的呼叫者會再次看到原始 ID，並且修復會根據該請求再次運行。
+
+### 反應式回退 {/* #reactive-fallback */}
+
+規則的`errorPatterns` and `fix` hooks repair the same rejection after the provider raises it. The preemptive rewrite only runs when `isMaybeAnthropic(model)` matches. The reactive path stays the fallback for Claude served through a provider the check doesn't recognize, such as Vertex-hosted Claude, and the only repair once a call has already been rejected. A rule can use both hooks together, and `fix` on the `CompatRule` interface itself isn't deprecated: custom rules legitimately use it.
+
+## 有關的 {/* #related */}
+
+* [處理器介面](/reference/processors/processor-interface)
+* [處理器](/docs/agents/processors)
+* [預填錯誤處理程序](/reference/processors/prefill-error-handler)

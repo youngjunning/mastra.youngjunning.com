@@ -1,0 +1,260 @@
+---
+title: "Archil | File Storage"
+description: "Store Mastra workspace files on Archil elastic serverless disks with S3-compatible operations, POSIX shell access, snapshots, and persistent volumes."
+packages:
+  - "@mastra/archil"
+---
+
+# 阿尔奇尔
+
+将文件存储在[Archil](https://docs.archil.com)弹性无服务器磁盘。结合了 S3 兼容的对象 API，可实现快速读/写`exec()`用于 POSIX shell 操作和`diskGrep()`用于并行服务器端搜索。接口详情请参见[工作空间文件系统接口](/reference/workspace/filesystem).
+
+## 安装 {/* #installation */}
+
+```bash npm2yarn
+npm install @mastra/archil
+```
+
+## 用法 {/* #usage */}
+
+添加一个`ArchilFilesystem` to a workspace and assign it to an agent:
+
+```typescript
+import { Agent } from '@mastra/core/agent'
+import { Workspace } from '@mastra/core/workspace'
+import { ArchilFilesystem } from '@mastra/archil'
+
+const workspace = new Workspace({
+  filesystem: new ArchilFilesystem({
+    diskId: 'dsk-0123456789abcdef',
+    apiKey: process.env.ARCHIL_API_KEY,
+    region: 'aws-us-east-1',
+  }),
+})
+
+const agent = new Agent({
+  id: 'file-agent',
+  name: 'file-agent',
+  model: '__GATEWAY_ANTHROPIC_MODEL_OPUS__',
+  workspace,
+})
+```
+
+### 在 init 上创建新磁盘 {/* #creating-a-new-disk-on-init */}
+
+如果您没有现有磁盘，请提供`createDiskOptions` to create one automatically:
+
+```typescript
+import { ArchilFilesystem } from '@mastra/archil'
+
+const filesystem = new ArchilFilesystem({
+  apiKey: process.env.ARCHIL_API_KEY,
+  region: 'aws-us-east-1',
+  createDiskOptions: {
+    name: 'my-agent-workspace',
+  },
+})
+
+await filesystem.init()
+// filesystem.diskId now contains the newly created disk ID
+```
+
+### 环境变量回退 {/* #environment-variable-fallbacks */}
+
+什么时候`apiKey` and `region` are omitted, the provider reads from environment variables:
+
+* `ARCHIL_API_KEY`- API密钥
+* `ARCHIL_REGION`- 地区（例如`aws-us-east-1`)
+* `ARCHIL_S3_BASE_URL`- 自定义S3端点（可选）
+
+```typescript
+import { ArchilFilesystem } from '@mastra/archil'
+
+// Uses ARCHIL_API_KEY and ARCHIL_REGION from environment
+const filesystem = new ArchilFilesystem({
+  diskId: 'dsk-0123456789abcdef',
+})
+```
+
+## 构造函数参数 {/* #constructor-parameters */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'diskId',
+  type: 'string',
+  description: 'Existing Archil disk ID (e.g. "dsk-0123456789abcdef"). Mutually exclusive with `createDiskOptions`.',
+  isOptional: true,
+},
+{
+  name: 'createDiskOptions',
+  type: 'CreateDiskRequest',
+  description: 'Options for creating a new disk on init. Mutually exclusive with `diskId`.',
+  isOptional: true,
+},
+{
+  name: 'apiKey',
+  type: 'string',
+  description: 'Archil API key. Falls back to `ARCHIL_API_KEY` environment variable.',
+  isOptional: true,
+},
+{
+  name: 'region',
+  type: 'string',
+  description: 'Archil region (e.g. "aws-us-east-1"). Falls back to `ARCHIL_REGION` environment variable.',
+  isOptional: true,
+},
+{
+  name: 'baseUrl',
+  type: 'string',
+  description: 'Custom Archil control-plane URL (for testing or self-hosted deployments).',
+  isOptional: true,
+},
+{
+  name: 's3BaseUrl',
+  type: 'string',
+  description: 'Custom S3-compatible API URL. Falls back to `ARCHIL_S3_BASE_URL` environment variable.',
+  isOptional: true,
+},
+{
+  name: 'id',
+  type: 'string',
+  description: 'Unique identifier for this filesystem instance.',
+  isOptional: true,
+  defaultValue: 'Auto-generated',
+},
+{
+  name: 'displayName',
+  type: 'string',
+  description: 'Human-friendly display name for the UI.',
+  isOptional: true,
+},
+{
+  name: 'icon',
+  type: 'FilesystemIcon',
+  description: 'Icon identifier for the UI.',
+  isOptional: true,
+},
+{
+  name: 'description',
+  type: 'string',
+  description: 'Short description of this filesystem for the UI.',
+  isOptional: true,
+},
+{
+  name: 'readOnly',
+  type: 'boolean',
+  description: 'When true, all write operations are blocked.',
+  isOptional: true,
+  defaultValue: 'false',
+},
+]}
+/>
+
+## 特性 {/* #properties */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'id',
+  type: 'string',
+  description: 'Filesystem instance identifier.',
+},
+{
+  name: 'name',
+  type: 'string',
+  description: "Provider name ('ArchilFilesystem').",
+},
+{
+  name: 'provider',
+  type: 'string',
+  description: "Provider identifier ('archil').",
+},
+{
+  name: 'diskId',
+  type: 'string | undefined',
+  description: 'The Archil disk ID (available after init).',
+},
+{
+  name: 'readOnly',
+  type: 'boolean | undefined',
+  description: 'Whether the filesystem is in read-only mode.',
+},
+]}
+/>
+
+## 方法 {/* #methods */}
+
+ArchilFilesystem 实现了[WorkspaceFilesystem interface](/reference/workspace/filesystem), providing all standard filesystem methods:
+
+* `readFile(path, options?)`- 读取文件内容
+* `writeFile(path, content, options?)`- 将内容写入文件
+* `appendFile(path, content)`- 将内容附加到文件
+* `deleteFile(path, options?)`- 删除文件
+* `copyFile(src, dest, options?)`- 复制文件
+* `moveFile(src, dest, options?)`- 移动或重命名文件
+* `mkdir(path, options?)`- 创建目录
+* `rmdir(path, options?)`- 删除目录
+* `readdir(path, options?)`- 列出目录内容
+* `exists(path)`- 检查路径是否存在
+* `stat(path)`- 获取文件或目录元数据
+
+### `init()` {/* #init */}
+
+初始化文件系统。连接到现有磁盘或创建新磁盘。
+
+```typescript
+await filesystem.init()
+```
+
+### `getInfo()` {/* #getinfo */}
+
+返回有关此文件系统实例的元数据。
+
+```typescript
+const info = filesystem.getInfo()
+// { id: '...', name: 'ArchilFilesystem', provider: 'archil', status: 'ready' }
+```
+
+### Archil 特定方法 {/* #archil-specific-methods */}
+
+#### `exec(command)` {/* #execcommand */}
+
+在磁盘上运行 shell 命令。返回退出代码、stdout 和 stderr。
+
+```typescript
+const result = await filesystem.exec('ls -la /data')
+// { exitCode: 0, stdout: '...', stderr: '' }
+```
+
+#### `diskGrep(options)` {/* #diskgrepoptions */}
+
+对磁盘上的文件运行并行服务器端搜索。
+
+```typescript
+const results = await filesystem.diskGrep({
+  directory: '/logs',
+  pattern: 'ERROR',
+  recursive: true,
+  glob: '*.log',
+})
+// { matches: [...], stoppedReason: null }
+```
+
+#### `share(path, options?)` {/* #sharepath-options */}
+
+生成用于共享文件的签名 URL。
+
+```typescript
+const { url } = await filesystem.share('/reports/output.pdf', {
+  expiresIn: 3600,
+})
+```
+
+## 有关的 {/* #related */}
+
+* [Workspace文件系统接口](/reference/workspace/filesystem)
+* [S3文件系统参考](/integrations/file-storage/amazon-s3)
+* [GCS文件系统参考](/integrations/file-storage/google-cloud-storage)
+* [AzureBlob 文件系统参考](/integrations/file-storage/azure-blob)
+* [Archil 文档](https://docs.archil.com)

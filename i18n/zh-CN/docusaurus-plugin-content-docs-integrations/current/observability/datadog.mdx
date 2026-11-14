@@ -1,0 +1,500 @@
+---
+title: 'Datadog | Observability'
+description: "Send Mastra traces to Datadog LLM Observability with exporter configuration, span type mapping, agent and workflow naming, and serverless flushing."
+packages:
+  - '@mastra/observability'
+  - '@mastra/datadog'
+---
+
+# 数据狗
+
+[数据狗](https://datadoghq.com/)是一个完整的监控平台，具有专用的 LLM 可观察性功能。 Mastra 通过导出器支持 Datadog，用于发送完整的跟踪，以及用于集成的桥接器`dd-trace`实时上下文。
+
+## 出口商 {/* #exporter */}
+
+Datadog 导出器将您的跟踪发送到 Datadog 的 LLM Observability 产品，提供有关模型性能和令牌使用情况以及对话流的见解。
+
+### 安装 {/* #installation */}
+
+```bash npm2yarn
+npm install @mastra/datadog@latest
+```
+
+### 配置 {/* #configuration */}
+
+#### 先决条件 {/* #prerequisites */}
+
+1. **数据狗账户**: 报名于[datadoghq.com](https://datadoghq.com/) with LLM Observability enabled
+2. **API密钥**：从 Datadog 组织设置 → API 密钥获取您的 API 密钥
+3. **环境变量**：设置您的凭据
+
+```bash title=".env"
+DD_API_KEY=your-datadog-api-key
+DD_LLMOBS_ML_APP=my-llm-app
+DD_SITE=datadoghq.com  # Optional: defaults to datadoghq.com
+DD_ENV=production      # Optional: environment name
+```
+
+#### 零配置设置 {/* #zero-config-setup */}
+
+设置环境变量后，无需配置即可使用导出器：
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { Observability } from '@mastra/observability'
+import { DatadogExporter } from '@mastra/datadog'
+
+export const mastra = new Mastra({
+  observability: new Observability({
+    configs: {
+      datadog: {
+        serviceName: 'my-service',
+        exporters: [new DatadogExporter()],
+      },
+    },
+  }),
+})
+```
+
+#### 显式配置 {/* #explicit-configuration */}
+
+您还可以直接传递凭据（优先于环境变量）：
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { Observability } from '@mastra/observability'
+import { DatadogExporter } from '@mastra/datadog'
+
+export const mastra = new Mastra({
+  observability: new Observability({
+    configs: {
+      datadog: {
+        serviceName: 'my-service',
+        exporters: [
+          new DatadogExporter({
+            mlApp: process.env.DD_LLMOBS_ML_APP!,
+            apiKey: process.env.DD_API_KEY!,
+          }),
+        ],
+      },
+    },
+  }),
+})
+```
+
+### 配置选项 {/* #configuration-options */}
+
+#### 完整配置 {/* #complete-configuration */}
+
+```typescript
+new DatadogExporter({
+  // Required settings
+  mlApp: process.env.DD_LLMOBS_ML_APP!, // Groups traces under this ML app name
+  apiKey: process.env.DD_API_KEY!, // Required for agentless mode (default)
+
+  // Optional settings
+  site: 'datadoghq.com', // Datadog site (datadoghq.eu, us3.datadoghq.com, etc.)
+  service: 'my-service', // Service name (defaults to mlApp)
+  env: 'production', // Environment name
+  agentless: true, // true = direct HTTPS, false = local Datadog Agent
+
+  // Advanced settings
+  integrationsEnabled: false, // Enable dd-trace auto-instrumentation
+
+  // Diagnostic logging
+  logLevel: 'info', // debug | info | warn | error
+})
+```
+
+#### 使用本地 Datadog Agent {/* #with-local-datadog-agent */}
+
+如果您有本地运行的 Datadog Agent，则可以通过它而不是直接 HTTPS 路由跟踪：
+
+```typescript
+new DatadogExporter({
+  mlApp: process.env.DD_LLMOBS_ML_APP!,
+  agentless: false, // Use local Datadog Agent
+  env: 'production',
+})
+```
+
+注意：使用Agent模式时，API 密钥是从本地Agent的配置中读取的。
+
+### 跨度类型映射 {/* #span-type-mapping */}
+
+Mastra 跨度类型自动映射到 Datadog LLM Observability跨度类型：
+
+|马斯特拉 SpanType |数据狗种类 |
+| - | - |
+|`AGENT_RUN` | `agent` |
+| `MODEL_GENERATION` | `workflow` |
+| `MODEL_STEP` | `llm` |
+| `TOOL_CALL` | `tool` |
+| `MCP_TOOL_CALL` | `tool` |
+| `WORKFLOW_RUN` | `workflow` |
+| Other workflow types | `task` |
+| `GENERIC` | `task` |
+
+除非指定，否则其他/未来的 Mastra 跨度类型在映射时将默认为“任务”。
+
+### 应用程序性能监控 {/* #application-performance-monitoring */}
+
+上述部分涵盖了 Mastra 的[LLM Observability](https://docs.datadoghq.com/llm_observability/) integration. To trace your Mastra HTTP server routes (request latency, error tracking, service maps), use `dd-trace` directly for Datadog Application Performance Monitoring (APM).
+
+#### APM 先决条件 {/* #apm-prerequisites */}
+
+1. **数据狗Agent**：安装一个[Datadog Agent](https://docs.datadoghq.com/agent/) on the same host or accessible via network. The agent receives traces from `dd-trace` on `localhost:8126` and forwards them to Datadog. Follow the [agent installation guide](https://docs.datadoghq.com/agent/) to set it up.
+2. **dd-trace 包**：在项目中安装跟踪库：
+
+   ```bash npm2yarn
+   npm install dd-trace
+   ```
+
+:::注意
+APM 跟踪始终通过 Datadog Agent进行路由。这与 LLM Observability 不同，后者支持无Agent模式（直接 HTTPS 到 Datadog）。
+:::
+
+#### 仅 APM {/* #apm-only */}
+
+导入并初始化`dd-trace` at the top of your entry file, before any other imports:
+
+```typescript title="src/mastra/index.ts"
+import tracer from 'dd-trace'
+
+tracer.init({
+  service: process.env.DD_SERVICE || 'my-mastra-app',
+  env: process.env.DD_ENV || 'production',
+  version: process.env.DD_VERSION,
+})
+
+import { Mastra } from '@mastra/core'
+
+export const mastra = new Mastra({
+  bundler: {
+    externals: [
+      'dd-trace',
+      '@datadog/native-metrics',
+      '@datadog/native-appsec',
+      '@datadog/native-iast-taint-tracking',
+      '@datadog/pprof',
+    ],
+  },
+})
+```
+
+设置跟踪器元数据环境变量：
+
+```bash title=".env"
+DD_SERVICE=my-mastra-app
+DD_ENV=production
+DD_VERSION=1.0.0
+```
+
+`dd-trace`自动检测流行的 HTTP 框架，包括 Mastra 支持的框架[server adapters](/docs/server/server-adapters). Inbound requests, outbound HTTP calls, and database queries appear as APM traces in Datadog.
+
+#### APM 和 LLM 可观察性 {/* #apm-and-llm-observability */}
+
+导入并初始化`dd-trace` before creating the Mastra instance. The `DatadogExporter` detects the existing tracer and skips re-initialization, adding LLM Observability on top of your APM setup:
+
+```typescript title="src/mastra/index.ts"
+import tracer from 'dd-trace'
+
+tracer.init({
+  service: process.env.DD_SERVICE || 'my-mastra-app',
+  env: process.env.DD_ENV || 'production',
+  version: process.env.DD_VERSION,
+})
+
+import { Mastra } from '@mastra/core'
+import { Observability } from '@mastra/observability'
+import { DatadogExporter } from '@mastra/datadog'
+
+export const mastra = new Mastra({
+  observability: new Observability({
+    configs: {
+      datadog: {
+        serviceName: 'my-mastra-app',
+        exporters: [
+          new DatadogExporter({
+            mlApp: process.env.DD_LLMOBS_ML_APP!,
+            apiKey: process.env.DD_API_KEY!,
+          }),
+        ],
+      },
+    },
+  }),
+  bundler: {
+    externals: [
+      'dd-trace',
+      '@datadog/native-metrics',
+      '@datadog/native-appsec',
+      '@datadog/native-iast-taint-tracking',
+      '@datadog/pprof',
+    ],
+  },
+})
+```
+
+```bash title=".env"
+DD_SERVICE=my-mastra-app
+DD_ENV=production
+DD_VERSION=1.0.0
+DD_API_KEY=your-datadog-api-key
+DD_LLMOBS_ML_APP=my-llm-app
+```
+
+服务器路由显示为 APM 跟踪，LLM 调用显示为 LLM Observability跨度，所有这些都在 Datadog 中的同一服务下。
+
+:::注意
+导入并初始化`dd-trace` before all other modules. This allows its auto-instrumentation to patch HTTP, database, and framework libraries at load time.
+:::
+
+### 故障排除 {/* #troubleshooting */}
+
+#### 本机模块 ABI 不匹配 {/* #native-module-abi-mismatch */}
+
+如果您看到类似以下错误：
+
+```text
+Error: No native build was found for runtime=node abi=137 platform=linuxglibc arch=x64
+```
+
+这表明 Node.js 版本存在兼容性问题`dd-trace`'s native modules. These native modules are **optional** and provide performance monitoring features.
+
+**解决方案：**
+
+1. **使用 Node.js 22.x**：原生模块与 Node.js 22.x 的兼容性最好。
+
+2. **忽略本机模块警告**：本机模块（`@datadog/native-metrics`, `@datadog/native-appsec`, etc.) are optional. If they fail to load, core tracing functionality still works.
+
+#### Bundler 外部配置 {/* #bundler-externals-configuration */}
+
+当使用 esbuild、webpack 或 Mastra CLI 捆绑器等捆绑器时，您可能需要标记`dd-trace` and its dependencies as external:
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+
+export const mastra = new Mastra({
+  bundler: {
+    externals: [
+      'dd-trace',
+      '@datadog/native-metrics',
+      '@datadog/native-appsec',
+      '@datadog/native-iast-taint-tracking',
+      '@datadog/pprof',
+    ],
+  },
+})
+```
+
+### 有关的 {/* #related */}
+
+* [追踪概述](/docs/observability/tracing/overview)
+* [Datadog LLM 可观察性文档](https://docs.datadoghq.com/llm_observability/)
+* [Datadog APM 文档](https://docs.datadoghq.com/tracing/)
+
+## 桥 {/* #bridge */}
+
+：：：警告
+
+Datadog 桥目前**experimental**. APIs and configuration options may change in future releases.
+
+:::
+
+Datadog 桥可实现 Mastra 跟踪系统和 Datadog 之间的双向集成。与在执行完成后发送跟踪数据的导出器不同，桥接器创建本机`dd-trace` spans in real time so that auto-instrumented APM operations (HTTP calls, database queries, etc.) inside your tools and processors are correctly nested under their parent Mastra spans.
+
+### 何时使用桥 {/* #when-to-use-the-bridge */}
+
+使用`DatadogBridge` when you:
+
+* 使用`dd-trace` auto-instrumentation in your application (HTTP servers, database clients, etc.)
+* 希望由Tool、MCP Tool或输出处理器进行的 APM 服务调用显示在其父 Mastra 跨度下，而不是请求处理程序下
+* 需要 APM 跟踪和 LLM Observability数据来共享一致的跟踪拓扑
+* 正在构建一个分布式系统，其中 Datadog 跟踪上下文必须跨服务传播
+
+### 它是如何运作的 {/* #how-it-works */}
+
+这`DatadogBridge` participates in two parts of the `dd-trace` pipeline:
+
+**APM 上下文传播（实时）：**
+
+* 创建一个`dd-trace` APM span via `tracer.startSpan()` when each Mastra span is created
+* 激活 APM 范围`dd-trace`'s scope via `tracer.scope().activate()` during execution
+* 活动范围内的自动仪表操作是正确 Mastra 跨度的父级
+* 继承主动`dd-trace` context (e.g., an incoming request span) when no explicit Mastra parent exists
+
+**LLM Observability发射（跨度端）：**
+
+* 通过发出注释（模型信息、令牌使用、输入/输出、错误）`dd-trace`'s LLM Observability pipeline
+* 使用嵌套维护 Datadog LLM Observability 中的父子关系`llmobs.trace()` calls
+* 重用相同的数据形状和跨度类型映射[Datadog Exporter](#span-type-mapping)
+
+### 跟踪和日志关联 {/* #trace-and-log-correlation */}
+
+如果没有桥，Datadog Exporter 仅在跟踪完成后创建 LLM Observability跨度。执行过程中，没有`dd-trace` span is active in scope, so any HTTP or database call made by a tool falls back to whatever `dd-trace` span is active at the time, typically the incoming request handler. The result is that service calls from MCP tools or output processors appear as children of the request span instead of the agent or processor span that actually made them.
+
+这座桥通过创建真实的`dd-trace` spans up front, so the scope is correct when auto-instrumentation runs.
+
+### 安装 {/* #installation-1 */}
+
+```bash npm2yarn
+npm install @mastra/datadog dd-trace
+```
+
+这座桥需要`dd-trace` to be installed and a local Datadog Agent (or compatible OTLP receiver) to receive APM data. See the [APM prerequisites](#apm-prerequisites) for agent setup details.
+
+### 配置 {/* #configuration-1 */}
+
+使用`DatadogBridge` requires two steps:
+
+1. 初始化`dd-trace` so its auto-instrumentation patches HTTP, database, and framework libraries
+2. 添加`DatadogBridge` to your Mastra observability config
+
+#### 步骤1：初始化dd-trace {/* #step-1-initialize-dd-trace */}
+
+`dd-trace`必须在任何其他导入之前初始化，以便其自动检测可以在加载时修补库。桥接器将检测已初始化的跟踪器并重用它。
+
+```typescript title="src/mastra/index.ts"
+import tracer from 'dd-trace'
+
+tracer.init({
+  service: process.env.DD_SERVICE || 'my-mastra-app',
+  env: process.env.DD_ENV || 'production',
+  version: process.env.DD_VERSION,
+})
+
+import { Mastra } from '@mastra/core'
+import { Observability } from '@mastra/observability'
+import { DatadogBridge } from '@mastra/datadog'
+
+// ...
+```
+
+:::注意
+导入并初始化`dd-trace` at the very top of your application's entry file, before any other imports.
+:::
+
+#### 第 2 步：Mastra 配置 {/* #step-2-mastra-configuration */}
+
+添加`DatadogBridge` to your Mastra observability config:
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { Observability } from '@mastra/observability'
+
+export const mastra = new Mastra({
+  observability: new Observability({
+    configs: {
+      default: {
+        serviceName: 'my-mastra-app',
+        bridge: new DatadogBridge({
+          mlApp: process.env.DD_LLMOBS_ML_APP!,
+        }),
+      },
+    },
+  }),
+  bundler: {
+    externals: [
+      'dd-trace',
+      '@datadog/native-metrics',
+      '@datadog/native-appsec',
+      '@datadog/native-iast-taint-tracking',
+      '@datadog/pprof',
+    ],
+  },
+})
+```
+
+```bash title=".env"
+DD_SERVICE=my-mastra-app
+DD_ENV=production
+DD_VERSION=1.0.0
+DD_LLMOBS_ML_APP=my-llm-app
+```
+
+什么时候`dd-trace` is initialized, it routes APM data to your local Datadog Agent on `localhost:8126`. The bridge enables LLM Observability on top of the same tracer, so both sets of data appear under the same service in Datadog.
+
+使用该桥时不需要 Mastra 出口商。 APM 和 LLM Observability数据均流经`dd-trace`. You can still add Mastra exporters if you want to send traces to additional destinations.
+
+### Agent模式与无Agent模式 {/* #agent-vs-agentless-mode */}
+
+桥接器默认为**agent mode** (`agentless: false`). This assumes a local Datadog Agent is running on `localhost:8126` to receive both APM and LLM Observability data. This is the typical setup when using `dd-trace` auto-instrumentation, since APM data always routes through the agent.
+
+如果您没有本地 Datadog Agent且仅需要 LLM Observability数据（无 APM 自动检测），则可以启用无Agent模式以直接向 Datadog 发送数据。在这种情况下，您必须提供 API 密钥。
+
+```typescript
+new DatadogBridge({
+  mlApp: process.env.DD_LLMOBS_ML_APP!,
+  apiKey: process.env.DD_API_KEY!,
+  agentless: true,
+})
+```
+
+:::注意
+对于大多数网桥用户来说，Agent模式是正确的选择。 APM 数据无法在无Agent模式下发送，因此启用无Agent会将 LLM Observability流量与 APM 流量分开。如果您只想在没有Agent的情况下获得 LLM Observability，请使用[Datadog Exporter](#exporter) instead.
+:::
+
+### 跟踪层次结构 {/* #trace-hierarchy */}
+
+随着`DatadogBridge`, your traces maintain proper hierarchy across `dd-trace` and Mastra boundaries. Service calls made by tools and processors appear under the correct Mastra span:
+
+```text
+HTTP POST /api/chat (from web framework instrumentation)
+└── agent.orchestrator (from Mastra via DatadogBridge)
+    ├── chat gpt-5.4 (LLM call)
+    ├── tool.execute search (tool execution)
+    │   └── HTTP GET api.example.com (auto-instrumented from inside the tool)
+    └── processor.guardrail (output processor)
+        └── HTTP POST guardrail-service/check (auto-instrumented from inside the processor)
+```
+
+在 Datadog 中，APM 跟踪显示了完整的拓扑，LLM Observability产品显示了Agent和特定于 LLM 的跨度及其输入、输出和令牌指标。
+
+### 跨度类型映射 {/* #span-type-mapping-1 */}
+
+该桥使用与 LLM 可观察性的 Datadog Exporter 相同的跨度类型映射。看[span type mapping](#span-type-mapping) in the exporter section.
+
+### 使用标签 {/* #using-tags */}
+
+标签可帮助您对 Datadog 中的跟踪进行分类和过滤。执行Agent或Workflow程时添加标签：
+
+```typescript
+const result = await agent.generate('Hello', {
+  tracingOptions: {
+    tags: ['production', 'experiment-v2', 'user-request'],
+  },
+})
+```
+
+标签格式为`key:value` (e.g., `instance_name:career-scout-api`) are split into structured tag entries. Tags without a colon are set with a `true` value.
+
+### 将上下文键提升为平面标签 {/* #promoting-context-keys-to-flat-tags */}
+
+使用`requestContextKeys` to promote specific keys from the request context or span attributes into flat, indexable LLM Observability tags. This makes them filterable in the Datadog UI:
+
+```typescript
+new DatadogBridge({
+  mlApp: process.env.DD_LLMOBS_ML_APP!,
+  requestContextKeys: ['tenantId', 'agentId'],
+})
+```
+
+升级密钥已从`annotations.metadata` and added as flat tags on each LLM Observability span.
+
+### 故障排除 {/* #troubleshooting-1 */}
+
+如果 APM 跨度未按预期连接到 Mastra 跨度：
+
+* 核实`dd-trace` is initialized **before** any other imports (it patches libraries at load time)
+* 验证本地 Datadog Agent正在运行并且可以访问`localhost:8126`
+* 确保`DatadogBridge` is set as `bridge` (not as an entry in `exporters`) in your observability config
+* 确认您还没有添加`DatadogExporter` to `exporters`: using both will double-emit LLM Observability data
+
+对于本机模块兼容性问题`dd-trace` and bundler externals, see the [Datadog exporter troubleshooting](#troubleshooting) section.
+
+### 有关的 {/* #related-1 */}
+
+* [追踪概述](/docs/observability/tracing/overview)
+* [DatadogBridge 参考](/reference/observability/tracing/bridges/datadog)
+* [Datadog APM 文档](https://docs.datadoghq.com/tracing/)
+* [Datadog LLM 可观察性文档](https://docs.datadoghq.com/llm_observability/)

@@ -1,42 +1,42 @@
 ---
-title: "PubSub | 伺服器"
-description: 瞭解 Mastra 如何使用發布／訂閱在元件間傳遞事件，以及在多行程或多執行個體部署中，何時應設定分散式後端。
+title: "PubSub | Server"
+description: "Configure Mastra PubSub event delivery for components, resumable streams, workers, and schedules across one process, multiple processes, or distributed instances."
 packages:
   - "@mastra/core"
   - "@mastra/redis-streams"
   - "@mastra/google-cloud-pubsub"
 ---
 
-# PubSub
+# 發布訂閱
 
-Mastra 使用發布／訂閱（pub/sub）系統作為內部事件匯流排。元件會將事件發布至主題，其他元件則訂閱這些主題以作出回應。你設定的後端會決定事件的傳遞範圍：僅限單一行程、同一主機上的多個行程，或不同執行個體之間。
+Mastra 使用發布/訂閱 (pub/sub) 系統作為其內部事件總線。元件將事件發佈到主題，其他元件訂閱這些主題以做出反應。後端確定事件是在單一進程內、一台主機上的進程之間或跨單獨的實例傳遞。
 
-你只需在 `Mastra` 執行個體上設定一次後端，系統其餘部分不必變更即可使用。Mastra 預設使用不需設定的行程內後端。
+設定後端一次`Mastra` instance for use throughout the system. The default is an in-process backend that requires no setup.
 
 ## Mastra 如何使用 PubSub {/* #how-mastra-uses-pubsub */}
 
-數個內建系統會透過相同的 pub/sub 匯流排發布及訂閱事件：
+多個內建系統透過相同的發布/訂閱匯流排發布和訂閱事件：
 
-- **Workflow 執行**：排程器會發布 `workflow.start` 事件，常駐 worker 會取用該事件以執行 Workflow。在執行期間，步驟及生命週期事件會透過 pub/sub 傳遞。
-- **排程 Workflow**：排程器會發布至 Workflow 主題，以分派到期的執行。請參閱[排程 Workflow](/docs/workflows/scheduled-workflows)。
-- **背景工作**：工作管理員會將工作分派給 worker 群組，並將工作生命週期更新分送給訂閱者，背景工作串流因此能持續即時更新。請參閱[背景工作串流](/docs/long-running-agents/background-tasks#subscribe-to-all-task-events)。
-- **Agent 信號**：向執行中的 Agent 執行作業傳送信號時，系統會在執行緒主題上發布事件，因此在另一個行程中執行的作業也能收到信號。
-- **可續傳串流**：串流區塊會依每次執行發布，因此用戶端重新連線時可以重播錯過的內容。
+* **Workflow執行**：調度程序發布一個`workflow.start` event, and a long-lived worker consumes it to run the workflow. Step and lifecycle events flow over pub/sub during execution.
+* **預定的Workflow**：調度程序透過發佈到Workflow主題來調度到期運行。看[Scheduled workflows](/docs/workflows/scheduled-workflows).
+* **後台任務**：任務管理器將工作分派給工作群組，並將任務生命週期更新傳送給訂閱者，這就是後台任務流程保持活動狀態的方式。看[Background task streaming](/docs/harness/background-tasks#subscribe-to-all-task-events).
+* **Agent訊號**：向活動Agent執行發送訊號會在執行緒主題上發布事件，因此在另一個進程中執行的運行會收到該訊號。
+* **可恢復的串流**：每次運行都會發布流塊，因此重新連接的客戶端可以重播它錯過的內容。
 
-由於這些系統都在同一條匯流排上執行，你選擇的後端會同時套用至所有系統。
+由於這些系統會在一條總線上運行，因此您選擇的後端會同時套用於所有系統。
 
-## 傳遞模式 {/* #delivery-modes */}
+## 交付方式 {/* #delivery-modes */}
 
-後端會使用 [`PubSub`](/reference/pubsub/base) 契約定義的兩種模式之一傳遞事件：
+後端以兩種模式之一傳遞事件，由[`PubSub`](/reference/pubsub/base) contract:
 
-- **提取**：取用者自行從後端讀取，Mastra 會透過常駐 worker 迴圈執行此操作。[`RedisStreamsPubSub`](/reference/pubsub/redis-streams) 等分散式後端會使用此模式。
-- **推送**：事件無須取用者要求便會抵達，可能在行程內傳遞，也可能透過 HTTP 傳遞。預設的 [`EventEmitterPubSub`](/reference/pubsub/event-emitter) 會在行程內以此方式傳遞。
+* **拉**：消費者自行從後端讀取數據，Mastra 透過長期工作循環來實現這一點。分散式後端，例如[`RedisStreamsPubSub`](/reference/pubsub/redis-streams) use this mode.
+* **推**：事件在沒有消費者詢問的情況下到達，無論是在進程中還是透過 HTTP。預設[`EventEmitterPubSub`](/reference/pubsub/event-emitter) delivers this way in process.
 
-訂閱者也可以透過取用者群組分配工作。同一群組的成員會分攤事件，讓每個事件只處理一次。沒有群組的訂閱者會收到每個事件，將串流分送給所有未分組的訂閱者。
+訂閱者也可以透過消費者群組分發工作。同一組的成員拆分事件，以便每個事件處理一次。沒有分組的訂閱者會收到每個事件，從而將流扇出到所有未分組的訂閱者。
 
 ## 預設後端 {/* #default-backend */}
 
-未設定 `pubsub` 選項時，Mastra 會使用 [`EventEmitterPubSub`](/reference/pubsub/event-emitter)。它會透過 Node.js [`EventEmitter`](https://nodejs.org/api/events.html#class-eventemitter) 在行程內傳遞事件，因此不需任何外部服務即可運作。
+當你沒有設定`pubsub` option, Mastra uses [`EventEmitterPubSub`](/reference/pubsub/event-emitter). It delivers events in process using a Node.js [`EventEmitter`](https://nodejs.org/api/events.html#class-eventemitter), so it works without any external service.
 
 ```typescript title="src/mastra/index.ts"
 import { Mastra } from '@mastra/core'
@@ -45,24 +45,24 @@ import { Mastra } from '@mastra/core'
 export const mastra = new Mastra({})
 ```
 
-由於它在行程內執行，事件不會保存，也不會傳至其他行程。預設後端適合單一執行個體，可涵蓋大多數應用程式。
+由於它在進程中運行，因此事件不會持久存在，也不會到達其他進程。預設值適合單一實例，涵蓋大多數應用程式。
 
 ## 選擇後端 {/* #choosing-a-backend */}
 
-在 `Mastra` 執行個體上設定 `pubsub` 選項，即可選擇後端。每個後端都實作相同的 [`PubSub`](/reference/pubsub/base) 契約，因此應用程式其餘部分不需變更。
+設定`pubsub` option on the `Mastra` instance to choose a backend. Each backend implements the same [`PubSub`](/reference/pubsub/base) contract, so the rest of your application doesn't change.
 
-關鍵在於訂閱者於何處執行。
+決定性的問題是訂戶在哪裡運行。
 
-| 後端 | 範圍 | 模式 | 套件 |
+|後端 |範圍 |模式|套餐 |
 | - | - | - | - |
-| [`EventEmitterPubSub`](/reference/pubsub/event-emitter) | 單一行程 | 提取與推送 | `@mastra/core` |
-| [`UnixSocketPubSub`](/reference/pubsub/unix-socket-pubsub) | 同一主機上的多個行程 | 推送 | `@mastra/core` |
-| [`RedisStreamsPubSub`](/reference/pubsub/redis-streams) | 分散式、多部主機 | 提取 | `@mastra/redis-streams` |
-| [`GoogleCloudPubSub`](/reference/pubsub/google-cloud-pubsub) | 分散式、多部主機 | 提取 | `@mastra/google-cloud-pubsub` |
+|[`EventEmitterPubSub`](/reference/pubsub/event-emitter) | Single process | Pull and push | `@mastra/core` |
+| [`UnixSocketPubSub`](/reference/pubsub/unix-socket-pubsub) | Multiple processes, one host | Push | `@mastra/core` |
+| [`RedisStreamsPubSub`](/reference/pubsub/redis-streams) | Distributed, multiple hosts | Pull | `@mastra/redis-streams` |
+| [`GoogleCloudPubSub`](/reference/pubsub/google-cloud-pubsub) | Distributed, multiple hosts | Pull | `@mastra/google-cloud-pubsub` |
 
-### 同一主機上的多個行程 {/* #multiple-processes-on-one-host */}
+### 一台主機上的多個進程 {/* #multiple-processes-on-one-host */}
 
-同一部機器上的多個行程需要共用串流時，請使用 [`UnixSocketPubSub`](/reference/pubsub/unix-socket-pubsub)。它會透過 Unix 網域通訊端傳遞事件，並選出一個行程作為 broker。若 broker 結束，其餘行程會選出新的 broker。
+使用[`UnixSocketPubSub`](/reference/pubsub/unix-socket-pubsub) when several processes on the same machine need to share a stream. It delivers events over a Unix domain socket and elects one process as a broker. If the broker exits, the remaining processes elect a new one.
 
 ```typescript title="src/mastra/index.ts"
 import { Mastra } from '@mastra/core'
@@ -75,13 +75,15 @@ export const mastra = new Mastra({
 
 ### 分散式部署 {/* #distributed-deployments */}
 
-執行多個執行個體或主機時，請使用分散式後端，讓每個執行個體都能收到相同事件。只要由一個執行個體處理的請求必須觸及另一個執行個體上執行的工作，這項設定就很重要。
+當您執行多個執行個體或主機並且每個執行個體接收相同的事件時，請使用分散式後端。每當一個實例處理的請求必須到達另一個實例上執行的工作時，這一點就很重要。
 
-例如，向 Agent 執行作業傳送信號時，信號事件必須跨越行程界線，傳至擁有該執行作業的執行個體。若使用預設的行程內後端，該執行個體永遠不會收到事件。
+例如，向Agent程式運行發送訊號需要訊號事件跨越進程邊界到達擁有該運行的實例。使用進程內預設值時，該實例永遠不會接收該事件。
 
-下列兩種後端都能跨行程與主機傳遞事件，並保存事件以供重新傳遞。
+[持久劑](/docs/harness/durable-agents#run-ownership)當儲存適配器不支援運作防護時，崩潰復原還取決於後端。然後，恢復使用後端的租約來判斷另一個實例是否仍在驅動運行。`RedisStreamsPubSub` provides leases across hosts. `GoogleCloudPubSub` doesn't.
 
-以下範例使用 [Redis Streams](https://redis.io/docs/latest/develop/data-types/streams/)：
+下面的兩個後端都跨進程和主機進行交付，並保留事件以進行重新交付。
+
+[Redis Streams](https://redis.io/docs/latest/develop/data-types/streams/):
 
 ```typescript title="src/mastra/index.ts"
 import { Mastra } from '@mastra/core'
@@ -94,7 +96,7 @@ export const mastra = new Mastra({
 })
 ```
 
-以下範例使用 [Google Cloud Pub/Sub](https://cloud.google.com/pubsub/docs)：
+[Google Cloud Pub/Sub](https://cloud.google.com/pubsub/docs):
 
 ```typescript title="src/mastra/index.ts"
 import { Mastra } from '@mastra/core'
@@ -107,11 +109,11 @@ export const mastra = new Mastra({
 })
 ```
 
-## 可續傳串流 {/* #resumable-streams */}
+## 可恢復的串流 {/* #resumable-streams */}
 
-可續傳串流讓用戶端能重新連線，並重播錯過的事件，因此後端必須保留近期歷程。[`RedisStreamsPubSub`](/reference/pubsub/redis-streams) 等分散式後端會保存事件，所以本身就支援重播。
+可恢復的串流允許客戶端重新連接並重播它錯過的事件，這需要後端保留最近的歷史記錄。分散式後端，例如[`RedisStreamsPubSub`](/reference/pubsub/redis-streams) persist events, so they support replay on their own.
 
-行程內傳遞不會保留歷程。如要在 [`EventEmitterPubSub`](/reference/pubsub/event-emitter) 上加入重播功能，請以 [`CachingPubSub`](/reference/pubsub/caching-pubsub) 包裝。它會依主題記錄已發布的事件，讓較晚加入或重新連線的訂閱者先補上進度，再繼續接收即時事件。
+進程內交付不保留歷史記錄。新增重播[`EventEmitterPubSub`](/reference/pubsub/event-emitter), wrap it in [`CachingPubSub`](/reference/pubsub/caching-pubsub), which records published events per topic so a late or reconnecting subscriber can catch up before continuing with live events.
 
 ```typescript title="src/mastra/index.ts"
 import { Mastra } from '@mastra/core'
@@ -125,12 +127,12 @@ export const mastra = new Mastra({
 })
 ```
 
-如需完整的傳遞契約及各後端的設定選項，請參閱 [PubSub 參考](/reference/pubsub/base)。
+參觀[PubSub reference](/reference/pubsub/base) for the full delivery contract and the configuration options for each backend.
 
-## 相關內容 {/* #related */}
+## 有關的 {/* #related */}
 
-- [PubSub 參考](/reference/pubsub/base)
-- [Mastra 類別](/reference/core/mastra-class)
-- [Worker](/docs/deployment/workers)：使用 PubSub 在專用行程中執行 Workflow 協調與背景工作
-- [背景工作串流](/docs/long-running-agents/background-tasks#subscribe-to-all-task-events)
-- [排程 Workflow](/docs/workflows/scheduled-workflows)
+* [發布訂閱參考](/reference/pubsub/base)
+* [](/reference/core/mastra-class)
+* [勞工](/docs/deployment/workers)：使用 PubSub 在專用進程中執行Workflow編排和背景任務
+* [後台任務流程](/docs/harness/background-tasks#subscribe-to-all-task-events)
+* [預定的Workflow](/docs/workflows/scheduled-workflows)

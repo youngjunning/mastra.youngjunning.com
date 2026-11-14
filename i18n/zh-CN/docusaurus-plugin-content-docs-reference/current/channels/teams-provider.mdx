@@ -1,0 +1,282 @@
+---
+title: "Reference: TeamsProvider | Channel Providers"
+description: "TeamsProvider connects Mastra agents to Microsoft Teams bots with per-agent bot provisioning, managed installations, JWT-verified webhooks, and streaming replies."
+packages:
+  - "@mastra/teams"
+---
+
+# 团队Provider
+
+`TeamsProvider`通过 Bot Framework 将 Mastra Agent连接到 Microsoft Teams。注册于`Mastra.channels`管理机器人安装、接收经 JWT 验证的活动 Webhook，以及使用自适应卡和流式回复将 Teams 对话路由到Agent。
+
+提供程序支持两种互斥的凭据模式：
+
+* **自我管理**：携带您自己的 Azure Bot 注册并提供其`appId` and `appPassword`. Point the bot's messaging endpoint at the installation's webhook URL.
+* **委托**：提供范围感知`tokenResolver` for a manager credential. `connect(agentId)` then provisions a dedicated bot per agent: an Entra application and client secret through Microsoft Graph, and a bot registration through the Teams Developer Portal API, with the messaging endpoint pointing at your Mastra server.
+
+## 使用示例 {/* #usage-example */}
+
+具有现有 Azure Bot 注册的自我管理模式：
+
+```typescript title="src/mastra/index.ts"
+import { Agent } from '@mastra/core/agent'
+import { Mastra } from '@mastra/core/mastra'
+import { TeamsProvider } from '@mastra/teams'
+
+const supportAgent = new Agent({
+  id: 'support',
+  name: 'Support agent',
+  instructions: 'Help users with product questions.',
+  model: 'openai/gpt-5-mini',
+})
+
+const teams = new TeamsProvider({
+  baseUrl: 'https://your-app.example.com',
+  appId: process.env.TEAMS_APP_ID,
+  appPassword: process.env.TEAMS_APP_PASSWORD,
+})
+
+export const mastra = new Mastra({
+  agents: { supportAgent },
+  channels: { teams },
+})
+
+await teams.connect('support')
+```
+
+将机器人注册的消息传递端点指向安装的`messagingEndpoint`, for example `https://your-app.example.com/teams/events/<webhookId>`.
+
+委派模式根据经理凭证为每个Agent提供一个机器人：
+
+```typescript title="src/mastra/index.ts"
+import { TeamsProvider, TEAMS_GRAPH_SCOPE } from '@mastra/teams'
+
+const teams = new TeamsProvider({
+  baseUrl: 'https://your-app.example.com',
+  tokenResolver: async scope => {
+    // Return an access token minted for the requested audience:
+    // Microsoft Graph or the Teams Developer Portal API.
+    return fetchManagerToken(scope)
+  },
+})
+```
+
+## 凭证模式和令牌受众 {/* #credential-modes-and-token-audiences */}
+
+团队配置跨越两个令牌受众，因此委派的`tokenResolver` receives the scope it must request a token for:
+
+|范围常数 |观众|用于 |
+| - | - | - |
+|`TEAMS_GRAPH_SCOPE` | Microsoft Graph | Creating the per-agent Entra application and its client secret |
+| `TEAMS_DEV_PORTAL_SCOPE` | Teams Developer Portal API | Creating and deleting bot registrations |
+
+管理员凭证仅在配置时使用。每个配置的机器人都会收到自己的客户端密钥，并以加密方式存储在安装存储中，并且运行时会使用该每个Agent密钥向机器人框架进行身份验证。
+
+直接凭证（`appId`/`appPassword`) and `tokenResolver` are mutually exclusive, enforced at the type level and at runtime by `configure()` and `connect()`.
+
+## 构造函数参数 {/* #constructor-parameters */}
+
+`TeamsProviderConfig`结合了 Teams 生命周期选项、适配器行为和精选的子集[`ChannelConfig`](/reference/agents/channels) options forwarded to each connected agent. All fields are optional.
+
+<PropertiesTable
+  content={[
+{
+  name: 'baseUrl',
+  type: 'string',
+  isOptional: true,
+  description:
+    'Public HTTPS base URL used as the bot messaging endpoint ({baseUrl}/teams/events/{webhookId}). May be auto-detected from the Mastra server config. Required for delegated provisioning.',
+},
+{
+  name: 'appId',
+  type: 'string',
+  isOptional: true,
+  description:
+    'Microsoft App (client) ID of an existing bot registration (self-managed mode). Mutually exclusive with tokenResolver.',
+},
+{
+  name: 'appPassword',
+  type: 'string',
+  isOptional: true,
+  description: 'Client secret for appId (self-managed mode). Mutually exclusive with tokenResolver.',
+},
+{
+  name: 'tokenResolver',
+  type: '(scope: string | string[], tenantId?: string) => Promise<string>',
+  isOptional: true,
+  description:
+    'Scope-aware manager credential resolver (delegated mode). Called with TEAMS_GRAPH_SCOPE or TEAMS_DEV_PORTAL_SCOPE during connect() and disconnect(). Mutually exclusive with appId/appPassword.',
+},
+{
+  name: 'appTenantId',
+  type: 'string',
+  isOptional: true,
+  description: 'Entra tenant ID for single-tenant bots.',
+},
+{
+  name: 'appType',
+  type: "'MultiTenant' | 'SingleTenant'",
+  isOptional: true,
+  defaultValue: "'MultiTenant'",
+  description: 'Bot application audience. Provisioned bots default to MultiTenant.',
+},
+{
+  name: 'storage',
+  type: 'ChannelsStorage',
+  isOptional: true,
+  description:
+    "Persistence for bot installations. Defaults to Mastra's channels storage when available, falling back to an in-memory store (dev/test only).",
+},
+{
+  name: 'encryptionKey',
+  type: 'string',
+  isOptional: true,
+  description:
+    'Passphrase for encrypting the per-bot client secret at rest (AES-256-GCM). Defaults to the MASTRA_ENCRYPTION_KEY environment variable. Required in delegated mode: connect() refuses to provision a bot when no key is available.',
+},
+{
+  name: 'apiUrl',
+  type: 'string',
+  isOptional: true,
+  description: 'Override the Bot Framework service URL (for example, sovereign clouds). Forwarded to the adapter.',
+},
+{
+  name: 'botIconUrl',
+  type: 'string',
+  isOptional: true,
+  description: 'Icon URL recorded on provisioned bot registrations.',
+},
+{
+  name: 'streaming',
+  type: 'StreamingConfig',
+  isOptional: true,
+  defaultValue: 'true',
+  description: 'Stream agent text to Teams as it generates.',
+},
+{
+  name: 'typingStatus',
+  type: 'boolean',
+  isOptional: true,
+  defaultValue: 'true',
+  description: 'Keep a typing indicator alive during generation.',
+},
+{
+  name: 'waitUntil',
+  type: 'WaitUntilFn',
+  isOptional: true,
+  description: 'Keep the serverless invocation alive while the agent stream runs after the webhook returns 200.',
+},
+{
+  name: 'onInstall',
+  type: '(installation: TeamsInstallation) => void | Promise<void>',
+  isOptional: true,
+  description: 'Called after an agent successfully connects and the installation is persisted.',
+},
+]}
+/>
+
+该配置还转发`handlers`, `inlineMedia`, `inlineLinks`, `state`, `threadContext`, `chatOptions`, `tools`, `resolveResourceId`, `resolveWaitUntil`, `cors`, `formatError`, `toolDisplay`， 和`logger`到每个连接的Agent的`AgentChannels`, 匹配[`SlackProvider`](/reference/channels/slack-provider)和[`TelegramProvider`](/reference/channels/telegram-provider).
+
+## 方法 {/* #methods */}
+
+### 安装生命周期 {/* #installation-lifecycle */}
+
+#### `connect(agentId, options?)` {/* #connectagentid-options */}
+
+将Agent连接到 Microsoft Teams。行为取决于凭证模式：
+
+* **委托** (`tokenResolver`): provisions a per-agent bot (an Entra application and client secret through Microsoft Graph, then a Teams Developer Portal bot registration whose messaging endpoint points at this server) and returns `{ type: 'deep_link' }` to the Developer Portal, where the bot is packaged into a Teams app for install. A Developer Portal failure rolls back the Entra application.
+* **自我管理**使用凭据（每次调用或提供程序默认）：通过请求 Bot Framework 令牌来验证凭据，保留安装并返回`{ type: 'immediate' }`.
+* **自我管理**没有凭据：保留挂起的安装并返回`{ type: 'deep_link' }` pointing at the Teams Developer Portal.
+
+<PropertiesTable
+  content={[
+{
+  name: 'name',
+  type: 'string',
+  isOptional: true,
+  description: 'Display name for the bot. Defaults to the agent id.',
+},
+{
+  name: 'appId',
+  type: 'string',
+  isOptional: true,
+  description: 'Microsoft App (client) ID (self-managed mode). Rejected in delegated mode.',
+},
+{
+  name: 'appPassword',
+  type: 'string',
+  isOptional: true,
+  description: 'Client secret for appId (self-managed mode). Rejected in delegated mode.',
+},
+{
+  name: 'appTenantId',
+  type: 'string',
+  isOptional: true,
+  description: 'Entra tenant ID for single-tenant bots.',
+},
+]}
+/>
+
+返回：`Promise<ChannelConnectResult>`
+
+当Agent已连接、另一个Agent已使用相同的机器人、Microsoft 拒绝凭据或委派模式没有权限时抛出。`baseUrl` to register a messaging endpoint.
+
+#### `disconnect(agentId)` {/* #disconnectagentid */}
+
+断开Agent与 Microsoft Teams 的连接。对于此Provider配置的机器人（委托模式），开发者门户注册和 Entra 应用程序将尽力删除。控制平面故障永远不会阻止本地安装的删除。
+
+#### `listInstallations()` {/* #listinstallations */}
+
+将安装列为编辑器 UI 的公开、无秘密信息。
+
+返回：`Promise<ChannelInstallationInfo[]>`
+
+#### `getInstallation(agentId)` {/* #getinstallationagentid */}
+
+获取Agent的完整安装，包括客户端密钥。退货`null` when the agent has no Teams installation.
+
+返回：`Promise<TeamsInstallation | null>`
+
+### 配置和状态 {/* #configuration-and-status */}
+
+#### `configure(credentials)` {/* #configurecredentials */}
+
+更新运行时提供程序设置。经过`appId`/`appPassword` to change the default bot credentials new `connect()` calls fall back to. Pass `baseUrl`/`apiUrl` to point the provider or adapter at a different host. Pass `null` to clear the default credentials.
+
+当以下情况时抛出委托模式`appId` or `appPassword` is supplied, because bot credentials are provisioned per agent.
+
+#### `initialize()` {/* #initialize */}
+
+从存储恢复安装：为每个活动机器人重建适配器并注入`AgentChannels` so agents receive events immediately. Idempotent.
+
+#### `isConfigured()` {/* #isconfigured */}
+
+是否至少有一个机器人已主动注册。
+
+返回：`boolean`
+
+#### `getInfo()` {/* #getinfo */}
+
+编辑器 UI 的发现元数据，包括`connect()` options schema. `isConfigured` is `true` when credentials are available or an active installation exists.
+
+返回：`ChannelPlatformInfo`
+
+#### `getAdapter(installationId)` {/* #getadapterinstallationid */}
+
+获取直播`TeamsAdapter` for an installation id, if one is active.
+
+返回：`TeamsAdapter | undefined`
+
+#### `getRoutes()` {/* #getroutes */}
+
+单一未认证`POST /teams/events/:webhookId` route. Inbound requests are authenticated by Microsoft's JWT signature, which the adapter verifies against the bot's `appId` audience. The `webhookId` is a routing key and carries no secret material.
+
+返回：`ApiRoute[]`
+
+## 有关的 {/* #related */}
+
+* [渠道Provider](/reference/channels/channel-provider)
+* [SlackProvider](/reference/channels/slack-provider)
+* [电报Provider](/reference/channels/telegram-provider)
+* [Agent渠道](/reference/agents/channels)

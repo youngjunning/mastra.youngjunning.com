@@ -44,7 +44,7 @@ The static output is written to `build/`.
 
 ## Sync the latest upstream docs
 
-The project workflow for incremental English and Simplified Chinese updates is
+The project workflow for incremental English and Chinese locale updates is
 in [.codex/skills/mastra-doc-sync/SKILL.md](./.codex/skills/mastra-doc-sync/SKILL.md).
 The source baseline and progress are in [UPSTREAM.md](./UPSTREAM.md) and
 `UPSTREAM_INCREMENTAL.json`. Clone the official source once:
@@ -66,8 +66,8 @@ node scripts/report-upstream-progress.mjs
 
 Set `MASTRA_UPSTREAM_DIR` when the official clone is elsewhere. The report
 accepts `--json` for the full queue and `--since=COMMIT` for a narrower Git
-comparison. For a coordinated full English import, use the clean
-`codex/mastra-latest-docs` branch required by the existing script:
+comparison. For a coordinated full English import, use a clean `main`
+checkout:
 
 ```bash
 pnpm sync:upstream

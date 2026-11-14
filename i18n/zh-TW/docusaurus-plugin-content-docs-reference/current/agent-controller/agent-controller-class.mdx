@@ -1,25 +1,19 @@
 ---
-title: "參考文件：AgentController | AgentController"
-description: AgentController 的 API 參考文件；這個共用 host 會建立隔離的 Session，並協調 Agent、Storage、Tool、Workspace 與 Channel。
+title: 'Reference: AgentController | AgentController'
+description: 'Use the AgentController class as a shared host for Session instances, then create sessions and manage conversation state, events, and run control.'
 packages:
-  - "@mastra/core"
+  - '@mastra/core'
 ---
 
-# AgentController
+# Agent控制器
 
-:::experimental
+這`AgentController`類別是一個或多個的共享主機[`Session`](/reference/agent-controller/session)實例。初始化控制器，建立會話，然後使用`session.*`用於對話狀態和運行控制的 API。
 
-`AgentController` 功能目前處於 Beta 階段；在脫離 Beta 狀態前，minor version 仍可能包含 breaking change。
-
-:::
-
-`AgentController` 類別是供一或多個 [`Session`](/reference/agent-controller/session) instance 使用的共用 host。先初始化 controller 並建立 Session，接著使用 `session.*` API 管理對話 state 與 run。
-
-引導式介紹請參閱 [AgentController 概觀](/docs/harness/agent-controller)。
+有關指導性介紹，請參閱[AgentController overview](/docs/harness/agent-controller).
 
 ## 使用範例 {/* #usage-example */}
 
-以下範例會初始化 controller 並建立 Session。它會先訂閱 Session event，再傳送訊息。
+以下範例初始化控制器並建立會話。它在發送訊息之前訂閱會話事件。
 
 ```typescript title="src/mastra/agent-controller.ts"
 import { Agent } from '@mastra/core/agent'
@@ -44,8 +38,8 @@ await controller.init()
 
 const session = await controller.createSession({ resourceId: 'project-42' })
 const unsubscribe = session.subscribe(event => {
-  if (event.type === 'message_update') {
-    console.log(event.message)
+  if (event.type === 'message_update' && event.event.type === 'text-delta') {
+    process.stdout.write(event.event.delta)
   }
 })
 
@@ -53,322 +47,482 @@ await session.sendMessage({ content: 'Review the project structure.' })
 unsubscribe()
 ```
 
-## Constructor 參數 {/* #constructor-parameters */}
+訊息生命週期從初始訊息開始`message_start`. Compact `message_update` events address the message by ID and carry text, reasoning, or part changes. `message_end` carries the ID to finalize.
+
+## 建構函數參數 {/* #constructor-parameters */}
 
 <PropertiesTable
   content={[
-  { name: 'id', type: 'string', description: '不重複的 controller 識別碼，也是預設的 Session 與 resource 識別碼。' },
-  {
-    name: 'modes',
-    type: 'AgentControllerMode[]',
-    description: '每個 Session 都可使用的 mode 定義。至少需要一個 mode。',
-    properties: [
-      {
-        type: 'AgentControllerMode',
-        parameters: [
-          { name: 'id', type: 'string', description: '不重複的 mode 識別碼。' },
-          { name: 'name', type: 'string', description: '顯示名稱。', isOptional: true },
-          {
-            name: 'defaultModelId',
-            type: 'string',
-            description: 'Session 進入此 mode 且沒有已儲存的選擇時，選用的模型。',
-            isOptional: true,
-          },
-          { name: 'description', type: 'string', description: '顯示於 mode selector 的文字。', isOptional: true },
-          {
-            name: 'instructions',
-            type: 'string',
-            description: '在此 mode 中疊加於底層 Agent instructions 之上的 instructions。',
-            isOptional: true,
-          },
-          {
-            name: 'transitionsTo',
-            type: 'string',
-            description: '核准 `submit_plan` suspension 後進入的 mode。',
-            isOptional: true,
-          },
-          {
-            name: 'availableTools',
-            type: 'string[]',
-            description: '公開 Tool 名稱的 allowlist。空陣列會在此 mode 隱藏所有 Tool。',
-            isOptional: true,
-          },
-          {
-            name: 'metadata',
-            type: 'Record<string, unknown>',
-            description: '直接傳遞的 mode metadata。`metadata.default: true` 會標示預設 mode。',
-            isOptional: true,
-          },
-          {
-            name: 'tools',
-            type: 'ToolsInput',
-            description: 'Mode Tool。不能與 `additionalTools` 同時使用。',
-            isOptional: true,
-          },
-          {
-            name: 'additionalTools',
-            type: 'ToolsInput',
-            description: '加入底層 Agent Tool 的 Tool。不能與 `tools` 同時使用。',
-            isOptional: true,
-          },
-          {
-            name: 'agent',
-            type: 'Agent',
-            description: '已棄用的 mode 專用 Agent。請使用頂層 `agent` 參數。',
-            isOptional: true,
-          },
-          {
-            name: 'default',
-            type: 'boolean',
-            description: '已棄用的預設標記。請使用 `metadata.default` 或 `defaultModeId`。',
-            isOptional: true,
-          },
-        ],
-      },
-    ],
-  },
-  { name: 'agent', type: 'Agent', description: '設定的 mode 所使用的共用底層 Agent。', isOptional: true },
-  {
-    name: 'resourceId',
-    type: 'string',
-    description: 'Session 與 thread 的預設 resource 識別碼。預設為 `id`。',
-    isOptional: true,
-  },
-  {
-    name: 'storage',
-    type: 'MastraCompositeStore',
-    description: '用於持久化 thread、訊息、設定與可恢復 run 資料的 Storage。',
-    isOptional: true,
-  },
-  {
-    name: 'stateSchema',
-    type: 'PublicSchema<TState, any>',
-    description: '用於驗證 `session.state` 更新的 schema。',
-    isOptional: true,
-  },
-  {
-    name: 'initialState',
-    type: 'Partial<TState>',
-    description: '每個新 Session 都會與 schema 預設值合併的初始 state。',
-    isOptional: true,
-  },
-  {
-    name: 'memory',
-    type: 'DynamicArgument<MastraMemory>',
-    description: '與未定義自身 Memory 的底層 Agent 共用的 Memory instance。',
-    isOptional: true,
-  },
-  { name: 'defaultModeId', type: 'string', description: '預設 mode 識別碼，優先於 mode metadata。', isOptional: true },
-  {
-    name: 'instructions',
-    type: 'string',
-    description: '與目前 mode instructions 疊加的 controller instructions。',
-    isOptional: true,
-  },
-  {
-    name: 'tools',
-    type: 'DynamicArgument<ToolsInput | undefined>',
-    description: 'controller run 共用，且設定的 subagent 可使用的 Tool。',
-    isOptional: true,
-  },
-  {
-    name: 'workspace',
-    type: 'DynamicArgument<Workspace | undefined>',
-    description: '靜態 Workspace 或各 Session 專用的 Workspace factory。Session 必須解析到有效的 Workspace。',
-    isOptional: true,
-  },
-  {
-    name: 'browser',
-    type: 'DynamicArgument<MastraBrowser | undefined>',
-    description: '靜態瀏覽器或各 Session 專用的瀏覽器 factory。',
-    isOptional: true,
-  },
-  {
-    name: 'channels',
-    type: 'AgentControllerChannelsConfig',
-    description: '用於將 Channel thread 路由至 controller Session 的聊天 Channel 設定。',
-    isOptional: true,
-  },
-  {
-    name: 'intervalHandlers',
-    type: 'IntervalHandler[]',
-    description: '由 `init()` 啟動，並由 `stopIntervals()` 或 `destroy()` 停止的週期性 handler。',
-    isOptional: true,
-  },
-  {
-    name: 'idGenerator',
-    type: '() => string',
-    description: '用於 thread、訊息與 signal 的自訂識別碼 generator。',
-    isOptional: true,
-  },
-  {
-    name: 'modelUseCountProvider',
-    type: 'ModelUseCountProvider',
-    description: '傳回用於排序可用模型的模型使用次數。',
-    isOptional: true,
-  },
-  {
-    name: 'modelUseCountTracker',
-    type: 'ModelUseCountTracker',
-    description: '在 `session.model.switch()` 後記錄模型選擇。',
-    isOptional: true,
-  },
-  {
-    name: 'subagents',
-    type: 'AgentControllerSubagent[]',
-    description: '透過內建 `subagent` Tool 公開的 subagent 型別。',
-    isOptional: true,
-    properties: [
-      {
-        type: 'AgentControllerSubagent',
-        parameters: [
-          { name: 'id', type: 'string', description: '不重複的 subagent 型別識別碼。' },
-          { name: 'name', type: 'string', description: '顯示名稱。' },
-          { name: 'description', type: 'string', description: '產生的 Tool 所使用的 description。' },
-          { name: 'instructions', type: 'DynamicArgument<AgentInstructions>', description: 'Subagent instructions。' },
-          { name: 'tools', type: 'ToolsInput', description: 'Subagent 擁有的 Tool。', isOptional: true },
-          {
-            name: 'allowedControllerTools',
-            type: 'string[]',
-            description: '加入 subagent Tool 的 controller Tool ID。',
-            isOptional: true,
-          },
-          {
-            name: 'allowedWorkspaceTools',
-            type: 'string[]',
-            description: 'subagent 可見的 Workspace Tool 名稱。',
-            isOptional: true,
-          },
-          { name: 'defaultModelId', type: 'string', description: '預設 subagent 模型。', isOptional: true },
-          { name: 'maxSteps', type: 'number', description: '最大執行 step 數。', isOptional: true },
-          { name: 'stopWhen', type: 'LoopOptions["stopWhen"]', description: '迴圈停止條件。', isOptional: true },
-          {
-            name: 'forked',
-            type: 'boolean',
-            description: 'subagent 預設是否繼承複製的父 thread。',
-            isOptional: true,
-            defaultValue: 'false',
-          },
-        ],
-      },
-    ],
-  },
-  {
-    name: 'gateways',
-    type: 'MastraModelGatewayInterface[]',
-    description: '與內建 gateway 合併的自訂模型 gateway。',
-    isOptional: true,
-  },
-  {
-    name: 'omConfig',
-    type: 'AgentControllerOMConfig',
-    description: '預設的 observational Memory 模型與 threshold。',
-    isOptional: true,
-  },
-  {
-    name: 'disableBuiltinTools',
-    type: 'BuiltinToolId[]',
-    description: '從 run 省略的內建 controller Tool。',
-    isOptional: true,
-  },
-  {
-    name: 'toolCategoryResolver',
-    type: '(toolName: string) => ToolCategory | null',
-    description: '將 Tool 名稱對應至權限 category。',
-    isOptional: true,
-  },
-  { name: 'pubsub', type: 'PubSub', description: '傳遞至底層 Agent 的 PubSub 實作。', isOptional: true },
-  {
-    name: 'threadLock',
-    type: '{ acquire: (threadId: string) => void | Promise<void>; release: (threadId: string) => void | Promise<void> }',
-    description: '用於協調 thread 擁有權的 lock 實作。',
-    isOptional: true,
-  },
-  {
-    name: 'observability',
-    type: 'ObservabilityEntrypoint',
-    description: '獨立 controller Mastra instance 的 Observability 設定。',
-    isOptional: true,
-  },
+{
+  name: 'id',
+  type: 'string',
+  description: 'Unique controller identifier. It is also the default session and resource identifier.',
+},
+{
+  name: 'modes',
+  type: 'AgentControllerMode[]',
+  description: 'Mode definitions available to every session. At least one mode is required.',
+  properties: [
+    {
+      type: 'AgentControllerMode',
+      parameters: [
+        { name: 'id', type: 'string', description: 'Unique mode identifier.' },
+        { name: 'name', type: 'string', description: 'Display name.', isOptional: true },
+        {
+          name: 'defaultModelId',
+          type: 'string',
+          description:
+            'Model used when a session starts in this mode without a stored selection. Mode switches do not apply it.',
+          isOptional: true,
+        },
+        { name: 'description', type: 'string', description: 'Text shown in mode selectors.', isOptional: true },
+        {
+          name: 'instructions',
+          type: 'string',
+          description: 'Instructions layered above the backing agent instructions for this mode.',
+          isOptional: true,
+        },
+        {
+          name: 'transitionsTo',
+          type: 'string',
+          description: 'Mode entered after an approved `submit_plan` suspension.',
+          isOptional: true,
+        },
+        {
+          name: 'availableTools',
+          type: 'string[]',
+          description: 'Allowlist of exposed tool names. An empty array hides every tool in this mode.',
+          isOptional: true,
+        },
+        {
+          name: 'metadata',
+          type: 'Record<string, unknown>',
+          description: 'Pass-through mode metadata. `metadata.default: true` marks the default mode.',
+          isOptional: true,
+        },
+        {
+          name: 'tools',
+          type: 'ToolsInput',
+          description: 'Mode tools. Mutually exclusive with `additionalTools`.',
+          isOptional: true,
+        },
+        {
+          name: 'additionalTools',
+          type: 'ToolsInput',
+          description: 'Tools added to the backing agent tools. Mutually exclusive with `tools`.',
+          isOptional: true,
+        },
+        {
+          name: 'agent',
+          type: 'Agent',
+          description: 'Deprecated mode-specific agent. Use the top-level `agent` parameter.',
+          isOptional: true,
+        },
+        {
+          name: 'default',
+          type: 'boolean',
+          description: 'Deprecated default marker. Use `metadata.default` or `defaultModeId`.',
+          isOptional: true,
+        },
+      ],
+    },
+  ],
+},
+{
+  name: 'agent',
+  type: 'Agent',
+  description: 'Shared backing agent used by the configured modes.',
+  isOptional: true,
+},
+{
+  name: 'resourceId',
+  type: 'string',
+  description: 'Default resource identifier for sessions and threads. Defaults to `id`.',
+  isOptional: true,
+},
+{
+  name: 'storage',
+  type: 'MastraCompositeStore',
+  description: 'Storage used for persistent threads, messages, settings, and resumable run data.',
+  isOptional: true,
+},
+{
+  name: 'stateSchema',
+  type: 'PublicSchema<TState, any>',
+  description: 'Schema used to validate `session.state` updates.',
+  isOptional: true,
+},
+{
+  name: 'initialState',
+  type: 'Partial<TState>',
+  description: 'Initial state merged with schema defaults for each new session.',
+  isOptional: true,
+},
+{
+  name: 'memory',
+  type: 'DynamicArgument<MastraMemory>',
+  description: 'Memory instance shared with backing agents that do not define their own memory.',
+  isOptional: true,
+},
+{
+  name: 'defaultModeId',
+  type: 'string',
+  description: 'Default mode identifier. It takes precedence over mode metadata.',
+  isOptional: true,
+},
+{
+  name: 'instructions',
+  type: 'string',
+  description: 'Controller instructions layered with the current mode instructions.',
+  isOptional: true,
+},
+{
+  name: 'tools',
+  type: 'DynamicArgument<ToolsInput | undefined>',
+  description: 'Tools shared by controller runs and available to configured subagents.',
+  isOptional: true,
+},
+{
+  name: 'workspace',
+  type: 'DynamicArgument<Workspace | undefined>',
+  description:
+    "Static workspace or per-session workspace factory. A workspace is optional. Sessions without one support threads, state, and agent runs. They have no workspace tools unless the mode's agent has its own workspace.",
+  isOptional: true,
+},
+{
+  name: 'browser',
+  type: 'DynamicArgument<MastraBrowser | undefined>',
+  description: 'Static browser or per-session browser factory.',
+  isOptional: true,
+},
+{
+  name: 'channels',
+  type: 'AgentControllerChannelsConfig',
+  description: 'Chat channel configuration used to route channel threads into controller sessions.',
+  isOptional: true,
+},
+{
+  name: 'intervalHandlers',
+  type: 'IntervalHandler[]',
+  description: 'Periodic handlers started by `init()` and stopped by `stopIntervals()` or `destroy()`.',
+  isOptional: true,
+},
+{
+  name: 'idGenerator',
+  type: '() => string',
+  description: 'Custom identifier generator for threads, messages, and signals.',
+  isOptional: true,
+},
+{
+  name: 'modelUseCountProvider',
+  type: 'ModelUseCountProvider',
+  description: 'Returns model usage counts used to sort available models.',
+  isOptional: true,
+},
+{
+  name: 'modelUseCountTracker',
+  type: 'ModelUseCountTracker',
+  description: 'Records a model selection after `session.model.switch()`.',
+  isOptional: true,
+},
+{
+  name: 'subagents',
+  type: 'AgentControllerSubagent[]',
+  description: 'Subagent types exposed through the built-in `subagent` tool.',
+  isOptional: true,
+  properties: [
+    {
+      type: 'AgentControllerSubagent',
+      parameters: [
+        { name: 'id', type: 'string', description: 'Unique subagent type identifier.' },
+        { name: 'name', type: 'string', description: 'Display name.' },
+        { name: 'description', type: 'string', description: 'Description used by the generated tool.' },
+        { name: 'instructions', type: 'DynamicArgument<AgentInstructions>', description: 'Subagent instructions.' },
+        { name: 'tools', type: 'ToolsInput', description: 'Tools owned by the subagent.', isOptional: true },
+        {
+          name: 'allowedControllerTools',
+          type: 'string[]',
+          description: 'Controller tool IDs added to the subagent tools.',
+          isOptional: true,
+        },
+        {
+          name: 'allowedWorkspaceTools',
+          type: 'string[]',
+          description: 'Workspace tool names visible to the subagent.',
+          isOptional: true,
+        },
+        { name: 'defaultModelId', type: 'string', description: 'Default subagent model.', isOptional: true },
+        { name: 'maxSteps', type: 'number', description: 'Maximum execution steps.', isOptional: true },
+        {
+          name: 'stopWhen',
+          type: 'LoopOptions["stopWhen"]',
+          description: 'Loop stop condition.',
+          isOptional: true,
+        },
+        {
+          name: 'forked',
+          type: 'boolean',
+          description: 'Whether the subagent inherits a cloned parent thread by default.',
+          isOptional: true,
+          defaultValue: 'false',
+        },
+      ],
+    },
+  ],
+},
+{
+  name: 'resolveSubagentModel',
+  type: '(modelId: string, options: { requestContext?: RequestContext }) => MastraModelConfig',
+  description:
+    "Resolves a subagent's model ID into a model config. It receives a copy of the calling run's request context without the parent thread and resource IDs, so tenant credentials and request-scoped providers work for subagents. When unset, the model ID goes to the model gateway router.",
+  isOptional: true,
+},
+{
+  name: 'gateways',
+  type: 'MastraModelGatewayInterface[]',
+  description: 'Custom model gateways merged with the built-in gateways.',
+  isOptional: true,
+},
+{
+  name: 'omConfig',
+  type: 'AgentControllerOMConfig',
+  description: 'Default observational memory model selections, automatic model resolver, and thresholds.',
+  isOptional: true,
+  properties: [
+    {
+      type: 'AgentControllerOMConfig',
+      parameters: [
+        {
+          name: 'defaultObserverModelId',
+          type: 'string',
+          description: 'Concrete observer fallback used when automatic resolution returns no model or throws.',
+          isOptional: true,
+        },
+        {
+          name: 'observerModel',
+          type: "'auto' | string",
+          description: "Default observer model. Use 'auto' to follow the active main model.",
+          isOptional: true,
+        },
+        {
+          name: 'defaultReflectorModelId',
+          type: 'string',
+          description: 'Concrete reflector fallback used when automatic resolution returns no model or throws.',
+          isOptional: true,
+        },
+        {
+          name: 'reflectorModel',
+          type: "'auto' | string",
+          description: "Default reflector model. Use 'auto' to follow the active main model.",
+          isOptional: true,
+        },
+        {
+          name: 'resolveAutoModelId',
+          type: '(args: ResolveAutoOMModelArgs) => string | undefined',
+          description:
+            'Synchronously resolves an automatic role selection to a concrete model ID from the role, current main model, and read-only session state.',
+          isOptional: true,
+        },
+        {
+          name: 'defaultObservationThreshold',
+          type: 'number',
+          description: 'Default observation threshold in tokens.',
+          isOptional: true,
+        },
+        {
+          name: 'defaultReflectionThreshold',
+          type: 'number',
+          description: 'Default reflection threshold in tokens.',
+          isOptional: true,
+        },
+      ],
+    },
+  ],
+},
+{
+  name: 'disableBuiltinTools',
+  type: 'BuiltinToolId[]',
+  description: 'Built-in controller tools to omit from runs.',
+  isOptional: true,
+},
+{
+  name: 'toolCategoryResolver',
+  type: '(toolName: string) => ToolCategory | null',
+  description: 'Maps tool names to permission categories.',
+  isOptional: true,
+},
+{
+  name: 'pubsub',
+  type: 'PubSub',
+  description: 'PubSub implementation propagated to backing agents.',
+  isOptional: true,
+},
+{
+  name: 'threadLock',
+  type: '{ acquire: (threadId: string) => void | Promise<void>; release: (threadId: string) => void | Promise<void> }',
+  description: 'Lock implementation used to coordinate thread ownership.',
+  isOptional: true,
+},
+{
+  name: 'observability',
+  type: 'ObservabilityEntrypoint',
+  description: 'Observability configuration for a standalone controller Mastra instance.',
+  isOptional: true,
+},
 ]}
 />
 
-## 屬性 {/* #properties */}
+## 特性 {/* #properties */}
 
-<PropertiesTable content={[{ name: 'id', type: 'string', description: '傳給 constructor 的 controller 識別碼。' }]} />
+<PropertiesTable
+  content={[
+{
+  name: 'id',
+  type: 'string',
+  description: 'The controller identifier passed to the constructor.',
+},
+]}
+/>
 
 ## 方法 {/* #methods */}
 
-### Session {/* #sessions */}
+### 會議 {/* #sessions */}
 
 #### `createSession(options)` {/* #createsessionoptions */}
 
-取得或建立為 `(resourceId, scope)` pair 註冊的即時 Session。呼叫此方法前，請先呼叫 `init()`。
+取得或建立在下面註冊的即時會話`id`. Call `init()` before this method.
 
 ```typescript
 const session = await controller.createSession({
+  id: 'run-a',
   resourceId: 'project-42',
-  scope: 'editor-window-1',
   threadId: 'thread-7',
 })
 ```
 
-相同的 `resourceId` 與 `scope` 會傳回相同的 `Session` instance。不同 scope 會為同一 resource 建立隔離的 Session。提供 `threadId` 時，此方法會將快取的 Session 切換至該 thread；如果 thread 不存在，則加以建立。
+相同`id` returns the same `Session` instance. Sessions with different ids are independent even when they share a `resourceId`: each has its own run loop, thread binding, mode, model, and state, while their stored threads and resource-scoped memory belong to the shared resource. When `id` is omitted, it defaults to `resourceId`, so one session per resource needs no id. When `threadId` is supplied, the method switches a cached session to that thread or creates the thread when it doesn't exist.
 
 <PropertiesTable
   content={[
-  {
-    name: 'resourceId',
-    type: 'string',
-    description: 'Memory resource 與即時 Session registry key。預設為設定的 `resourceId` 或 controller `id`。',
-    isOptional: true,
-  },
-  {
-    name: 'scope',
-    type: 'string',
-    description: '選填的 registry namespace，讓一項 resource 可有多個即時 Session。',
-    isOptional: true,
-  },
-  {
-    name: 'threadId',
-    type: 'string',
-    description: '要繫結的確切 thread。缺少的 thread 會以此識別碼建立。',
-    isOptional: true,
-  },
-  { name: 'id', type: 'string', description: '穩定的 Session 識別碼。預設為 controller `id`。', isOptional: true },
-  { name: 'ownerId', type: 'string', description: '穩定的 Session owner 識別碼。預設為 `id`。', isOptional: true },
-  {
-    name: 'tags',
-    type: 'Record<string, string>',
-    description: '複製至 Session 所建立 thread 的 tag。',
-    isOptional: true,
-  },
-  { name: 'workspace', type: 'Workspace', description: '此 Session 的 Workspace override。', isOptional: true },
-  { name: 'browser', type: 'MastraBrowser', description: '此 Session 的瀏覽器 override。', isOptional: true },
-  {
-    name: 'requestContext',
-    type: 'RequestContext',
-    description: '用於解析動態 Workspace 與瀏覽器 factory 的 context。',
-    isOptional: true,
-  },
+{
+  name: 'resourceId',
+  type: 'string',
+  description:
+    "Memory resource that owns the session's threads and resource-scoped memory. Defaults to the configured `resourceId` or controller `id`.",
+  isOptional: true,
+},
+{
+  name: 'threadId',
+  type: 'string',
+  description: 'Exact thread to bind. Missing threads are created with this identifier.',
+  isOptional: true,
+},
+{
+  name: 'createInitialThread',
+  type: 'boolean',
+  description:
+    'Create a thread when no existing thread matches. Set `false` to start the session without a thread; the first message or `session.thread.ensureId()` creates it, so unused sessions leave no empty thread behind.',
+  isOptional: true,
+  defaultValue: 'true',
+},
+{
+  name: 'id',
+  type: 'string',
+  description: 'Session identifier and live-session registry key. Defaults to `resourceId`.',
+  isOptional: true,
+},
+{
+  name: 'ownerId',
+  type: 'string',
+  description:
+    'Stable identity of the process-local Session host. Defaults to `id`. New threads use it as their initial owner, but later transfers do not change this value.',
+  isOptional: true,
+},
+{
+  name: 'tags',
+  type: 'Record<string, string>',
+  description: 'Tags copied to threads created by the session.',
+  isOptional: true,
+},
+{ name: 'workspace', type: 'Workspace', description: 'Workspace override for this session.', isOptional: true },
+{ name: 'browser', type: 'MastraBrowser', description: 'Browser override for this session.', isOptional: true },
+{
+  name: 'requestContext',
+  type: 'RequestContext',
+  description: 'Context used to resolve dynamic workspace and browser factories.',
+  isOptional: true,
+},
 ]}
 />
 
-傳回：`Promise<Session<TState>>`
+返回：`Promise<Session<TState>>`
 
-#### `getSessionByResource(resourceId, scope?)` {/* #getsessionbyresourceresourceid-scope */}
+#### `getSession(sessionId, requestContext?)` {/* #getsessionsessionid-requestcontext */}
 
-傳回為 resource 與選填 scope 註冊的即時 Session。
+傳回註冊的即時會話`sessionId`, or `undefined` when none is live.
 
 ```typescript
-const session = await controller.getSessionByResource('project-42', 'editor-window-1')
+const session = await controller.getSession('run-a')
 ```
 
-傳回：`Promise<Session<TState> | undefined>`
+返回：`Promise<Session<TState> | undefined>`
+
+#### `onSessionCreated(listener, options?)` {/* #onsessioncreatedlistener-options */}
+
+之後訂閱進程本地通知`createSession()` materializes a new live session, with isolated listener errors prevented from affecting other listeners. Call the returned function to unsubscribe.
+
+預設情況下，偵聽器是「即發即忘」的。經過`{ blocking: true }` to make `createSession()` await the listener before resolving the new session, so the host can prepare session state before the caller can start a run. Blocking listeners run sequentially in registration order, before fire-and-forget listeners are notified. A blocking listener must not call `createSession()` for the same session `id`. That call would await its own hydration and deadlock.
+
+```typescript
+const unsubscribe = controller.onSessionCreated(
+  async session => {
+    const settings = await loadSettings(session.identity.getResourceId())
+    if (settings) await session.state.set(settings)
+  },
+  { blocking: true },
+)
+
+// Default listeners stay fire-and-forget.
+controller.onSessionCreated(session => {
+  console.log(`Created ${session.identity.getResourceId()}`)
+})
+```
+
+偵聽器在每個新實現的會話中運行一次，而不是為稍後返回的快取會話運行一次`createSession()` calls. They run only in the current process and aren't persisted events.
+
+返回：`() => void`
+
+#### `onSessionDeleted(listener)` {/* #onsessiondeletedlistener */}
+
+之後訂閱進程本地通知`deleteSession()` tears down a live session, with isolated listener errors prevented from affecting other listeners. Call the returned function to unsubscribe.
+
+```typescript
+const unsubscribe = controller.onSessionDeleted(session => {
+  console.log(`Closed ${session.identity.getResourceId()}`)
+})
+
+await controller.createSession({ resourceId: 'project-42' })
+await controller.deleteSession({ sessionId: 'project-42' })
+unsubscribe()
+```
+
+此監聽器是盡力而為的並且僅在當前進程中運行。這不是持久刪除事件。
+
+返回：`() => void`
+
+#### `deleteSession({ sessionId })` {/* #deletesession-sessionid- */}
+
+拆除在下面註冊的物化會話`sessionId`. The method aborts active work, then removes thread subscriptions, the active thread lock, and the live session from the controller registry. It doesn't delete persisted threads or messages.
+
+```typescript
+const deleted = await controller.deleteSession({ sessionId: 'run-a' })
+```
+
+返回：`Promise<boolean>`. The result is `true` when a live session was removed and `false` when no matching live session exists or when another deletion is already in progress for the same session.
 
 #### `setResourceId(session, { resourceId })` {/* #setresourceidsession--resourceid- */}
 
-將即時 Session 移至其他 resource，並清除有效的 thread 繫結。
+將即時會話移至另一個資源並清除其活動執行緒綁定。會話在其 id 下保持註冊狀態。
 
 ```typescript
 await controller.setResourceId(session, { resourceId: 'project-43' })
@@ -376,59 +530,153 @@ await controller.setResourceId(session, { resourceId: 'project-43' })
 
 #### `getKnownResourceIds(session)` {/* #getknownresourceidssession */}
 
-列出已儲存 thread 中存在的 resource 識別碼。
+列出儲存執行緒中存在的資源標識符。
 
 ```typescript
 const resourceIds = await controller.getKnownResourceIds(session)
 ```
 
-傳回：`Promise<string[]>`
+返回：`Promise<string[]>`
+
+#### `listActiveThreadRuns()` {/* #listactivethreadruns */}
+
+列出此控制器上所有資源和執行緒上正在執行的每個運行。該列表來自進程內運行跟踪，因此它涵蓋了當前進程啟動的運行，並且不會創建或觸及會話。
+
+```typescript
+const runs = controller.listActiveThreadRuns()
+```
+
+返回：`ActiveThreadRun[]`
+
+```typescript
+interface ActiveThreadRun {
+  runId: string
+  resourceId?: string
+  threadId: string
+}
+```
+
+### 儲存查詢 {/* #storage-queries */}
+
+這些方法讀取儲存的執行緒和訊息，而無需建立會話或配置其Workspace。
+
+#### `queryThreadById({ threadId })` {/* #querythreadbyid-threadid- */}
+
+傳回一個儲存的線程，或者`null` when the thread or storage doesn't exist.
+
+```typescript
+const thread = await controller.queryThreadById({ threadId: 'thread-7' })
+```
+
+返回：`Promise<AgentControllerThread | null>`
+
+#### `queryThreads(options)` {/* #querythreadsoptions */}
+
+列出儲存的線程。`resourceId` and `metadata` filter the results. Forked subagent threads are excluded unless `includeForkedSubagents` is `true`.
+
+```typescript
+const threads = await controller.queryThreads({
+  resourceId: 'project-42',
+  includeForkedSubagents: false,
+  metadata: { repository: 'mastra' },
+})
+```
+
+所有選項都是可選的。返回：`Promise<AgentControllerThread[]>`
+
+#### `queryThreadMessages(options)` {/* #querythreadmessagesoptions */}
+
+列出一個執行緒的儲存訊息，包括分頁、排序​​、包含和過濾選項`StorageListMessagesInput`. `threadId` is required. The default order is newest first by `createdAt`. When `perPage` is omitted, storage uses 40 messages per page.
+
+```typescript
+const result = await controller.queryThreadMessages({
+  threadId: 'thread-7',
+  page: 0,
+  perPage: 20,
+  orderBy: { field: 'createdAt', direction: 'DESC' },
+})
+```
+
+返回：`Promise<StorageListMessagesOutput>` with controller-format messages.
+
+#### `generateThreadTitle(options)` {/* #generatethreadtitleoptions */}
+
+從線程的對話中產生並儲存標題，而無需建立會話。`threadId` is required. Optional fields include `sessionId`, `model`, and `requestContext`. Passing `sessionId` borrows a live session's agent and request context. The method throws when the thread doesn't exist and returns `undefined` when the model produces no title.
+
+```typescript
+const title = await controller.generateThreadTitle({
+  threadId: 'thread-7',
+  sessionId: 'run-a',
+})
+```
+
+返回：`Promise<string | undefined>`
 
 ### 生命週期 {/* #lifecycle */}
 
 #### `init()` {/* #init */}
 
-初始化共用 Storage、Workspace 服務與設定的 interval handler。重複呼叫會重複使用相同的初始化 promise。
+初始化共享存儲，將運行時服務傳播給Agent，並啟動配置的間隔處理程序。配置的Workspace在使用時會延遲初始化。重複呼叫重用相同的初始化承諾。
 
 ```typescript
 await controller.init()
 ```
 
+#### `initStorage()` {/* #initstorage */}
+
+僅初始化控制器的儲存層，無需配置Workspace或啟動完整的控制器執行時間。此方法是冪等的，用於直接儲存查詢。
+
+```typescript
+await controller.initStorage()
+```
+
+返回：`Promise<void>`
+
 #### `destroy()` {/* #destroy */}
 
-停止 controller 擁有的 interval handler。這不會銷毀 controller 建立的 Session。
+停止控制器擁有的間隔處理程序。這不會破壞控制器創建的會話。
 
 ```typescript
 await controller.destroy()
 ```
 
-### Mode 與 Agent {/* #modes-and-agents */}
+### 模式及Agent {/* #modes-and-agents */}
 
 #### `listModes()` {/* #listmodes */}
 
-傳回設定的 mode 定義。
+傳回配置的模式定義。
 
 ```typescript
 const modes = controller.listModes()
 ```
 
-傳回：`AgentControllerMode[]`
+返回：`AgentControllerMode[]`
+
+#### `getDefaultMode()` {/* #getdefaultmode */}
+
+返回控制器啟動時的模式。建構函數按以下順序選擇它：匹配的模式`defaultModeId`, then the first mode with `default: true` or `metadata.default: true`, then the first configured mode. If `defaultModeId` doesn't match any mode, the constructor throws.
+
+```typescript
+const mode = controller.getDefaultMode()
+```
+
+返回：`AgentControllerMode`
 
 #### `getCurrentAgent(session)` {/* #getcurrentagentsession */}
 
-傳回 Session 有效 mode 的底層 Agent。
+傳回會話活動模式的支援Agent程式。
 
 ```typescript
 const agent = controller.getCurrentAgent(session)
 ```
 
-傳回：`Agent`
+返回：`Agent`
 
-### Workspace 與瀏覽器 {/* #workspace-and-browser */}
+### Workspace和瀏覽器 {/* #workspace-and-browser */}
 
 #### `hasWorkspace()` {/* #hasworkspace */}
 
-回報 controller 是否具有靜態、動態或物件型 Workspace 設定。
+報告控制器是否具有靜態、動態或基於物件的Workspace配置。
 
 ```typescript
 if (controller.hasWorkspace()) {
@@ -436,103 +684,105 @@ if (controller.hasWorkspace()) {
 }
 ```
 
-傳回：`boolean`
+返回：`boolean`
 
 #### `isWorkspaceReady()` {/* #isworkspaceready */}
 
-回報 controller 層級的 Workspace 是否準備就緒。
+報告控制器級Workspace是否準備就緒。
 
 ```typescript
 const ready = controller.isWorkspaceReady()
 ```
 
-傳回：`boolean`
+返回：`boolean`
 
 #### `getWorkspace()` {/* #getworkspace */}
 
-傳回靜態 controller Workspace。動態 Workspace factory 在解析前會傳回 `undefined`。
+返回靜態控制器Workspace。動態Workspace工廠解析每個會話並返回`undefined` here, so use `resolveWorkspace` instead.
 
 ```typescript
 const workspace = controller.getWorkspace()
 ```
 
-傳回：`Workspace | undefined`
+返回：`Workspace | undefined`
 
 #### `resolveWorkspace({ session, requestContext? })` {/* #resolveworkspace-session-requestcontext- */}
 
-為 Session 解析動態 Workspace，並在 controller 上快取結果。
+傳回會話運行的工作空間。會話在建立時解析它們的實例，包括動態工廠，因此這將傳回該實例，並且僅在沒有建立會話的情況下回退到工廠。
 
 ```typescript
 const workspace = await controller.resolveWorkspace({ session, requestContext })
 ```
 
-傳回：`Promise<Workspace | undefined>`
+返回：`Promise<Workspace | undefined>`
 
 #### `setBrowser(browser)` {/* #setbrowserbrowser */}
 
-取代 controller 瀏覽器，並傳遞至底層 Agent。
+替換控制器瀏覽器並將其傳播到支援Agent。
 
 ```typescript
 controller.setBrowser(browser)
 ```
 
-### Mastra 與 Channel {/* #mastra-and-channels */}
+### 馬斯特拉和頻道 {/* #mastra-and-channels */}
 
 #### `getMastra()` {/* #getmastra */}
 
-傳回父 Mastra instance，或由 `init()` 建立的內部 instance。
+傳回父 Mastra 實例或建立的內部實例`init()`.
 
 ```typescript
 const mastra = controller.getMastra()
 ```
 
-傳回：`Mastra | undefined`
+返回：`Mastra | undefined`
 
 #### `getChannels()` {/* #getchannels */}
 
-傳回設定的聊天 Channel 整合。
+返回配置的聊天通道整合。
 
 ```typescript
 const channels = controller.getChannels()
 ```
 
-傳回：`AgentControllerChannels | null`
+返回：`AgentControllerChannels | null`
 
-### 模型 {/* #models */}
+### 型號 {/* #models */}
 
 #### `getCurrentModelAuthStatus(session)` {/* #getcurrentmodelauthstatussession */}
 
-傳回 Session 所選模型的驗證狀態。
+傳回會話所選模型的身份驗證狀態。
 
 ```typescript
 const status = await controller.getCurrentModelAuthStatus(session)
 ```
 
-傳回：`Promise<ModelAuthStatus>`
+返回：`Promise<ModelAuthStatus>`
 
 #### `listAvailableModels()` {/* #listavailablemodels */}
 
-列出設定與內建 gateway 提供的模型。結果會短暫快取；設定 `modelUseCountProvider` 時，會使用使用資料排序。
+列出已設定和內建網關的型號。每個型號的`useCount` comes from `modelUseCountProvider` when you configure one.
+
+內建網關下載公共目錄（models.dev 和 Netlify）。只有當尚未下載任何目錄時，呼叫才會等待目錄。之後，呼叫將傳回上次下載的目錄，包括下載失敗時的情況。一旦超過 5 分鐘，下一次呼叫就會在背景下載新的，而無需等待。 10 秒後再次檢查已設定的網關和 API 金鑰可用性。
 
 ```typescript
 const models = await controller.listAvailableModels()
 ```
 
-傳回：`Promise<AvailableModel[]>`
+返回：`Promise<AvailableModel[]>`
 
 #### `invalidateAvailableModelsCache()` {/* #invalidateavailablemodelscache */}
 
-清除可用模型 cache。
+進行下一個`listAvailableModels()` call check configured gateways and API key availability again, and download the models.dev and Netlify catalogs again in the background. Call it after your app stores or removes a credential or changes a custom provider.
 
 ```typescript
 controller.invalidateAvailableModelsCache()
 ```
 
-### Observational Memory 與權限 {/* #observational-memory-and-permissions */}
+### 觀察記憶和權限 {/* #observational-memory-and-permissions */}
 
 #### `loadOMProgress(session)` {/* #loadomprogresssession */}
 
-載入有效 thread 已儲存的 observational Memory 進度，並發出 `om_status` event。
+載入活動線程儲存的觀察記憶體進度並發出`om_status` event.
 
 ```typescript
 await controller.loadOMProgress(session)
@@ -540,29 +790,29 @@ await controller.loadOMProgress(session)
 
 #### `getObservationalMemoryRecord(session)` {/* #getobservationalmemoryrecordsession */}
 
-傳回有效 thread 的 observational Memory 記錄。
+傳回活動線程的觀察記憶體記錄。
 
 ```typescript
 const record = await controller.getObservationalMemoryRecord(session)
 ```
 
-傳回：`Promise<ObservationalMemoryRecord | null>`
+返回：`Promise<ObservationalMemoryRecord | null>`
 
 #### `getToolCategory({ toolName })` {/* #gettoolcategory-toolname- */}
 
-解析 Tool 的權限 category。
+解析Tool的權限類別。
 
 ```typescript
 const category = controller.getToolCategory({ toolName: 'execute_command' })
 ```
 
-傳回：`ToolCategory | null`
+返回：`ToolCategory | null`
 
-### Interval {/* #intervals */}
+### 間隔 {/* #intervals */}
 
 #### `registerInterval(handler)` {/* #registerintervalhandler */}
 
-啟動或取代週期性 handler。
+啟動或更換定期處理程序。
 
 ```typescript
 controller.registerInterval({
@@ -574,7 +824,7 @@ controller.registerInterval({
 
 #### `removeInterval({ id })` {/* #removeinterval-id- */}
 
-停止一個 interval，並執行其選填的 shutdown callback。
+停止一個間隔並運行其可選的關閉回調。
 
 ```typescript
 await controller.removeInterval({ id: 'refresh' })
@@ -582,16 +832,16 @@ await controller.removeInterval({ id: 'refresh' })
 
 #### `stopIntervals()` {/* #stopintervals */}
 
-停止所有 interval，並執行其選填的 shutdown callback。
+停止所有間隔並運行其可選的關閉回調。
 
 ```typescript
 await controller.stopIntervals()
 ```
 
-## 相關內容 {/* #related */}
+## 有關的 {/* #related */}
 
-- [AgentController 指南](/docs/harness/agent-controller)
-- [Session 參考文件](/reference/agent-controller/session)
-- [Agent](/docs/agents/overview)
-- [Workspace](/docs/workspace/overview)
-- [Channel](/docs/capabilities/channels/overview)
+* [Agent控制器指南](/docs/harness/agent-controller)
+* [會話參考](/reference/agent-controller/session)
+* [Agent商](/docs/agents/overview)
+* [Sandbox](/docs/sandbox/overview)
+* [頻道](/docs/channels)

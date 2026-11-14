@@ -1,5 +1,4 @@
 import React, { type ReactNode } from 'react'
-import Head from '@docusaurus/Head'
 import clsx from 'clsx'
 import { useWindowSize } from '@docusaurus/theme-common'
 import { useDoc } from '@docusaurus/plugin-content-docs/client'
@@ -15,6 +14,8 @@ import ContentVisibility from '@theme/ContentVisibility'
 import type { Props } from '@theme/DocItem/Layout'
 
 import styles from './styles.module.css'
+import SubscribeForm from '@site/src/components/subscribe-form'
+import PlatformCta from '@site/src/components/platform-cta'
 
 /**
  * Decide if the toc should be rendered, on mobile or desktop viewports
@@ -25,9 +26,7 @@ function useDocTOC() {
 
   const hidden = frontMatter.hide_table_of_contents
   const canRender = !hidden && toc.length > 0
-
   const mobile = canRender ? <DocItemTOCMobile /> : undefined
-
   const desktop = canRender && (windowSize === 'desktop' || windowSize === 'ssr') ? <DocItemTOCDesktop /> : undefined
 
   return {
@@ -43,9 +42,6 @@ export default function DocItemLayout({ children }: Props): ReactNode {
   return (
     <div id="doc-item-container" className="row @container">
       <div className={clsx('col', !docTOC.hidden && styles.docItemCol)}>
-        <Head>
-          <meta name="twitter:description" content={metadata.description} />
-        </Head>
         <ContentVisibility metadata={metadata} />
         <DocVersionBanner />
         <div className={styles.docItemContainer}>
@@ -61,11 +57,19 @@ export default function DocItemLayout({ children }: Props): ReactNode {
         </div>
       </div>
 
-      {docTOC.desktop && (
-        <div id="toc-column" className={clsx('col col--3')}>
+      {docTOC.desktop && !docTOC.hidden ? (
+        <div id="toc-column" data-size="desktop" className={clsx('col col--3')}>
           {docTOC.desktop}
         </div>
-      )}
+      ) : !docTOC.hidden ? (
+        <div id="toc-column" data-size="mobile" className={clsx('col col--3')}>
+          {/* TODO: Do not hide on mobile, properly add the newsletter form */}
+          <div className="hidden flex-col gap-4 px-1.5 xl:flex">
+            <PlatformCta placement="card" />
+            <SubscribeForm />
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

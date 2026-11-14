@@ -1,51 +1,65 @@
 ---
 title: "Observability | Mastra platform"
-description: 使用 Mastra Platform Observability，跨 Mastra 项目和部署收集可搜索的 Trace、日志与指标。
+description: "Collect, import, and query hosted traces, logs, metrics, scores, and feedback from Mastra applications with Mastra Platform Observability and local fallback storage."
+packages:
+  - "@mastra/core"
+  - "@mastra/observability"
+  - "mastra"
 ---
 
-# Mastra platform 上的 Observability
+# Mastra 平台上的可观察性
 
-Mastra platform 上的 Observability 是一款独立托管产品，用于跨 Mastra 项目和部署搜索 Trace、日志与指标。如果需要 Observability，但不想先部署 Studio 或设置本地 Storage，请使用它。
-
-在向现有应用添加 Mastra 时，可使用 `mastra init` 配置 platform Observability；也可以在新建的 Mastra 项目中手动配置。
+Mastra 平台可观察性收集来自 Mastra 应用程序的跟踪、日志、指标、分数和反馈。将其用于托管可观察性，无需部署 Studio 或 Server 或配置本地可观察性存储。
 
 ## 快速入门 {/* #quickstart */}
 
-选择符合项目情况的设置路径。
+选择与您的项目匹配的安装路径。
 
 ### 新项目 {/* #new-project */}
 
-创建托管的 Mastra 项目。在提示时选择启用 Mastra Platform Observability，系统会自动进行配置：
+创建托管 Mastra 项目并在出现提示时启用 Mastra Platform Observability：
 
 ```bash npm2yarn
 npm create mastra@latest
 ```
 
-选择 Observability 后，create 命令会向 Mastra Platform 进行身份验证、预配 platform 项目，并将凭据写入项目。如果跳过 platform 设置或使用无提示的创建流程，请改为按照[手动设置](#manual-setup)步骤操作。
+create 命令通过 Mastra Platform 进行身份验证并创建一个可观察性项目。然后它创建一个访问令牌并写入`MASTRA_PLATFORM_ACCESS_TOKEN` and `MASTRA_PROJECT_ID` to `.env`.
 
-### 现有非 Mastra 项目 {/* #existing-non-mastra-projects */}
+### 现有项目 {/* #existing-project */}
 
-如果已有应用（例如 Next.js 应用），但尚未添加 Mastra，请运行 `mastra init`，并在出现提示时启用 Mastra Observability：
+如果您要将 Mastra 添加到现有应用程序，请运行`mastra init` and enable Mastra Observability when prompted:
 
 ```bash npm2yarn
 npx mastra init
 ```
 
-CLI 可以选择现有 platform 项目或创建新项目。
+init 命令允许您选择现有平台项目或创建一个。然后，它创建一个访问令牌并将凭据写入`.env`.
 
-### 手动设置 {/* #manual-setup */}
+## 手动配置 {/* #configure-manually */}
 
-在 [Mastra Platform](https://projects.mastra.ai) 中创建项目，将 `MASTRA_PLATFORM_ACCESS_TOKEN` 和 `MASTRA_PROJECT_ID` 添加到 `.env`，然后在 Mastra 配置中注册 `MastraPlatformExporter`。如果还想将 Observability 事件持久化到已配置的 Mastra Storage，请添加 `MastraStorageExporter`：
+如果您跳过平台设置或自动配置失败，请使用手动配置。
 
-```ts title="src/mastra/index.ts"
+1. 在[Mastra Platform](https://projects.mastra.ai), create or open a project.
+2. 为项目组织创建访问令牌。
+3. 从项目页面复制项目 ID。
+4. 将两个值添加到`.env`:
+
+```bash title=".env"
+MASTRA_PLATFORM_ACCESS_TOKEN=<your-platform-access-token>
+MASTRA_PROJECT_ID=<your-project-id>
+```
+
+登记[`MastraPlatformExporter`](/reference/observability/tracing/exporters/mastra-platform-exporter) in your observability configuration:
+
+```typescript title="src/mastra/index.ts"
 import { Mastra } from '@mastra/core/mastra'
-import { Observability, MastraPlatformExporter } from '@mastra/observability'
+import { MastraPlatformExporter, Observability } from '@mastra/observability'
 
 export const mastra = new Mastra({
   observability: new Observability({
     configs: {
       default: {
-        serviceName: 'mastra',
+        serviceName: 'my-service',
         exporters: [new MastraPlatformExporter()],
       },
     },
@@ -53,18 +67,299 @@ export const mastra = new Mastra({
 })
 ```
 
-有关 platform Observability 使用的环境变量，请参阅 [Mastra platform 配置](/docs/mastra-platform/configuration#observability)。
+导出器从环境中读取访问令牌和项目 ID。保持`serviceName` stable so you can distinguish applications and deployments when filtering observability data.
 
-## 查询 Observability 数据 {/* #query-observability-data */}
+`MastraPlatformExporter`发送结束的跨度、日志、指标、分数和反馈。它会缓冲事件，并在达到 1,000 个事件或等待五秒时发送一批。模型块跨度不会导出。
 
-项目开始向 Mastra Platform Observability 发布 Trace、日志或评分后，可以在终端中使用 Mastra CLI 或 `curl` 查询数据。
+：：：笔记
+
+`MastraPlatformExporter`被取代`CloudExporter`. `CloudExporter` remains available for backward compatibility but is deprecated. Use `MastraPlatformExporter` for new code.
+
+:::
+
+### 将数据存储在本地 {/* #store-data-locally */}
+
+添加`MastraStorageExporter` if you also want to persist observability data to your configured Mastra storage and inspect it in local Studio:
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core/mastra'
+import { MastraPlatformExporter, MastraStorageExporter, Observability } from '@mastra/observability'
+
+export const mastra = new Mastra({
+  observability: new Observability({
+    configs: {
+      default: {
+        serviceName: 'my-service',
+        exporters: [new MastraPlatformExporter(), new MastraStorageExporter()],
+      },
+    },
+  }),
+})
+```
+
+看[Mastra storage exporter](/docs/observability/integrations/exporters/mastra-storage) for storage requirements and configuration.
+
+## 查看Observability数据 {/* #view-observability-data */}
+
+打开您的项目[Mastra Platform](https://projects.mastra.ai) to inspect exported traces, logs, metrics, and scores. A Studio or Server deployment isn't required. Query exported feedback through the hosted feedback API described below.
+
+使用一致的`serviceName` to filter data from a specific application or deployment.
+
+## 查询Observability数据 {/* #query-observability-data */}
+
+使用 Mastra CLI 从终端浏览托管跟踪：
 
 ```bash npm2yarn
 npx mastra api trace list
 ```
 
-对于 Observability 命令，CLI 会以托管的 Observability API 为目标，并能从项目环境推断凭据。有关可用的 Observability 命令、筛选、分页、凭据解析和直接使用 `curl` 的示例，请参阅 [`mastra api` CLI Reference](/reference/cli/mastra#mastra-api)。
+CLI 读取`MASTRA_PLATFORM_ACCESS_TOKEN` and `MASTRA_PROJECT_ID` from your project environment and targets the US observability endpoint by default. See [CLI target resolution](/reference/cli/mastra#target-resolution) for other authentication options and regional endpoints.
 
-## 相关内容 {/* #related */}
+使用`mastra api trace query` to find completed traces by their fields or related spans. For example, find traces whose root span took more than five seconds:
 
-- 📹 [Mastra Observability 与 Studio workshop](https://www.youtube.com/watch?v=dKO_a3RPra0)
+```bash
+npx mastra api trace query '{
+  "timeRange": {
+    "from": "2026-08-01T00:00:00.000Z",
+    "to": "2026-08-08T00:00:00.000Z"
+  },
+  "where": {
+    "op": "gt",
+    "left": { "path": "durationMs" },
+    "right": { "literal": 5000 }
+  },
+  "page": { "limit": 25 }
+}'
+```
+
+选择包含计划数据保留期内导出的跟踪的时间范围，其中`from` earlier than `to`. Results appear in `data.traces`.
+
+Mastra 平台遵循与 Mastra 服务器相同的查询和聚合请求结构。使用[Query traces and spans reference](/reference/observability/tracing/advanced-queries) for HTTP endpoints, filters, response shapes, pagination, and discovery:
+
+|任务| CLI 命令 |参考|
+| - | - | - |
+|寻找匹配的痕迹 |`mastra api trace query` | [Query traces](/reference/observability/tracing/advanced-queries#query-traces) |
+| Find individual spans, including nested runs | `mastra api span query` | [Query spans](/reference/observability/tracing/advanced-queries#query-spans) |
+| Measure matching traces | `mastra api trace aggregate` | [Aggregate traces](/reference/observability/tracing/advanced-queries#aggregate-traces) |
+| Measure individual spans | `mastra api span aggregate` | [Aggregate spans](/reference/observability/tracing/advanced-queries#aggregate-spans) |
+
+将请求作为一个 JSON 参数传递给每个命令。响应嵌套在`data`.
+
+### 平台范围和差异 {/* #platform-scope-and-differences */}
+
+使用`X-Mastra-Project-Id` HTTP header to select one project. The CLI sets it from `MASTRA_PROJECT_ID`, an explicit header, or your project configuration. Without a project scope, credentials authorized for organization-wide access can query across projects. Project-bound credentials remain restricted to their project. Project scoping is separate from predicates: don't put `projectId` in `where`.
+
+平台添加了这些字段和分组选项：
+
+|运营|平台添加|
+| - | - |
+|`queryTraces()` and `querySpans()` | Each result includes `projectId`. |
+| `aggregateTraces()` | Supports `groupBy: ['projectId']` and `countDistinct.projectId`. |
+| `aggregateSpans()` | Supports `groupBy: ['projectId']`, but not `countDistinct.projectId`. |
+
+数据保留取决于您的计划：Starter 为 15 天，Teams 为 6 个月，Enterprise 为自定义保留。看[pricing](https://mastra.ai/pricing) for current plan limits.
+
+### 其他可观测数据 {/* #other-observability-data */}
+
+您可以通过HTTP查询导出的反馈。请参阅[Feedback API](/docs/mastra-platform/api#feedback-api) for its current status, regional endpoints, authentication, project scoping, and supported query parameters such as `traceId` and `environment`.
+
+您可以通过 HTTP 查询导出的指标：`MastraClient`, or with `mastra api metric`. See the [Metrics API](/docs/mastra-platform/api#metrics-api) for regional endpoints, authentication, project scoping, and supported endpoints.
+
+## 导入现有轨迹 {/* #import-existing-traces */}
+
+使用`mastra traces import` to move existing trace history from a supported observability provider into an existing Mastra Platform project. The command reads and validates complete traces at the source, converts them into Mastra spans, then uses a shared workflow for preparation, upload, resume, and verification.
+
+导入命令目前支持Langfuse。添加适配器后，其他提供程序可以使用相同的命令Workflow程。
+
+|Provider|命令参数|来源要求|
+| - | - | - |
+|朗福斯|`langfuse` | Langfuse Cloud or self-hosted Langfuse v4 or later |
+
+### 先决条件 {/* #prerequisites */}
+
+在开始导入之前，您需要：
+
+* Mastra 平台项目。
+* Mastra平台认证通过`mastra auth login`, or a `MASTRA_API_TOKEN` and `MASTRA_ORG_ID` for a headless environment.
+* `MASTRA_PLATFORM_ACCESS_TOKEN`用于使用交互式登录时上传和回读。试运行不需要此令牌。
+* 支持的源Provider的凭据。
+* 足够的本地磁盘空间来临时存储准备好的痕迹。
+
+### 配置目的地 {/* #configure-the-destination */}
+
+对于交互式导入，请登录并选择拥有目标项目的组织：
+
+```bash
+npx mastra auth login
+npx mastra auth orgs switch
+```
+
+交互式登录授权项目发现。在上传或验证跟踪之前设置目标项目使用的平台访问令牌：
+
+```bash title=".env"
+MASTRA_PLATFORM_ACCESS_TOKEN=<mastra-platform-access-token>
+```
+
+如果`mastra init` configured observability for the project, use the token it wrote to `.env`. Otherwise, create an access token in [Mastra Platform](https://projects.mastra.ai).
+
+你可以运行`--dry-run` without this token because a dry run doesn't contact the collector or query API.
+
+`--target-project`命名目的地：接收跟踪的 Mastra 平台项目。使用项目名称、slug 或 ID 指定它，或设置`MASTRA_PROJECT_ID`:
+
+```bash
+npx mastra traces import langfuse --target-project my-mastra-project --dry-run
+```
+
+这`--target-project` flag takes precedence over `MASTRA_PROJECT_ID`. Without either value, the CLI uses the project linked in `.mastra-project.json`.
+
+源项目不是命令行选项。提供者凭据`.env` select it, and the preparation summary names it before anything is uploaded.
+
+对于无头环境，设置 API 令牌和组织 ID。该命令使用`MASTRA_API_TOKEN` for project discovery, upload, and read-back. Set the project ID or pass `--target-project`:
+
+```bash title=".env"
+MASTRA_API_TOKEN=<mastra-api-token>
+MASTRA_ORG_ID=<organization-id>
+MASTRA_PROJECT_ID=<project-id>
+```
+
+### 配置Langfuse {/* #configure-langfuse */}
+
+Langfuse API 密钥属于一个 Langfuse 项目，因此它们也会选择源项目。创造[project API keys in Langfuse](https://langfuse.com/docs/api-and-data-platform/features/public-api), then add them to `.env` or `.env.local` in the directory where you run the command:
+
+```bash title=".env"
+LANGFUSE_PUBLIC_KEY=<langfuse-public-key>
+LANGFUSE_SECRET_KEY=<langfuse-secret-key>
+```
+
+Langfuse Cloud默认为欧盟地区`https://cloud.langfuse.com`. Set `LANGFUSE_BASE_URL` to the [regional host](https://langfuse.com/security/data-regions) for US, Japan, or HIPAA Cloud, or to the origin of a self-hosted instance:
+
+```bash title=".env"
+LANGFUSE_BASE_URL=https://us.cloud.langfuse.com
+```
+
+### 预览导入 {/* #preview-the-import */}
+
+上传之前运行一次试运行：
+
+```bash
+npx mastra traces import langfuse --target-project my-mastra-project --dry-run
+```
+
+试运行读取源代码，在本地准备有效的 Mastra 跟踪，并报告：
+
+* 按名称和 ID 列出的源 Langfuse 项目，以及目标 Mastra Platform 项目。
+* 固定的导入窗口。
+* 准备并跳过跟踪和跨度计数。
+* 准备的本地数据的大小。
+* 提供警告并跳过原因`report.json`.
+
+它不上传痕迹。该命令打印一个`--resume` command that uploads the prepared data later without reading the source again.
+
+### 选择导入窗口 {/* #choose-the-import-window */}
+
+默认情况下，该命令选择最近 30 天，在导入开始时结束。使用`--since` and `--until` to choose a smaller window:
+
+```bash
+npx mastra traces import langfuse \
+  --target-project my-mastra-project \
+  --since "$SINCE" \
+  --until "$UNTIL" \
+  --dry-run
+```
+
+放`SINCE` and `UNTIL` to ISO 8601 dates or timestamps. The following rules apply:
+
+* `--until`必须是最近 30 天内的内容，不能是未来的内容。
+* `--since`必须早于`--until` and within the last 30 days.
+* 所选窗口不能超过 30 天。
+* 如果只是`--until` is set, the default start is 30 days before the current time.
+
+这 30 天的导入窗口与您计划的数据保留期是分开的。
+
+较早的`--from` and `--to` names still work, but they're deprecated hidden aliases of `--since` and `--until` and don't appear in the command help. Use `--since` and `--until` in new commands.
+
+跟踪资格基于根观察的开始时间。 Langfuse 适配器发现所选窗口中的根，然后读取每个所选跟踪的所有当前可用的观察结果。如果可用的父子树或时间戳无效，它将跳过完整的跟踪。
+
+### 上传并验证 {/* #upload-and-verify */}
+
+运行命令，无需`--dry-run` to upload the prepared traces:
+
+```bash
+npx mastra traces import langfuse --target-project my-mastra-project
+```
+
+CLI 显示准备摘要并在上传前要求确认。经过`--yes` to skip this prompt in an automated environment:
+
+```bash
+npx mastra traces import langfuse --target-project my-mastra-project --yes
+```
+
+仅在 Mastra 平台确认批次后，进口商才会保留一次上传请求中的每一条记录并检查进度。临时源和目标故障使用有界重试。
+
+在确认每条准备好的跟踪后，导入器会读回最多 10 条跟踪的确定性样本。它验证跨度 ID、父链接、名称、跨度类型、事件标志、时间戳以及是否存在错误。它不会读回或比较输入、输出、属性、元数据或标签。
+
+如果回读尚不可用或采样跟踪不同，则导入会暂停并保留其准备好的数据。恢复导入以重试验证，而无需再次上传已确认的跟踪。
+
+### 恢复导入 {/* #resume-an-import */}
+
+当试运行、取消、中断、上传失败或暂停验证导致导入未完成时，使用 CLI 打印的确切命令：
+
+```bash
+npx mastra traces import langfuse \
+  --resume 00000000-0000-0000-0000-000000000000 \
+  --target-project my-mastra-project
+```
+
+恢复导入必须使用原始提供程序和目标项目。它的保存日期窗口无法更改，因此`--since`, `--until`, and `--dry-run` can't be combined with `--resume`.
+
+恢复行为取决于命令停止的位置：
+
+* 中断的准备会再次读取并准备源。
+* 中断的上传从第一个未确认的跟踪开始。
+* 暂停的验证会重试回读，而不重新上传已确认的跟踪。
+* 完成的导入报告它已经完成，并重试任何剩余的本地清理。
+
+### 本地文件和清理 {/* #local-files-and-cleanup */}
+
+导入状态存储在：
+
+```text
+~/.mastra/imports/traces/<target-project-id>/<import-id>/
+```
+
+|文件|目的|生命周期 |
+| - | - | - |
+|`manifest.json` | Stores the source identity, date window, counts, and acknowledged progress. | Retained after completion. |
+| `traces.jsonl` | Stores one complete normalized trace per line. | Retained for dry runs and unfinished imports, then removed after successful verification. |
+| `report.json` | Stores counts, warnings, skip samples, and verification results. | Retained after it's written. |
+
+这些文件可以包含跟踪内容。 Mastra 创建导入目录和文件，其权限仅限于本地用户。保护运行导入的计算机和帐户。
+
+### 导入的数据和限制 {/* #imported-data-and-limits */}
+
+对于 Langfuse 进口：
+
+* 观察结果成为具有父子关系和时间戳的 Mastra 跨度。
+* 朗福斯`AGENT`, `TOOL`, and `EVALUATOR` observations, and plain spans that carry OpenTelemetry GenAI attributes such as `gen_ai.operation.name: invoke_agent`, keep their primitive type and name. Mastra Platform shows them in the Primitive type and Primitive name columns and includes them in those filters, like native traces.
+* 支持的字段（例如名称、输入、输出、错误、模型详细信息、用法、成本、标签和源上下文）在存在时进行映射。
+* 您在Langfuse中设置的环境，例如`staging`, are kept. Langfuse's built-in `default` environment isn't copied. Those traces have no environment in Mastra, and Mastra Studio shows them for every environment.
+* 目标跟踪和跨度 ID 是确定性的。原始 Langfuse ID 保留在跨度元数据中以进行关联。
+* 未知的 Langfuse 观察类型变成通用跨度并产生警告，而不是被默默丢弃。
+* 仅导入痕量观测值。不会导入分数、反馈、数据集、附件和日志。
+
+共享进口商也应用这些限制：
+
+* 每次导入准备的本地跟踪数据限制为 5 GiB。如果导入达到此限制，请使用较小的日期窗口。
+* 完整的跟踪必须符合导入者的 4 MiB 上传负载限制。较大的跟踪被跳过并记录`trace_too_large` reason.
+* 跟踪永远不会在上传请求之间分割。
+
+审查`report.json` after a dry run or completed import to see exactly what was prepared, skipped, acknowledged, and verified.
+
+请参阅[`mastra traces import` CLI reference](/reference/cli/mastra#mastra-traces-import) for the complete option and environment-variable reference.
+
+## 后续步骤 {/* #next-steps */}
+
+* 📹 [Mastra observability and Studio workshop](https://www.youtube.com/watch?v=dKO_a3RPra0)
+* [配置Mastra平台](/docs/mastra-platform/configuration)
+* [了解可观察性](/docs/observability/overview)
+* [配置`MastraPlatformExporter`](/reference/observability/tracing/exporters/mastra-platform-exporter)

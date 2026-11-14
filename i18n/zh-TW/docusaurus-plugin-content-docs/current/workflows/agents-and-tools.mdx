@@ -1,23 +1,25 @@
 ---
-title: "Agent 與 Tool | Workflows"
-description: "了解如何從 Workflow 步驟呼叫 Agent 與 Tool，並在 execute 函式和步驟組合之間做選擇。"
+title: "Agents and tools | Workflows"
+description: "Call Mastra agents and tools from workflow steps, compose them directly with createStep, and choose between execute functions and typed step composition."
 packages:
   - "@mastra/core"
 ---
 
-# Agent 與 Tool
+# Agent商和Tool
 
-Workflow 步驟可以呼叫 Agent 來使用 LLM 推理，也可以呼叫 Tool 來執行型別安全的邏輯。你可以從步驟的 `execute()` 函式內叫用它們，或使用 `createStep()` 直接將它們組合為步驟。
+Workflow步驟可以呼叫Agent程式使用 LLM 推理或呼叫類型安全邏輯Tool。您可以从步骤中调用它们`execute()`函數或直接將它們作為步驟使用`createStep()`.
 
-## 在 Workflow 中使用 Agent {/* #using-agents-in-workflows */}
+## 在Workflow中使用Agent {/* #using-agents-in-workflows */}
 
-需要推理、語言生成或其他以 LLM 為基礎的任務時，請在 Workflow 步驟中使用 Agent。若要進一步控制 Agent 呼叫（例如追蹤訊息歷程或傳回結構化輸出），請從步驟的 `execute()` 函式呼叫。若不需要修改 Agent 的叫用方式，則可將 Agent 組合為步驟。
+當您需要推理、語言產生或其他基於 LLM 的任務時，請在Workflow步驟中使用Agent程式。從步驟調用`execute()` function for more control over the agent call (e.g., track message history or return structured output). Compose agents as steps when you don't need to modify how the agent is invoked.
 
-### 呼叫 Agent {/* #calling-agents */}
+### 呼叫Agent {/* #calling-agents */}
 
-使用 `.generate()` 或 `.stream()`，在步驟的 `execute()` 函式內呼叫 Agent。這可讓你先修改 Agent 呼叫並處理回應，再將結果傳給下一個步驟。
+呼叫步驟內的Agent`execute()` function using `.generate()` or `.stream()`. This lets you modify the agent call and handle the response before passing it to the next step.
 
-```typescript {6-14} title="src/mastra/workflows/test-workflow.ts"
+```typescript {8-16} title="src/mastra/workflows/test-workflow.ts"
+import { createStep } from '@mastra/core/workflows'
+
 const step1 = createStep({
   execute: async ({ inputData, mastra }) => {
     const { message } = inputData
@@ -40,14 +42,29 @@ const step1 = createStep({
 })
 ```
 
-### 將 Agent 作為步驟 {/* #agents-as-steps */}
+### Agent作為步驟 {/* #agents-as-steps */}
 
-若不需要修改 Agent 呼叫，請使用 `createStep()` 將 Agent 組合為步驟。使用 `.map()` 將前一個步驟的輸出轉換成 Agent 可使用的 `prompt`。
+使用以下命令將Agent程式編寫為步驟`createStep()` when you don't need to modify the agent call. Use `.map()` to transform the previous step's output into a `prompt` the agent can use.
 
-![將 Agent 作為步驟](/img/workflows/workflows-agent-tools-agent-step.jpg)
+```mermaid
+flowchart LR
+  accTitle: Composing an agent as a workflow step
+  accDescr: The workflow starts, runs step1 as an agent, passes its output to step2, which calls a tool, and then ends when the workflow is committed.
 
-```typescript {1,2,5-10} title="src/mastra/workflows/test-workflow.ts"
+  subgraph step1["step1"]
+    direction TB
+    agent([agent])
+  end
+
+  start(( start )) -- ".then(step1)<br/>in" --> step1
+  step1 -- ".then(step2)<br/>out" --> step2([step2])
+  step2 -- ".commit()<br/>out" --> stop(( end ))
+  step2 <--> tool([tool])
+```
+
+```typescript {1,3,6-11} title="src/mastra/workflows/test-workflow.ts"
 import { testAgent } from '../agents/test-agent'
+import { createWorkflow, createStep } from '@mastra/core/workflows'
 const step1 = createStep(testAgent)
 
 export const testWorkflow = createWorkflow({})
@@ -62,11 +79,11 @@ export const testWorkflow = createWorkflow({})
   .commit()
 ```
 
-如需更多資訊，請參閱[輸入資料對應](/docs/workflows/control-flow#input-data-mapping)。
+訪問[Input Data Mapping](/docs/workflows/control-flow#input-data-mapping) for more information.
 
-若未提供 `structuredOutput` 選項，Mastra Agent 會使用預設 schema，要求輸入為 `prompt` 字串，並傳回 `text` 字串作為輸出：
+當沒有`structuredOutput` option is provided, Mastra agents use a default schema that expects a `prompt` string as input and returns a `text` string as output:
 
-```typescript prettier:false
+```typescript oxfmt:false
 {
   inputSchema: {
     prompt: string
@@ -77,11 +94,14 @@ export const testWorkflow = createWorkflow({})
 }
 ```
 
-### 使用結構化輸出的 Agent {/* #agents-with-structured-output */}
+### 具有結構化輸出的Agent {/* #agents-with-structured-output */}
 
-當你需要 Agent 傳回結構化資料而非純文字時，請將 `structuredOutput` 選項傳給 `createStep()`。步驟的輸出 schema 會與你提供的 schema 相符，讓後續步驟能以型別安全的方式串接。
+當您需要Agent程式返回結構化資料而不是純文字時，請傳遞`structuredOutput` option to `createStep()`. The step's output schema will match your provided schema, enabling type-safe chaining to subsequent steps.
 
-```typescript {8} title="src/mastra/workflows/test-workflow.ts"
+```typescript {11} title="src/mastra/workflows/test-workflow.ts"
+import { createWorkflow, createStep } from '@mastra/core/workflows'
+import { z } from 'zod'
+
 const articleSchema = z.object({
   title: z.string(),
   summary: z.string(),
@@ -111,14 +131,15 @@ export const testWorkflow = createWorkflow({})
   .commit()
 ```
 
-`structuredOutput.schema` 選項接受任何 Standard JSON Schema。Agent 會產生符合此 schema 的輸出，而步驟的 `outputSchema` 會自動設定為相符的 schema。如需錯誤處理策略及串流結構化輸出等更多選項，請參閱[結構化輸出](/docs/agents/structured-output)。
+這`structuredOutput.schema` option accepts any Standard JSON Schema. The agent will generate output conforming to this schema, and the step's `outputSchema` will be automatically set to match. Visit [Structured Output](/docs/agents/structured-output) for more options like error handling strategies and streaming with structured output.
 
-### `.agent()` 簡寫 {/* #the-agent-shorthand */}
+### 這`.agent()` shorthand {/* #the-agent-shorthand */}
 
-使用 `.agent()` 直接新增 Agent，不必將其包裝在 `createStep()` 中。它接受與 `createStep(agent, options)` 相同的選項，也能以 Agent ID 字串取代執行個體：
+直接添加Agent`.agent()` instead of wrapping it in `createStep()`. It accepts the same options as `createStep(agent, options)`, plus an agent ID string in place of the instance:
 
-```typescript {8} title="src/mastra/workflows/test-workflow.ts"
+```typescript {9} title="src/mastra/workflows/test-workflow.ts"
 import { testAgent } from '../agents/test-agent'
+import { createWorkflow } from '@mastra/core/workflows'
 
 export const testWorkflow = createWorkflow({})
   .map(async ({ inputData }) => ({
@@ -128,24 +149,30 @@ export const testWorkflow = createWorkflow({})
   .commit()
 ```
 
-`.agent()` 會在 Workflow 圖中記錄宣告式項目，而非不透明的步驟，因此以此方式建立的 Workflow 可以持久保存為[動態 Workflow](/docs/workflows/dynamic-workflows)。如需所有參數，請參閱 [Workflow.agent()](/reference/workflows/workflow-methods/agent)。
+`.agent()`在Workflow圖中記錄一個聲明性條目而不是一個不透明的步驟，因此以這種方式建構的Workflow可以持久化為[dynamic workflows](/docs/workflows/dynamic-workflows). Visit [Workflow.agent()](/reference/workflows/workflow-methods/agent) for all parameters.
 
-## 在 Workflow 中使用 Tool {/* #using-tools-in-workflows */}
+## 在Workflow中使用Tool {/* #using-tools-in-workflows */}
 
-在 Workflow 步驟中使用 Tool，即可運用現有的 Tool 邏輯。需要準備內容或處理回應時，請從步驟的 `.execute()` 函式呼叫。若不需要修改 Tool 的使用方式，則可將 Tool 組合為步驟。
+在Workflow步驟中使用Tool來使用現有的Tool邏輯。從步驟調用`.execute()` function when you need to prepare context or process responses. Compose tools as steps when you don't need to modify how the tool is used.
 
-### 呼叫 Tool {/* #calling-tools */}
+### 呼叫Tool {/* #calling-tools */}
 
-在步驟的 `.execute()` 函式內呼叫 Tool。這可讓你更進一步控制 Tool 的輸入內容，或先處理其回應，再將結果傳給下一個步驟。
+在步驟內呼叫Tool`.execute()` function. You get more control over the tool's input context, or process its response before passing it to the next step.
 
 ```typescript title="src/mastra/workflows/test-workflow.ts"
 import { testTool } from '../tools/test-tool'
+import { isValidationError } from '@mastra/core/tools'
+import { createStep } from '@mastra/core/workflows'
 
 const step2 = createStep({
   execute: async ({ inputData, requestContext }) => {
     const { text } = inputData
 
-    const response = await testTool.execute({ text }, { requestContext })
+    const response = await testTool.execute?.({ text }, { requestContext })
+
+    if (!response || isValidationError(response)) {
+      throw new Error('testTool did not return a result')
+    }
 
     return {
       emphasized: response.emphasized,
@@ -154,14 +181,29 @@ const step2 = createStep({
 })
 ```
 
-### 將 Tool 作為步驟 {/* #tools-as-steps */}
+### Tool作為步驟 {/* #tools-as-steps */}
 
-當前一個步驟的輸出符合 Tool 的輸入內容時，請使用 `createStep()` 將 Tool 組合為步驟。若兩者不相符，可以使用 `.map()` 轉換前一個步驟的輸出。
+使用以下命令將Tool編寫為一個步驟`createStep()` when the previous step's output matches the tool's input context. You can use `.map()` to transform the previous step's output if they don't.
 
-![將 Tool 作為步驟](/img/workflows/workflows-agent-tools-tool-step.jpg)
+```mermaid
+flowchart LR
+  accTitle: Composing a tool as a workflow step
+  accDescr: The workflow starts with step1, which calls an agent, then passes its output to step2 as a tool before ending when the workflow is committed.
 
-```typescript {1,3,7-12} title="src/mastra/workflows/test-workflow.ts"
+  subgraph step2["step2"]
+    direction TB
+    tool([tool])
+  end
+
+  start(( start )) -- ".then(step1)<br/>in" --> step1([step1])
+  step1 -- ".then(step2)<br/>out" --> step2
+  step2 -- ".commit()<br/>out" --> stop(( end ))
+  step1 <--> agent([agent])
+```
+
+```typescript {1,4,8-13} title="src/mastra/workflows/test-workflow.ts"
 import { testTool } from '../tools/test-tool'
+import { createWorkflow, createStep } from '@mastra/core/workflows'
 
 const step2 = createStep(testTool)
 
@@ -177,21 +219,22 @@ export const testWorkflow = createWorkflow({})
   .commit()
 ```
 
-如需更多資訊，請參閱[輸入資料對應](/docs/workflows/control-flow#input-data-mapping)。
+訪問[Input Data Mapping](/docs/workflows/control-flow#input-data-mapping) for more information.
 
-### `.tool()` 簡寫 {/* #the-tool-shorthand */}
+### 這`.tool()` shorthand {/* #the-tool-shorthand */}
 
-使用 `.tool()` 直接新增 Tool，不必將其包裝在 `createStep()` 中。它接受 Tool 執行個體或已註冊的 Tool ID 字串，以及步驟層級的 `retries` 和 `metadata`：
+直接添加Tool`.tool()` instead of wrapping it in `createStep()`. It accepts a tool instance or a registered tool ID string, plus step-level `retries` and `metadata`:
 
-```typescript {5} title="src/mastra/workflows/test-workflow.ts"
+```typescript {6} title="src/mastra/workflows/test-workflow.ts"
 import { testTool } from '../tools/test-tool'
+import { createWorkflow } from '@mastra/core/workflows'
 
 export const testWorkflow = createWorkflow({}).then(step1).tool(testTool).commit()
 ```
 
-與 `.agent()` 相同，`.tool()` 會記錄宣告式項目，因此 Workflow 可以持久保存為[動態 Workflow](/docs/workflows/dynamic-workflows)。如需所有參數，請參閱 [Workflow.tool()](/reference/workflows/workflow-methods/tool)。
+喜歡`.agent()`, `.tool()` records a declarative entry, so the workflow can be persisted as a [dynamic workflow](/docs/workflows/dynamic-workflows). Visit [Workflow.tool()](/reference/workflows/workflow-methods/tool) for all parameters.
 
-## 相關資源 {/* #related */}
+## 有關的 {/* #related */}
 
-- [使用 Agent](/docs/agents/overview)
-- [MCP 概觀](/docs/mcp/overview)
+* [使用Agent](/docs/agents/overview)
+* [MCP概述](/docs/connections/mcp)

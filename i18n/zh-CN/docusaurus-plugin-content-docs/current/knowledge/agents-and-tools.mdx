@@ -1,0 +1,129 @@
+---
+title: "Agents and tools"
+description: "Turn on the Knowledge tools for an agent, and what agents can do with them."
+packages:
+  - "@mastra/core"
+---
+
+# Agent和Tool
+
+Agent以两种方式使用知识。通过Tool，Agent可以在决定时搜索、读取和写入页面。和[pinned context](/docs/knowledge/pinned-context)，所选页面每次都位于Agent的上下文中，无需Tool调用。本页介绍了这些Tool。您可以选择Agent获得哪些Tool。你的[范围声明](/docs/knowledge/scopes-and-access)决定每个Tool调用可以做什么。
+
+：：：阿尔法
+
+知识处于阿尔法阶段。其 API 可能会在不同版本之间发生变化。
+
+:::
+
+## 打开Tool {/* #turn-on-the-tools */}
+
+阅读Tool允许Agent浏览、搜索和阅读页面。书写Tool可以创建和更改页面和注释。每个Tool的描述都在[Knowledge tools reference](/reference/knowledge/knowledge-tools).
+
+Tool默认处于关闭状态。放`tools: true` to turn on the read and write tools:
+
+```typescript title="src/mastra/knowledge.ts"
+import { Knowledge, knowledgeMemoryScopes } from '@mastra/core/knowledge'
+
+export const knowledge = new Knowledge({
+  id: 'company',
+  scopes: knowledgeMemoryScopes(),
+  tools: true,
+})
+```
+
+仅从 Knowledge 进行回答的Agent（例如文档Agent）仅需要读取Tool：
+
+```typescript
+const knowledge = new Knowledge({
+  id: 'docs',
+  scopes: knowledgeMemoryScopes(),
+  tools: { read: true },
+})
+```
+
+固定Tool附带固定上下文。要打开它，请设置`pinnedContext: true`, as described in [Pinned context](/docs/knowledge/pinned-context).
+
+## 将Tool附加到Agent {/* #attach-the-tools-to-an-agent */}
+
+将知识实例传递到Agent的`knowledge` option. The agent gets the tools you turned on. It also gets short instructions on how to use them, so you don't need to describe the tools in your own instructions:
+
+```typescript title="src/mastra/agents/support-agent.ts"
+import { Agent } from '@mastra/core/agent'
+import { knowledge } from '../knowledge'
+
+export const supportAgent = new Agent({
+  id: 'support-agent',
+  name: 'Support agent',
+  instructions: 'Help customers with their orders.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  knowledge,
+})
+```
+
+要更改这些说明，请参阅[Tool instructions](/reference/knowledge/tool-instructions).
+
+### 自己添加Tool {/* #add-the-tools-yourself */}
+
+您还可以将Tool添加到Agent的`tools`, next to its other tools. Use [`createTools()`](/reference/knowledge/knowledge-class#createtools) for the tools and [`getInstructions()`](/reference/knowledge/knowledge-class#getinstructions) for their instructions. Pass the same options to both:
+
+```typescript title="src/mastra/agents/docs-agent.ts"
+import { Agent } from '@mastra/core/agent'
+import { knowledge } from '../knowledge'
+
+export const docsAgent = new Agent({
+  id: 'docs-agent',
+  name: 'Docs agent',
+  instructions: `Answer from the company docs.\n\n${knowledge.getInstructions({ write: false, pinnedContext: false })}`,
+  model: '__GATEWAY_OPENAI_MODEL__',
+  tools: {
+    ...knowledge.createTools({ write: false, pinnedContext: false }),
+  },
+})
+```
+
+这些选项会覆盖该Agent的实例设置。这里，`{ write: false, pinnedContext: false }` gives the agent only the read tools. Without `pinnedContext: false`, it would also get `knowledge_pin` when the instance has pinned context on. Access checks work the same either way.
+
+## 阅读页面 {/* #read-pages */}
+
+借助读取Tool，Agent可以：
+
+* 浏览范围的组织方式。
+* 按关键字或按含义搜索页面和注释[add semantic search](/docs/knowledge/search#add-search-by-meaning).
+* 阅读一个页面，包括其注释以及提及该页面的其他页面上的注释。
+
+一页很长的页面会分成几部分返回。第一次阅读会显示页面的标题。然后，Agent读取所需的部分，从一行继续，或仅读取与术语匹配的行。
+
+当没有任何匹配时，结果就是这样的。然后，Agent可以告诉用户它不知道，而不是猜测。
+
+默认情况下，一次读取最多返回一页的 1,000 个令牌。对于具有大上下文窗口的模型提高此上限，或者对于小模型降低此上限：
+
+```typescript
+const knowledge = new Knowledge({
+  id: 'docs',
+  scopes: knowledgeMemoryScopes(),
+  tools: { read: { maxTokens: 3000 }, write: true },
+})
+```
+
+## 写入页面 {/* #write-pages */}
+
+使用写入Tool，Agent可以：
+
+* 创建和编辑页面，以及移动、合并或删除它们。
+* 添加和删​​除注释。注释是页面上的简短事实，归因于其作者。它可以链接到其他页面，并且它的[stamps](/docs/knowledge/scopes-and-access#note-visibility) decide who sees it.
+
+Agent将每个页面放入与其受众匹配的范围内。整个团队的事实属于团队的范围。一个用户的事实存在于该用户的`resource:` scope.
+
+在长页面上，Agent仅编辑它读取的行，因此它无法覆盖它没有看到的部分。如果在Agent阅读这些行后有人更改了页面，则编辑将被拒绝。
+
+## 访问检查 {/* #access-checks */}
+
+打开Tool并不授予访问权限。Agent只能使用其运行所拥有的范围以及规则赋予其角色的范围。其他一切对它来说都是不可见的。
+
+知识会根据运行在其涉及的范围内的角色来检查每个Tool调用。这[roles table](/docs/knowledge/scopes-and-access#access-rules-and-roles) lists what each role can do.
+
+被拒绝的调用不会在您的代码中引发错误。模型将拒绝作为Tool结果并可以对其做出响应。
+
+## 后续步骤 {/* #next-steps */}
+
+下一个，[pin the pages](/docs/knowledge/pinned-context) an agent should see on every turn. Size caps for reads and writes are in [Limits](/reference/knowledge/limits).

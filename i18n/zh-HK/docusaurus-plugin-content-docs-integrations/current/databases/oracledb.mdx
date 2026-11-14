@@ -1,0 +1,324 @@
+---
+title: "OracleDB | Database"
+description: "Persist Mastra memory, workflows, observability, scores, MCP metadata, and agent registry data in Oracle Database with OracleStore."
+packages:
+  - "@mastra/memory"
+  - "@mastra/oracledb"
+---
+
+# 甲骨文資料庫
+
+OracleDB 儲存提供者將 Mastra 應用程式狀態儲存在 Oracle 資料庫中。它實作了Mastra的複合存儲接口，所以一`OracleStore`實例可以支援記憶體、Workflow快照、可觀察性、分數、記分器定義、MCP 用戶端元資料和Agent註冊表資料。
+
+## 安裝 {/* #installation */}
+
+```bash npm2yarn
+npm install @mastra/oracledb@latest
+```
+
+## 用法 {/* #usage */}
+
+```ts
+import { OracleStore } from '@mastra/oracledb'
+
+const storage = new OracleStore({
+  id: 'oracle-storage',
+  user: process.env.ORACLE_DATABASE_USER,
+  password: process.env.ORACLE_DATABASE_PASSWORD,
+  connectString: process.env.ORACLE_DATABASE_CONNECT_STRING,
+})
+```
+
+與 Mastra 一起使用：
+
+```ts
+import { Mastra } from '@mastra/core/mastra'
+
+export const mastra = new Mastra({
+  storage,
+})
+```
+
+## 參數 {/* #parameters */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'id',
+  type: 'string',
+  description: 'Unique identifier for this storage instance.',
+},
+{
+  name: 'user',
+  type: 'string',
+  description: 'Oracle Database user. Required unless using `pool` or `externalAuth`.',
+  isOptional: true,
+},
+{
+  name: 'password',
+  type: 'string',
+  description: 'Password for the Oracle Database user. Required unless using `pool` or `externalAuth`.',
+  isOptional: true,
+},
+{
+  name: 'connectString',
+  type: 'string',
+  description:
+    'Oracle connect string, service name, TNS alias, or Autonomous Database connect descriptor. Required unless using `pool`.',
+  isOptional: true,
+},
+{
+  name: 'pool',
+  type: 'oracledb.Pool',
+  description:
+    "Existing Oracle connection pool. When provided, Mastra uses the pool but doesn't close it when `store.close()` is called.",
+  isOptional: true,
+},
+{
+  name: 'poolManager',
+  type: 'OraclePoolManager',
+  description:
+    'Shared Oracle pool manager. Use this to share one Oracle pool between `OracleStore` and `OracleVector`.',
+  isOptional: true,
+},
+{
+  name: 'schemaName',
+  type: 'string',
+  description: 'Oracle schema name used to qualify storage tables.',
+  isOptional: true,
+},
+{
+  name: 'poolMin',
+  type: 'number',
+  description: 'Minimum number of Oracle pool connections.',
+  isOptional: true,
+  defaultValue: '0',
+},
+{
+  name: 'poolMax',
+  type: 'number',
+  description: 'Maximum number of Oracle pool connections.',
+  isOptional: true,
+  defaultValue: '4',
+},
+{
+  name: 'poolIncrement',
+  type: 'number',
+  description: 'Number of connections to add when the pool grows.',
+  isOptional: true,
+  defaultValue: '1',
+},
+{
+  name: 'configDir',
+  type: 'string',
+  description: 'Directory containing Oracle Network configuration files such as `tnsnames.ora`.',
+  isOptional: true,
+},
+{
+  name: 'walletLocation',
+  type: 'string',
+  description: 'Oracle wallet directory for mTLS connections such as Autonomous Database.',
+  isOptional: true,
+},
+{
+  name: 'walletPassword',
+  type: 'string',
+  description: 'Password for the Oracle wallet, when required by the wallet configuration.',
+  isOptional: true,
+},
+{
+  name: 'externalAuth',
+  type: 'boolean',
+  description: 'Use Oracle external authentication instead of username/password authentication.',
+  isOptional: true,
+},
+{
+  name: 'disableInit',
+  type: 'boolean',
+  description:
+    'When true, automatic schema initialization is disabled. Use this when schema changes are applied separately before the app starts.',
+  isOptional: true,
+  defaultValue: 'false',
+},
+{
+  name: 'messageBatchSize',
+  type: 'number',
+  description:
+    'Number of messages sent per Oracle `executeMany` call when saving messages. The operation still commits once at the transaction boundary.',
+  isOptional: true,
+  defaultValue: '200',
+},
+{
+  name: 'skipDefaultIndexes',
+  type: 'boolean',
+  description: "When true, default storage indexes aren't created during initialization.",
+  isOptional: true,
+},
+{
+  name: 'indexes',
+  type: 'OracleCreateIndexOptions[]',
+  description:
+    'Custom Oracle index definitions to create during initialization. Indexes are routed to the storage domain that owns the target table.',
+  isOptional: true,
+},
+{
+  name: 'migrationTableName',
+  type: 'string',
+  description: 'Oracle table used to track storage schema migrations.',
+  isOptional: true,
+  defaultValue: "'MASTRA_ORACLE_MIGRATIONS'",
+},
+{
+  name: 'vectorRegistryTableName',
+  type: 'string',
+  description:
+    "OracleVector registry table used to discover semantic-recall vector tables when threads or messages are deleted. Set this to match `OracleVector`'s `registryTableName` when that option is customized.",
+  isOptional: true,
+},
+]}
+/>
+
+## 連接範例 {/* #connection-examples */}
+
+基本的使用者名稱/密碼建構函數如上所示。對於自治資料庫，將錢包選項新增到同一建構函式中：
+
+```ts
+const storage = new OracleStore({
+  id: 'oracle-storage',
+  user: process.env.ORACLE_DATABASE_USER,
+  password: process.env.ORACLE_DATABASE_PASSWORD,
+  connectString: process.env.ORACLE_DATABASE_CONNECT_STRING,
+  walletLocation: process.env.ORACLE_DATABASE_WALLET_DIR,
+  walletPassword: process.env.ORACLE_DATABASE_WALLET_PASSWORD,
+  configDir: process.env.ORACLE_DATABASE_CONFIG_DIR,
+})
+```
+
+對於外部身份驗證，設定`externalAuth: true` and omit `password`. To reuse an existing `oracledb.Pool`, pass it as `pool`. Mastra uses it but doesn't close it.
+
+`OracleStore`支援記憶體、Workflow快照、可觀察性、分數、記分器定義、MCP 用戶端元資料和座席註冊資料。在室外使用商店時`Mastra` instance, call `await storage.init()` and access a domain with `await storage.getStore('memory')`.
+
+## 初始化 {/* #initialization */}
+
+當你通過時`OracleStore` to `Mastra`, `init()` is called automatically before storage operations run. If you use `OracleStore` directly, call `init()` before reading or writing:
+
+```ts
+await storage.init()
+```
+
+:::警告
+如果停用或跳過初始化，儲存操作要求 Oracle 表和索引已存在。
+:::
+
+`OracleStore.init()`執行可重複的移轉並將結果記錄在移轉分類帳表中。預設的帳本表是`MASTRA_ORACLE_MIGRATIONS`.
+
+```ts
+await storage.migrate()
+const history = await storage.listMigrations()
+```
+
+可重複的遷移是冪等的。它們在啟動時協調每個儲存域擁有的表和索引，這允許應用新的網域索引或相容的架構添加，而無需更改應用程式程式碼。
+
+初始化也為常見 Mastra 查詢路徑建立提供者的預設索引。使用`skipDefaultIndexes` when indexes are managed separately, or pass `indexes` for custom Oracle indexes. Custom definitions support Oracle options such as `bitmap`, `online`, `invisible`, `parallel`, `compress`, `noLogging`, and `reverse`，以及基於函數的表達式，例如`JSON_VALUE(...)`.
+
+當您的應用程式重複過濾 JSON 元資料時，或者當資料庫管理員 (DBA) 希望在優化器使用索引之前測試索引時，自訂索引非常有用：
+
+```ts
+const storage = new OracleStore({
+  id: 'oracle-storage',
+  user,
+  password,
+  connectString,
+  indexes: [
+    {
+      name: 'idx_messages_status',
+      table: 'mastra_messages',
+      columns: [
+        "JSON_VALUE(metadata, '$.status' RETURNING VARCHAR2(32) NULL ON ERROR)",
+        'thread_id',
+      ],
+      online: true,
+      invisible: true,
+    },
+  ],
+})
+```
+
+使用`invisible` for staged rollout, then remove it after validating query plans. Use `skipDefaultIndexes: true` only when a DBA-managed indexing strategy replaces the defaults.
+
+使用`disableInit: true` when schema changes are applied by a separate deployment step or by a database administrator.
+
+## 架構導出 {/* #schema-export */}
+
+使用`exportSchemas()` to generate Oracle DDL without connecting to a database. This is useful when schema changes are reviewed or applied outside application startup.
+
+```ts
+import { exportSchemas } from '@mastra/oracledb'
+
+const ddl = exportSchemas({
+  schemaName: 'MASTRA_APP',
+  domains: [
+    'memory',
+    'workflows',
+    'observability',
+    'scores',
+    'scorerDefinitions',
+    'mcpClients',
+    'agents',
+  ],
+})
+
+console.log(ddl)
+```
+
+`domains`預設為每個受支援的域，包括`vector`, when omitted.
+
+## 操作注意事項 {/* #operational-notes */}
+
+使用相同的`OraclePoolManager` when `OracleStore` and `OracleVector` should share one Oracle connection lifecycle:
+
+```ts
+import { OracleStore, OracleVector } from '@mastra/oracledb'
+
+const storage = new OracleStore({ id: 'oracle-storage', user, password, connectString })
+const vector = new OracleVector({
+  id: 'oracle-vector',
+  poolManager: storage.getPoolManager(),
+})
+```
+
+`OracleStore`暴露`storage.db` and `await storage.getPool()` for advanced use cases. When using these APIs directly, you're responsible for transaction boundaries and connection lifecycle.
+
+JSON 元資料、有效負載和快照儲存在本機 Oracle JSON 列中並在伺服器端進行編碼，因此可以使用標準 Oracle JDBC Tool（例如 DBeaver 和 SQL Developer）直接讀取這些行。
+
+## 使用範例 {/* #usage-example */}
+
+### 將 OracleDB 記憶體新增至Agent {/* #adding-oracledb-memory-to-an-agent */}
+
+```ts title="src/mastra/agents/oracle-agent.ts"
+import { Agent } from '@mastra/core/agent'
+import { Memory } from '@mastra/memory'
+import { OracleStore } from '@mastra/oracledb'
+
+const storage = new OracleStore({
+  id: 'oracle-storage',
+  user: process.env.ORACLE_DATABASE_USER,
+  password: process.env.ORACLE_DATABASE_PASSWORD,
+  connectString: process.env.ORACLE_DATABASE_CONNECT_STRING,
+})
+
+export const oracleAgent = new Agent({
+  id: 'oracle-agent',
+  name: 'Oracle Agent',
+  instructions: 'You are an assistant with persistent OracleDB-backed memory.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  memory: new Memory({ storage }),
+})
+```
+
+## 有關的 {/* #related */}
+
+* [OracleDB向量存儲](/integrations/vectors/oracledb)
+* [儲存概覽](/reference/storage/overview)
+* [工作記憶](/docs/memory/working-memory)
+* [Workflow快照](/docs/workflows/snapshots)

@@ -1,0 +1,150 @@
+---
+title: "Workers | Auth"
+description: "Secure communication between standalone Mastra workers and the API server with bearer tokens, API key headers, or custom authentication credentials."
+packages:
+  - "@mastra/core"
+---
+
+# 勞工
+
+:::測試版
+
+在 API 穩定之前，可能會在沒有重大版本更新的情況下發生重大變更。
+
+:::
+
+當工作執行緒在與 API 不同的進程中運行時，它們會透過 HTTP 進行通訊。編排工作執行緒呼叫 API 的步驟執行端點以在 API 伺服器上執行Workflow步驟。推送模式 PubSub Agent程式（例如推送模式下的 Google Cloud Pub/Sub）還可以將事件直接傳遞到 API 的事件端點。這是與拉模式工作人員不同的整合路徑，拉模式工作人員從Agent本身拉取事件。配置身份驗證Provider時，兩個 HTTP 端點都需要身份驗證。
+
+## 它是如何運作的 {/* #how-it-works */}
+
+工作人員身份驗證使用與 Mastra 伺服器的其餘部分相同的身份驗證管道。編排工作人員透過每個 HTTP 請求發送憑證，以及伺服器的配置`authenticateToken` provider validates them.
+
+|端點 |使用者 |目的|
+| - | - | - |
+|`POST /api/workflows/:workflowId/runs/:runId/steps/execute` | Orchestration worker via `HttpRemoteStrategy` | Execute a workflow step on the API |
+| `POST /api/workflows/events` | Push-mode brokers (GCP Pub/Sub, SNS) | Deliver workflow events to the API |
+
+兩條路線都有`requiresAuth: true`. When no auth provider is configured, they're publicly accessible.
+
+：：：警告
+
+將工作程序部署為單獨的進程時，請務必在伺服器上設定身份驗證Provider。如果沒有，步驟執行和事件端點將對任何呼叫者開放。
+
+:::
+
+## 設定工人身份驗證 {/* #setting-up-worker-auth */}
+
+### 在伺服器上設定身份驗證Provider {/* #configure-an-auth-provider-on-the-server */}
+
+使用任何 Mastra 身份驗證Provider。`SimpleAuth` works well for worker tokens:
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core/mastra'
+import { SimpleAuth } from '@mastra/core/server'
+
+export const mastra = new Mastra({
+  server: {
+    auth: new SimpleAuth({
+      tokens: {
+        [process.env.WORKER_TOKEN!]: {
+          id: 'worker',
+          name: 'Orchestration Worker',
+          role: 'worker',
+        },
+      },
+    }),
+  },
+  // ... storage, pubsub, etc.
+})
+```
+
+### 設定工人令牌 {/* #set-the-worker-token */}
+
+在每個工作容器上，設定`MASTRA_WORKER_AUTH_TOKEN` to a token that the server's auth provider recognizes:
+
+```yaml title="docker-compose.yml"
+services:
+  api:
+    environment:
+      WORKER_TOKEN: ${WORKER_TOKEN}
+      # ... other env vars
+
+  orchestration-worker:
+    environment:
+      MASTRA_WORKER_AUTH_TOKEN: ${WORKER_TOKEN}
+      MASTRA_STEP_EXECUTION_URL: http://api:4111/api # Use HTTPS in production
+      # ... other env vars
+```
+
+```bash title=".env"
+WORKER_TOKEN=sk-worker-secret-token
+```
+
+這些範例使用`http://` for local development. In production, use HTTPS URLs and terminate TLS with a service mesh or ingress controller. See [Security recommendations](#security-recommendations).
+
+編排工作者讀取`MASTRA_WORKER_AUTH_TOKEN` and sends it as a `Bearer` token in the `Authorization` header on every step execution request.
+
+## 身份驗證憑證類型 {/* #auth-credential-types */}
+
+這`HttpRemoteStrategy` supports three credential formats. The default (`bearer`) covers most setups.
+
+### 不記名令牌 {/* #bearer-token */}
+
+放`MASTRA_WORKER_AUTH_TOKEN` and the strategy sends `Authorization: Bearer <token>`:
+
+```bash
+MASTRA_WORKER_AUTH_TOKEN=sk-worker-secret-token
+```
+
+### API 金鑰標頭 {/* #api-key-header */}
+
+將憑證發送為`x-worker-api-key` instead of `Authorization`:
+
+```typescript
+import { HttpRemoteStrategy } from '@mastra/core/worker'
+
+const strategy = new HttpRemoteStrategy({
+  serverUrl: 'http://api:4111/api', // Use HTTPS in production
+  auth: { type: 'api-key', key: process.env.WORKER_API_KEY! },
+})
+```
+
+您的伺服器的身份驗證Provider必須閱讀`x-worker-api-key` header to validate this credential.
+
+### 自訂標頭 {/* #custom-header */}
+
+使用任何標頭名稱和值：
+
+```typescript
+import { HttpRemoteStrategy } from '@mastra/core/worker'
+
+const strategy = new HttpRemoteStrategy({
+  serverUrl: 'http://api:4111/api', // Use HTTPS in production
+  auth: {
+    type: 'header',
+    name: 'X-Internal-Service-Key',
+    value: process.env.INTERNAL_KEY!,
+  },
+})
+```
+
+## 推播模式Agent程式驗證 {/* #push-mode-broker-auth */}
+
+當使用推送模式 PubSub（如 Google Cloud Pub/Sub）時，Agent程式將事件直接發佈到`/api/workflows/events` endpoint. The broker attaches its own credentials. For example, Google Cloud Pub/Sub sends a Google-signed OIDC token.
+
+`authenticateToken` callback must recognize whatever credential the broker sends. See your broker's documentation for the authentication scheme it uses.
+
+## 安全建議 {/* #security-recommendations */}
+
+* **為不同的工人類型使用不同的代幣。**&#x9019;使您可以撤銷對一名工作人員的存取權限，而不會影響其他工作人員。
+* **按計劃輪換令牌。**&#x66F4;新`WORKER_TOKEN` environment variable and restart the affected containers.
+* **在生產中使用 TLS。**&#x57;orker 到 API 的通訊應透過 HTTPS 進行，以保護傳輸中的令牌。這適用於所有環境，包括 Kubernetes 叢集和 Docker 網路。使用服務網格（例如 Istio、Linkerd）或 TLS 終止入口來加密內部流量。
+* **限製網路存取。**&#x6B65;驟執行和事件端點是內部的。如果可能，請使用網路策略或防火牆規則將它們遠離公共網路。
+
+## 有關的 {/* #related */}
+
+* [身份驗證概述](/docs/auth/overview)：可用的身份驗證Provider及其工作方式
+* [基於令牌的身份驗證](/docs/auth/simple-auth)：令牌到使用者的映射認證
+* [工人部署](/docs/deployment/workers)：設定分割工作進程
+* [工人參考](/reference/workers/overview)：所有工作線程類型的配置詳細信息
+* [CLI 參考](/reference/cli/mastra#mastra-worker-build): `mastra worker build` and `mastra worker start`

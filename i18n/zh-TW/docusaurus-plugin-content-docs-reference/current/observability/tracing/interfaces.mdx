@@ -1,6 +1,6 @@
 ---
-title: "參考：介面 | 可觀測性"
-description: Tracing 型別定義與介面
+title: "Reference: Interfaces | Observability"
+description: "Use Mastra tracing interfaces to type spans, attributes, exporters, samplers, propagation context, and observability event payloads."
 packages:
   - "@mastra/core"
 ---
@@ -13,12 +13,12 @@ import PropertiesTable from "@site/src/components/PropertiesTable";
 
 ### `ObservabilityInstance` {/* #observabilityinstance */}
 
-可觀測性的主要介面。
+可觀察性的主要介面。
 
 ```typescript
 interface ObservabilityInstance {
   /** Get current configuration */
-  getConfig(): Readonly<Required<ObservabilityInstanceConfig>>
+  getConfig(): Readonly<ObservabilityInstanceConfig>
 
   /** Get all exporters */
   getExporters(): readonly ObservabilityExporter[]
@@ -40,9 +40,25 @@ interface ObservabilityInstance {
 }
 ```
 
+### `BatchDeleteTracesArgs` {/* #batchdeletetracesargs */}
+
+論點`ObservabilityStorage.batchDeleteTraces()` from `@mastra/core/storage`。此方法刪除匹配的追蹤和跨度，然後級聯到由追蹤 ID 連結的指標、日誌、分數和回饋。沒有追蹤 ID 的訊號將被保留。該方法每次調用最多接受 1,000 個追蹤 ID 並返回`Promise<void>`.
+
+```typescript
+interface BatchDeleteTracesArgs {
+  traceIds: string[]
+  organizationId?: string
+  resourceId?: string
+}
+```
+
+什麼時候`organizationId` or `resourceId` is provided, only records matching the scope are deleted. ClickHouse vNext, PostgreSQL vNext, DuckDB, and the in-memory store support scoped deletion. Other storage adapters throw `OBSERVABILITY_STORAGE_BATCH_DELETE_TRACES_SCOPE_NOT_SUPPORTED` rather than applying an unscoped delete.
+
+對於 ClickHouse vNext，該方法記錄刪除謂詞並等待應用輕量級刪除掩碼，然後再解析。輕量級刪除是透過ClickHouse的僅隱藏`_row_exists` mask. Physical removal depends on merges and the retention TTLs you configure. Each request is marked applied once every delete succeeds; if a delete fails, the request stays unapplied and you retry by calling `batchDeleteTraces()` again. Mastra OSS has no background reconciler. See [ClickHouse trace deletion and retention](/integrations/databases/clickhouse#observability-with-vnext-recommended) and [ClickHouse native TTL](/reference/storage/retention#clickhouse-native-ttl).
+
 ### `SpanTypeMap` {/* #spantypemap */}
 
-Span 類型與其對應屬性介面的 mapping。
+Span 類型到其對應屬性介面的對應。下面的列表是縮寫的。這`SpanTypeMap` interface in `@mastra/core/observability` is the complete one.
 
 ```typescript
 interface SpanTypeMap {
@@ -50,11 +66,13 @@ interface SpanTypeMap {
   WORKFLOW_RUN: WorkflowRunAttributes
   MODEL_GENERATION: ModelGenerationAttributes
   MODEL_STEP: ModelStepAttributes
+  MODEL_INFERENCE: ModelInferenceAttributes
   MODEL_CHUNK: ModelChunkAttributes
   TOOL_CALL: ToolCallAttributes
   CLIENT_TOOL_CALL: ClientToolCallAttributes
   PROVIDER_TOOL_CALL: ProviderToolCallAttributes
   MCP_TOOL_CALL: MCPToolCallAttributes
+  MCP_SERVER_REQUEST: MCPServerRequestAttributes
   PROCESSOR_RUN: ProcessorRunAttributes
   WORKFLOW_STEP: WorkflowStepAttributes
   WORKFLOW_CONDITIONAL: WorkflowConditionalAttributes
@@ -63,15 +81,132 @@ interface SpanTypeMap {
   WORKFLOW_LOOP: WorkflowLoopAttributes
   WORKFLOW_SLEEP: WorkflowSleepAttributes
   WORKFLOW_WAIT_EVENT: WorkflowWaitEventAttributes
+  MEMORY_OPERATION: MemoryOperationAttributes
+  WORKSPACE_ACTION: WorkspaceActionAttributes
+  SKILL_ACTION: SkillActionAttributes
+  AGENT_SIGNAL: AgentSignalAttributes
+  SKILL_RESOLUTION: SkillResolutionAttributes
   GENERIC: AIBaseAttributes
 }
 ```
 
-此 mapping 定義建立或處理 span 時，每種 span 類型使用的屬性介面。
+此映射定義在建立或處理跨度時，每個跨度類型使用哪個屬性介面。
 
-### Span {/* #span */}
+### `SpanInputMap`和`SpanOutputMap` {/* #spaninputmap-and-spanoutputmap */}
 
-內部 tracing 使用的 Span 介面。
+跨度類型的映射`input` and `output` Mastra writes itself with a fixed shape. Every other span type keeps `any`: tool arguments and workflow data are caller-defined, `MODEL_CHUNK` carries several chunk shapes on one span type, and `GENERIC` is the escape hatch for custom spans.
+
+```typescript
+interface SpanInputMap {
+  AGENT_RUN: AgentRunInput
+  MODEL_GENERATION: ModelGenerationInput
+  MODEL_STEP: ModelStepInput
+  MODEL_INFERENCE: ModelStepInput
+}
+
+interface SpanOutputMap {
+  AGENT_RUN: AgentRunOutput
+  MODEL_GENERATION: ModelGenerationOutput
+  MODEL_STEP: ModelStepOutput
+  MODEL_INFERENCE: ModelStepResult
+}
+
+/** The mapped shape when the map lists the type, otherwise `any` */
+type SpanInput<TType extends SpanType> = TType extends keyof SpanInputMap
+  ? SpanInputMap[TType]
+  : any
+type SpanOutput<TType extends SpanType> = TType extends keyof SpanOutputMap
+  ? SpanOutputMap[TType]
+  : any
+```
+
+按其類型縮小跨距以讀取鍵入的有效負載。在儲存的`SpanRecord`, use `isSpanRecordOfType`:
+
+```typescript
+import { SpanType, isSpanRecordOfType } from '@mastra/core/observability'
+
+if (isSpanRecordOfType(span, SpanType.MODEL_GENERATION)) {
+  span.input?.messages // MessageListInput
+  span.attributes?.usage // UsageStats | undefined
+}
+```
+
+若要選擇渲染器而不親自檢查形狀，請描述有效負載。該標籤在讀取時派生自`spanType` and the value's shape. Nothing is stored.
+
+```typescript
+import {
+  describeSpanError,
+  describeSpanInput,
+  describeSpanOutput,
+} from '@mastra/core/observability'
+
+const input = describeSpanInput(span)
+// { type: 'text' | 'messages' | 'agent-run-resume' | 'processor' | 'json'; value } | undefined
+
+const output = describeSpanOutput(span)
+// { type: 'interrupted' | 'agent-run-result' | 'model-generation-result' | 'model-step-result' | 'processor' | 'text' | 'json'; value } | undefined
+
+switch (output?.type) {
+  case 'interrupted':
+    return output.value.status // 'suspended' | 'aborted'
+  case 'model-generation-result':
+    return output.value.text
+}
+
+describeSpanError(span) // SpanErrorInfo | undefined
+```
+
+### 處理器跨度 {/* #processor-spans */}
+
+處理器跨度記錄了哪個管道階段產生了它。讀者縮小了範圍
+有效載荷在該相上而不是在有效載荷的形狀上。記錄的相位更精細
+比處理器聲明的要多：`outputStream` and `outputResult` are separate
+here, because they record different payloads.
+
+```typescript
+import { describeProcessorPipeline, describeSpanOutput } from '@mastra/core/observability'
+
+const output = describeSpanOutput(span)
+
+if (output?.type === 'processor') {
+  output.value.phase // 'input' | 'inputStep' | 'llmRequest' | 'llmResponse'
+  // | 'outputStream' | 'outputResult' | 'outputStep' | 'toolResult' | 'requestError'
+  output.value.phaseLabel // 'Tool result'
+  if (output.value.phase === 'outputStream') {
+    output.value.data.totalChunks // number
+  }
+}
+```
+
+`describeProcessorPipeline`讀取 Mastra 擁有的屬性並保留其他所有內容
+分開，這樣讀者就可以顯示已知字段，而無需在原始 JSON 旁邊重複它們
+查看：
+
+```typescript
+const pipeline = describeProcessorPipeline(span)
+
+pipeline?.executor // 'workflow' | 'legacy'
+pipeline?.processorIndex // position in the chain
+pipeline?.hookDurationMs // time spent inside the processor hook
+pipeline?.messageListMutations // 'add' | 'addSystem' | 'removeByIds' | 'clear'
+pipeline?.tripwireAbort?.reason // why the processor blocked the run
+pipeline?.rest // attributes this description does not explain
+```
+
+`PROCESSOR_RUN`缺席於`SpanInputMap` and `SpanOutputMap` on purpose: three
+executors emit processor spans and record different shapes. The payload is narrowed at
+read time instead, by the phase the span recorded, and narrowing on `phase` narrows
+`data` to that phase alone.
+
+`describeSpanInput`和`describeSpanOutput` return the JSON fallback for a span with
+no recorded phase, one written by a newer version with a phase this release doesn't
+know, or an empty payload. `describeProcessorPipeline` returns `undefined` when the
+phase is missing or unknown, and still describes the pipeline when the payload is
+empty. The stored payload and the JSON view remain unchanged.
+
+### 跨距 {/* #span */}
+
+Span接口，內部用於追蹤。
 
 ```typescript
 interface Span<TType extends SpanType> {
@@ -79,6 +214,11 @@ interface Span<TType extends SpanType> {
   readonly traceId: string
   readonly type: TType
   readonly name: string
+
+  /** Entity that created the span */
+  entityType?: EntityType
+  entityId?: string
+  entityName?: string
 
   /** Is an internal span? (spans internal to the operation of mastra) */
   isInternal: boolean
@@ -91,12 +231,15 @@ interface Span<TType extends SpanType> {
 
   attributes?: SpanTypeMap[TType]
   metadata?: Record<string, any>
-  input?: any
-  output?: any
+  input?: SpanInput<TType>
+  output?: SpanOutput<TType>
   errorInfo?: any
 
   /** Tags for categorizing traces (only present on root spans) */
   tags?: string[]
+
+  /** Spans in other traces this span is related to */
+  links?: SpanLink[]
 
   /** End the span */
   end(options?: EndSpanOptions<TType>): void
@@ -127,7 +270,7 @@ interface Span<TType extends SpanType> {
 
 ### `ObservabilityExporter` {/* #observabilityexporter */}
 
-可觀測性 exporter 的介面。
+Observability導出器的介面。
 
 ```typescript
 interface ObservabilityExporter {
@@ -188,21 +331,19 @@ interface ObservabilityExporter {
 }
 ```
 
-事件 callback payload 使用可觀測性 event bus envelope：
-`TracingEvent` 以 `exportedSpan` 攜帶 span 生命週期事件，`LogEvent`
-以 `log` 包裝 `ExportedLog`，`MetricEvent` 以 `metric` 包裝
-`ExportedMetric`，`ScoreEvent` 以 `score` 包裝 `ExportedScore`，而
-`FeedbackEvent` 以 `feedback` 包裝 `ExportedFeedback`。如需這些 callback 的
-Mastra platform exporter 行為，請參閱 [MastraPlatformExporter](/reference/observability/tracing/exporters/mastra-platform-exporter)。
+事件回調有效負載使用可觀察性事件匯流排信封：`TracingEvent` carries span lifecycle events with `exportedSpan`, `LogEvent`
+wraps `ExportedLog` in `log`, `MetricEvent` wraps `ExportedMetric` in
+`metric`, `ScoreEvent` wraps `ExportedScore` in `score`, and `FeedbackEvent`包裹`ExportedFeedback`在`feedback`。對於 Mastra 平台出口商的這些行為
+回調，參見[Mastra平台出口商](/reference/observability/tracing/exporters/mastra-platform-exporter).
 
-與 `LogEvent`、`MetricEvent` 及 `FeedbackEvent` 相同，`ScoreEvent` 是
-包裝有界 payload 的可觀測性 bus envelope。對分數而言，該 payload
-為 `ExportedScore`。
+喜歡`LogEvent`, `MetricEvent`, and `FeedbackEvent`, `ScoreEvent` is an
+observability bus envelope that wraps a bounded payload. For scores, that
+payload is `ExportedScore`.
 
 ### `ScoreEvent` {/* #scoreevent */}
 
-分數事件會透過 `onScoreEvent` 傳送至 exporter。此事件是一個包含
-signal 類型與分數 payload 的小型 envelope：
+得分事件透過以下方式傳送給匯出商：`onScoreEvent`. The event is a small
+envelope with the signal type and the score payload:
 
 ```typescript
 interface ScoreEvent {
@@ -213,26 +354,25 @@ interface ScoreEvent {
 
 <PropertiesTable
   props={[
-  {
-    name: 'type',
-    type: "'score'",
-    description: '將此可觀測性 bus 事件識別為分數 signal。',
-    required: true,
-  },
-  {
-    name: 'score',
-    type: 'ExportedScore',
-    description: 'Exporter 收到的分數 payload。',
-    required: true,
-  },
+{
+  name: 'type',
+  type: "'score'",
+  description: 'Identifies this observability bus event as a score signal.',
+  required: true,
+},
+{
+  name: 'score',
+  type: 'ExportedScore',
+  description: 'The score payload received by exporters.',
+  required: true,
+},
 ]}
 />
 
 ### `ExportedScore` {/* #exportedscore */}
 
-`ExportedScore` 是 exporter 在 `ScoreEvent.score` 內收到的有界 payload。
-其中包含分數識別資訊、目標 trace 或 span 定位依據、scorer 詳細資料、值、
-選用說明與關聯 metadata。
+`ExportedScore`是導出器在內部接收的有限有效負載`ScoreEvent.score`. It contains the score identity, target trace or span anchor,
+scorer details, value, optional explanation, and correlation metadata.
 
 ```typescript
 interface ExportedScore {
@@ -257,117 +397,120 @@ interface ExportedScore {
 
 <PropertiesTable
   props={[
-  {
-    name: 'scoreId',
-    type: 'string',
-    description: '此分數事件的唯一識別碼，會在產生事件時建立。',
-    required: true,
-  },
-  {
-    name: 'timestamp',
-    type: 'Date',
-    description: '記錄分數的時間。Exporter 會收到 Date 物件，該物件透過 JSON 序列化為 ISO 8601 字串。',
-    required: true,
-  },
-  {
-    name: 'traceId',
-    type: 'string',
-    description: '可用時，作為評分目標定位依據的 trace。',
-  },
-  {
-    name: 'spanId',
-    type: 'string',
-    description: '當分數針對特定 span 時的 span 定位依據。',
-  },
-  {
-    name: 'scorerId',
-    type: 'string',
-    description: '穩定的 scorer 識別碼，例如 slug 或 registry key。',
-    required: true,
-  },
-  {
-    name: 'scorerName',
-    type: 'string',
-    description: 'Scorer 的人類可讀顯示名稱。',
-  },
-  {
-    name: 'scorerVersion',
-    type: 'string',
-    description: '自由格式的 scorer 版本字串。',
-  },
-  {
-    name: 'source',
-    type: 'string',
-    description: '已淘汰的相容性欄位。新 exporter 請使用 scoreSource。',
-  },
-  {
-    name: 'scoreSource',
-    type: 'string',
-    description: '用於識別分數產生方式的自由格式字串。常見值包括 manual、automated 與 experiment。',
-  },
-  {
-    name: 'score',
-    type: 'number',
-    description: '數值型分數。範圍取決於 scorer。',
-    required: true,
-  },
-  {
-    name: 'reason',
-    type: 'string',
-    description: '分數的人類可讀說明。',
-  },
-  {
-    name: 'experimentId',
-    type: 'string',
-    description: '已淘汰的相容性欄位。若有 correlationContext.experimentId，請使用該欄位。',
-  },
-  {
-    name: 'scoreTraceId',
-    type: 'string',
-    description: '評分 run 本身的 Trace ID，適合用於偵錯分數生成。',
-  },
-  {
-    name: 'targetEntityType',
-    type: 'EntityType',
-    description: '已知時，scorer 所評估的 Mastra 可觀測性實體類型。',
-  },
-  {
-    name: 'correlationContext',
-    type: 'CorrelationContext',
-    description: '實體階層、執行、部署與實驗 metadata 的標準關聯 context。',
-  },
-  {
-    name: 'metadata',
-    type: 'Record<string, unknown>',
-    description:
-      '從已評分 span 或 trace 繼承的使用者自訂 metadata，並與分數專屬 metadata 合併。Key 衝突時，分數專屬 key 會覆寫繼承的 key。',
-  },
+{
+  name: 'scoreId',
+  type: 'string',
+  description: 'Unique identifier for this score event, generated at emission time.',
+  required: true,
+},
+{
+  name: 'timestamp',
+  type: 'Date',
+  description:
+    'When the score was recorded. Exporters receive a Date object, which serializes to an ISO 8601 string through JSON.',
+  required: true,
+},
+{
+  name: 'traceId',
+  type: 'string',
+  description: 'Trace that anchors the scored target when available.',
+},
+{
+  name: 'spanId',
+  type: 'string',
+  description: 'Span anchor when the score is about a specific span.',
+},
+{
+  name: 'scorerId',
+  type: 'string',
+  description: 'Stable scorer identifier, such as a slug or registry key.',
+  required: true,
+},
+{
+  name: 'scorerName',
+  type: 'string',
+  description: 'Human-readable display name of the scorer.',
+},
+{
+  name: 'scorerVersion',
+  type: 'string',
+  description: 'Free-form scorer version string.',
+},
+{
+  name: 'source',
+  type: 'string',
+  description: 'Deprecated compatibility field. Use scoreSource for new exporters.',
+},
+{
+  name: 'scoreSource',
+  type: 'string',
+  description:
+    'Free-form string identifier for how the score was produced. Common values include manual, automated, and experiment.',
+},
+{
+  name: 'score',
+  type: 'number',
+  description: 'Numeric score value. Range depends on the scorer.',
+  required: true,
+},
+{
+  name: 'reason',
+  type: 'string',
+  description: 'Human-readable explanation of the score.',
+},
+{
+  name: 'experimentId',
+  type: 'string',
+  description: 'Deprecated compatibility field. Use correlationContext.experimentId when present.',
+},
+{
+  name: 'scoreTraceId',
+  type: 'string',
+  description: 'Trace ID of the scoring run itself, useful for debugging score generation.',
+},
+{
+  name: 'targetEntityType',
+  type: 'EntityType',
+  description: 'Mastra observability entity type the scorer evaluated when known.',
+},
+{
+  name: 'correlationContext',
+  type: 'CorrelationContext',
+  description: 'Canonical correlation context for entity hierarchy, execution, deployment, and experiment metadata.',
+},
+{
+  name: 'metadata',
+  type: 'Record<string, unknown>',
+  description:
+    'User-defined metadata inherited from the scored span or trace and merged with score-specific metadata. Score-specific keys override inherited keys on collision.',
+},
 ]}
 />
 
-`traceId` 與 `spanId` 用於識別被評分的 trace 或 span。當該 scorer 經過
-tracing 時，`scoreTraceId` 會識別評分 run 本身的 trace。對新的 exporter，
-請優先使用 `scoreSource`，而非已淘汰的 `source` 欄位；並優先使用
-`correlationContext.experimentId`，而非已淘汰的頂層 `experimentId` 欄位。
+`traceId`和`spanId` identify the trace or span being scored. `scoreTraceId`
+identifies the trace of the scoring run itself when that scorer was traced. For
+new exporters, prefer `scoreSource` over the deprecated `source` field, and
+prefer `correlationContext.experimentId` over the deprecated top-level
+`experimentId` field.
 
-`EntityType` 是 Mastra 的可觀測性實體 enum。目前的值包括
-`agent`, `scorer`, `rag_ingestion`, `trajectory`, `input_processor`,
+`EntityType`是 Mastra 的可觀察性實體枚舉。目前值包括`agent`, `scorer`, `rag_ingestion`, `trajectory`, `input_processor`,
 `input_step_processor`, `output_processor`, `output_step_processor`,
-`workflow_step`、`tool`、`workflow_run` 與 `memory`。
+`workflow_step`, `tool`, `workflow_run`, and `memory`.
 
-`CorrelationContext` 是附加至可觀測性 signal 的共用 context 快照。
-它可攜帶實體階層欄位、使用者或組織識別碼、run、session、thread、request、
-環境、來源、服務名稱、實驗與標籤。對評分目標，請優先使用
-`ExportedScore` 上的頂層 `traceId` 與 `spanId` 欄位。
+`CorrelationContext`是附加到可觀察性的共享上下文快照
+信號。它可以攜帶實體層次結構欄位、使用者或組織標識符，
+運行、會話、執行緒、請求、環境、來源、服務名稱、實驗、
+和標籤。更喜歡頂級的`traceId` and `spanId` fields on
+`ExportedScore` for the scored target.
 
 ### `ObservabilityDropEvent` {/* #observabilitydropevent */}
 
-Exporter pipeline 捨棄可觀測性事件時產生的結構化事件。
+當導出器管道刪除可觀察性事件時發出結構化事件。
 
 ```typescript
 type ObservabilityDropSignal = 'tracing' | 'log' | 'metric' | 'score' | 'feedback'
 
-type ObservabilityDropReason = 'unsupported-storage' | 'retry-exhausted'
+type ObservabilityDropReason = 'unsupported-storage' | 'retry-exhausted' | 'span-not-updatable'
 
 interface ObservabilityDropEvent {
   type: 'drop'
@@ -385,18 +528,20 @@ interface ObservabilityDropEvent {
 }
 ```
 
-在自訂 exporter 或 bridge 上使用 `onDroppedEvent`，將這些事件轉送至外部指標或 alert 系統。
+使用`onDroppedEvent` on a custom exporter or bridge to forward these events to external metrics or alerting systems.
 
 ### `SpanOutputProcessor` {/* #spanoutputprocessor */}
 
-Span 輸出 processor 的介面。
+跨度輸出處理器的介面。
+
+`process()`必須改變它接收到的範圍並傳回相同的實例，或傳回`undefined` to drop the span. A copy of the span (for example `{ ...span }`) can't be exported because `exportSpan()` and `isValid` are instance members of the live span; if a processor returns one, Mastra logs a processor error and drops the span.
 
 ```typescript
 interface SpanOutputProcessor {
   /** Processor name */
   name: string
 
-  /** Process span before export */
+  /** Process span before export. Mutate in place and return the same span, or return undefined to drop it. */
   process(span?: AnySpan): AnySpan | undefined
 
   /** Shutdown processor */
@@ -404,11 +549,11 @@ interface SpanOutputProcessor {
 }
 ```
 
-## Span 類型 {/* #span-types */}
+## 跨度類型 {/* #span-types */}
 
 ### `SpanType` {/* #spantype */}
 
-AI 專屬 span 類型及其相關 metadata。
+AI 特定的跨度類型及其關聯的元資料。下面的列表是縮寫的。這`SpanType` enum in `@mastra/core/observability` is the complete one.
 
 ```typescript
 enum SpanType {
@@ -424,14 +569,45 @@ enum SpanType {
   /** Single model execution step within a generation (one API call) */
   MODEL_STEP = 'model_step',
 
+  /** Model provider call within a step - wraps only the inference, excluding processors and tool executions */
+  MODEL_INFERENCE = 'model_inference',
+
   /** Individual model streaming chunk/event */
   MODEL_CHUNK = 'model_chunk',
 
   /** MCP (Model Context Protocol) tool execution */
   MCP_TOOL_CALL = 'mcp_tool_call',
 
-  /** Input or Output Processor execution */
+  /** A request served by a Mastra MCPServer (the server side of an MCP edge) */
+  MCP_SERVER_REQUEST = 'mcp_server_request',
+
+  /**
+   * Processor execution. This is the default; a processor can declare a
+   * different span type so its span names the subsystem it belongs to.
+   * See `Processor.spanType`.
+   */
   PROCESSOR_RUN = 'processor_run',
+
+  /** Memory read or write, including the observational memory model passes */
+  MEMORY_OPERATION = 'memory_operation',
+
+  /** Workspace filesystem, sandbox, search, or mount operation */
+  WORKSPACE_ACTION = 'workspace_action',
+
+  /** Skill lifecycle operation: resolve, inject, activate, search, or read */
+  SKILL_ACTION = 'skill_action',
+
+  /**
+   * An agent state signal entering the model's context. Recorded as an event
+   * span, so it has a start time and no duration.
+   */
+  AGENT_SIGNAL = 'agent_signal',
+
+  /**
+   * @deprecated Use `SKILL_ACTION` with `operation: 'resolve'`. No longer
+   * emitted; retained so stored traces keep resolving.
+   */
+  SKILL_RESOLUTION = 'skill_resolution',
 
   /** Function/tool execution with inputs, outputs, errors */
   TOOL_CALL = 'tool_call',
@@ -486,22 +662,22 @@ enum SpanType {
 
 ### `AnySpan` {/* #anyspan */}
 
-需要處理任意 span 時使用的 union 型別。
+需要處理任何跨度的情況的聯合類型。
 
 ```typescript
 type AnySpan = Span<keyof SpanTypeMap>
 ```
 
-## Span 屬性 {/* #span-attributes */}
+## 跨度屬性 {/* #span-attributes */}
 
 ### `AgentRunAttributes` {/* #agentrunattributes */}
 
-Agent Run 屬性。
+Agent運行屬性。
 
 ```typescript
 interface AgentRunAttributes {
-  /** Agent identifier */
-  agentId: string
+  /** Conversation/thread/session identifier for multi-turn interactions */
+  conversationId?: string
 
   /** Agent Instructions */
   instructions?: string
@@ -514,12 +690,28 @@ interface AgentRunAttributes {
 
   /** Maximum steps allowed */
   maxSteps?: number
+
+  /**
+   * Model the run was configured with, resolved at run preparation (call-time
+   * override, then agent config). The first enabled candidate of a fallback list.
+   * Never updated by later steps; see MODEL_STEP `model` for what each step ran.
+   */
+  model?: string
+
+  /** Provider of `model`, taken from the same model object */
+  provider?: string
+
+  /** When the run's model streamed its first chunk, copied from the agent's own first generation */
+  completionStartTime?: Date
+
+  /** Time to first token of the model inference that streamed the run's first chunk, copied the same way */
+  timeToFirstTokenMs?: number
 }
 ```
 
 ### `ModelGenerationAttributes` {/* #modelgenerationattributes */}
 
-Model Generation 屬性。
+模型生成屬性。
 
 ```typescript
 interface ModelGenerationAttributes {
@@ -532,8 +724,8 @@ interface ModelGenerationAttributes {
   /**
    * Definitions of the tools made available to the model for this generation
    * (name, description, and JSON-schema parameters), captured once per
-   * generation. Per-step tool names live on MODEL_INFERENCE spans as
-   * `availableTools`.
+   * generation. The definitions sent on each provider call live on
+   * MODEL_INFERENCE spans as `tools`.
    */
   tools?: ModelToolDefinition[]
 
@@ -541,13 +733,7 @@ interface ModelGenerationAttributes {
   resultType?: 'tool_selection' | 'response_generation' | 'reasoning' | 'planning'
 
   /** Token usage statistics */
-  usage?: {
-    promptTokens?: number
-    completionTokens?: number
-    totalTokens?: number
-    promptCacheHitTokens?: number
-    promptCacheMissTokens?: number
-  }
+  usage?: UsageStats
 
   /** Model parameters */
   parameters?: {
@@ -565,6 +751,12 @@ interface ModelGenerationAttributes {
   /** Whether this was a streaming response */
   streaming?: boolean
 
+  /** When the generation's first inference streamed its first chunk */
+  completionStartTime?: Date
+
+  /** Time to first token of the model inference that streamed the generation's first chunk */
+  timeToFirstTokenMs?: number
+
   /** Reason the generation finished */
   finishReason?: string
 }
@@ -572,7 +764,7 @@ interface ModelGenerationAttributes {
 
 ### `ModelToolDefinition` {/* #modeltooldefinition */}
 
-提供給模型之單一 Tool 的序列化定義，會附加至 `MODEL_GENERATION` span，讓可觀測性 exporter 能呈現 Tool schema。
+可供模型使用的一種Tool的序列化定義，附於`MODEL_GENERATION` spans so observability exporters can surface tool schemas.
 
 ```typescript
 interface ModelToolDefinition {
@@ -593,12 +785,22 @@ interface ModelToolDefinition {
 
 ### `ModelStepAttributes` {/* #modelstepattributes */}
 
-Model Step 屬性，用於 generation 內的單次模型執行。
+模型步驟屬性 - 用於一代內的單一模型執行。
 
 ```typescript
 interface ModelStepAttributes {
   /** Index of this step in the generation (0, 1, 2, ...) */
   stepIndex?: number
+
+  /**
+   * Model actually invoked for this step, after per-step overrides (input
+   * processors, fallback). Recorded at invocation, so a failed provider call
+   * still carries it. Absent when no model was invoked, e.g. a cached response.
+   */
+  model?: string
+
+  /** Provider of `model`, taken from the same model object */
+  provider?: string
 
   /** Token usage statistics */
   usage?: UsageStats
@@ -611,12 +813,81 @@ interface ModelStepAttributes {
 
   /** Result warnings */
   warnings?: Record<string, any>
+
+  /** When the step's first inference streamed its first chunk */
+  completionStartTime?: Date
+
+  /** Time to first token of the model inference that streamed the step's first chunk */
+  timeToFirstTokenMs?: number
+}
+```
+
+### `ModelInferenceAttributes` {/* #modelinferenceattributes */}
+
+模型推理屬性 - 用於在一個步驟內對模型Provider的單一呼叫。此跨度僅涵蓋Provider調用，因此不包括處理器或Tool執行。
+
+```typescript
+interface ModelInferenceAttributes {
+  /** Model name (e.g., 'gpt-5.4', 'claude-opus-4-6') */
+  model?: string
+
+  /** Model provider (e.g., 'openai', 'anthropic') */
+  provider?: string
+
+  /** Index of the parent step in the generation (0, 1, 2, ...) */
+  stepIndex?: number
+
+  /** Token usage statistics */
+  usage?: UsageStats
+
+  /** Reason this inference finished (stop, tool-calls, length, etc.) */
+  finishReason?: string
+
+  /** Whether this was a streaming response */
+  streaming?: boolean
+
+  /** When the first token/chunk of the completion was received */
+  completionStartTime?: Date
+
+  /** Milliseconds from the start of the model inference that streamed the first chunk to that chunk */
+  timeToFirstTokenMs?: number
+
+  /** Result warnings */
+  warnings?: Record<string, any>
+
+  /** Actual model used in the response (may differ from request model) */
+  responseModel?: string
+
+  /** Unique identifier for the response */
+  responseId?: string
+
+  /** Model parameters sent on the request (temperature, maxOutputTokens, topP, etc.) */
+  parameters?: Record<string, unknown>
+
+  /** Provider-specific options forwarded on the request */
+  providerOptions?: Record<string, unknown>
+
+  /** Names of tools made available to the model on this inference call */
+  availableTools?: string[]
+
+  /**
+   * Definitions of the tools sent to the provider on this inference call
+   * (name, description, and JSON-schema parameters), after per-step changes
+   * from processors, `prepareStep`, `activeTools`, and `toolChoice`.
+   */
+  tools?: ModelToolDefinition[]
+
+  /** How the model was instructed to choose tools */
+  toolChoice?: 'auto' | 'none' | 'required' | { type: 'tool'; toolName: string }
+
+  /** Requested response format */
+  responseFormat?: 'text' | 'json' | 'json_schema' | { type: string; name?: string }
 }
 ```
 
 ### `ModelChunkAttributes` {/* #modelchunkattributes */}
 
-Model Chunk 屬性，用於個別串流 chunk／事件。
+模型塊屬性 - 用於單一流塊/事件。
 
 ```typescript
 interface ModelChunkAttributes {
@@ -630,7 +901,7 @@ interface ModelChunkAttributes {
 
 ### `ToolCallAttributes` {/* #toolcallattributes */}
 
-Tool Call 屬性。
+Tool調用屬性。
 
 ```typescript
 interface ToolCallAttributes {
@@ -639,12 +910,14 @@ interface ToolCallAttributes {
   toolDescription?: string
   toolCallId?: string
   success?: boolean
+  /** True when a dataset experiment tool mock intercepted the call (served, mismatched, exhausted or denied) and the tool never ran */
+  mocked?: boolean
 }
 ```
 
-### MCPToolCallAttributes {/* #mcptoolcallattributes */}
+### MCPToolCall屬性 {/* #mcptoolcallattributes */}
 
-MCP Tool Call 屬性。
+MCP Tool呼叫屬性。
 
 ```typescript
 interface MCPToolCallAttributes {
@@ -667,32 +940,87 @@ interface MCPToolCallAttributes {
 }
 ```
 
+### `MCPServerRequestAttributes` {/* #mcpserverrequestattributes */}
+
+Mastra 服務的請求的屬性`MCPServer`.
+
+```typescript
+interface MCPServerRequestAttributes {
+  /** MCP method served, e.g. 'tools/call', 'resources/list', 'prompts/get' */
+  mcpMethod: string
+
+  /** Name or URI of the tool, prompt, or resource requested. Absent on list-style calls. */
+  targetName?: string
+
+  /** Configured MCPServer name */
+  mcpServer: string
+
+  /** Configured MCPServer version */
+  serverVersion?: string
+
+  /** Negotiated MCP protocol revision for this request */
+  mcpProtocolVersion?: string
+
+  /** Client implementation name, when the client reported one */
+  clientName?: string
+
+  /** Client implementation version, when the client reported one */
+  clientVersion?: string
+
+  /** W3C `traceparent` the caller sent, when it parses */
+  callerTraceparent?: string
+
+  /** W3C `tracestate` the caller sent with a valid `traceparent`, capped at 512 characters */
+  callerTracestate?: string
+}
+```
+
 ### `ProcessorRunAttributes` {/* #processorrunattributes */}
 
-Processor 屬性。
+處理器屬性。
 
 ```typescript
 interface ProcessorRunAttributes {
-  /** Name of the Processor */
-  processorName: string
-
-  /** Processor type (input or output) */
-  processorType: 'input' | 'output'
+  /** Processor executor type (workflow or legacy) */
+  processorExecutor?: 'workflow' | 'legacy'
 
   /** Processor index in the agent */
   processorIndex?: number
+
+  /**
+   * Milliseconds spent inside `processOutputStream`, summed across every
+   * chunk. Only set on output stream processor spans. The span's own duration
+   * covers its step, from the first chunk to the step's end with model latency
+   * and tool calls included, so this is what separates a slow processor from
+   * the rest of the step.
+   */
+  hookDurationMs?: number
+
+  /** MessageList mutations performed by this processor */
+  messageListMutations?: Array<{
+    type: 'add' | 'addSystem' | 'removeByIds' | 'clear'
+    source?: string
+    count?: number
+    ids?: string[]
+    text?: string
+    tag?: string
+  }>
+
+  /** Tripwire abort details when a processor triggered a tripwire */
+  tripwireAbort?: {
+    reason?: string
+    retry?: boolean
+    metadata?: unknown
+  }
 }
 ```
 
 ### `WorkflowRunAttributes` {/* #workflowrunattributes */}
 
-Workflow Run 屬性。
+Workflow運行屬性。
 
 ```typescript
 interface WorkflowRunAttributes {
-  /** Workflow identifier */
-  workflowId: string
-
   /** Workflow status */
   status?: WorkflowRunStatus
 }
@@ -700,23 +1028,180 @@ interface WorkflowRunAttributes {
 
 ### `WorkflowStepAttributes` {/* #workflowstepattributes */}
 
-Workflow Step 屬性。
+Workflow步驟屬性。
 
 ```typescript
 interface WorkflowStepAttributes {
-  /** Step identifier */
-  stepId: string
-
   /** Step status */
   status?: WorkflowStepStatus
+
+  /** Authored graph entry description */
+  entryDescription?: string
+
+  /** Authored graph entry metadata */
+  entryMetadata?: Record<string, any>
 }
 ```
 
-## 選項型別 {/* #options-types */}
+`AgentRunAttributes`, `WorkflowRunAttributes`, and `WorkflowStepAttributes` don't include agent or workflow identifiers. Read them from the span's `entityType`, `entityId`, and `entityName` fields. On a `WORKFLOW_STEP` span, `entityId` is the step ID, and `entityName` is inherited from the enclosing workflow. To get the workflow ID, read `entityId` from the enclosing `WORKFLOW_RUN` span. If `excludeSpanTypes` excludes `WORKFLOW_RUN` spans, the step inherits `entityName` from the nearest ancestor that isn’t excluded instead. That ancestor can be an agent span, or there can be none, so `entityName` doesn’t reliably name the workflow in that case.
+
+### `UsageStats` {/* #usagestats */}
+
+模型跨度上記錄的令牌使用情況。
+
+```typescript
+interface UsageStats {
+  /** Total input tokens (sum of all input details) */
+  inputTokens?: number
+
+  /** Total output tokens (sum of all output details) */
+  outputTokens?: number
+
+  /** Detailed breakdown of input token usage */
+  inputDetails?: {
+    text?: number
+    cacheRead?: number
+    cacheWrite?: number
+    cacheWrite5m?: number
+    cacheWrite1h?: number
+    audio?: number
+    image?: number
+  }
+
+  /** Detailed breakdown of output token usage */
+  outputDetails?: {
+    text?: number
+    reasoning?: number
+    audio?: number
+    image?: number
+  }
+}
+```
+
+## 跨距有效載荷 {/* #span-payloads */}
+
+### `AgentRunInput` {/* #agentruninput */}
+
+輸入記錄於`AGENT_RUN` spans: the messages the caller passed for a fresh run, or the resume data for a resumed run.
+
+```typescript
+type AgentRunInput = MessageListInput | { messages: MessageListInput } | AgentRunResumeInput
+
+interface AgentRunResumeInput {
+  /** Resume data, kept nested when it names a different tool than the suspended one */
+  resumeData?: unknown
+  /** Tool the run resumes into */
+  toolName?: string
+  /** Tool call the run resumes into */
+  toolCallId?: string
+  [key: string]: unknown
+}
+```
+
+### `AgentRunOutput` {/* #agentrunoutput */}
+
+輸出記錄於`AGENT_RUN` spans.
+
+```typescript
+type AgentRunOutput = AgentRunResult | InterruptedSpanOutput
+
+interface AgentRunResult {
+  /** Final response text */
+  text?: string
+  /** Final structured output */
+  object?: unknown
+  /** Generated files */
+  files?: unknown[]
+  /** Tripwire that aborted the run */
+  tripwire?: StepTripwireData
+}
+```
+
+### `ModelGenerationInput` {/* #modelgenerationinput */}
+
+輸入記錄於`MODEL_GENERATION` spans.
+
+Mastra 自己的循環記錄規範化模型訊息，首先是系統訊息。 SDKAgent程式記錄呼叫者傳遞的原始訊息，因此`messages` keeps the full `MessageListInput` shape.
+
+```typescript
+interface ModelGenerationInput {
+  /** Messages sent to the model */
+  messages: MessageListInput
+  /** Output schema, when structured output was requested */
+  schema?: unknown
+}
+```
+
+### `ModelGenerationOutput` {/* #modelgenerationoutput */}
+
+輸出記錄於`MODEL_GENERATION` spans: a `ModelGenerationResult` when the generation finishes, or an `InterruptedSpanOutput` when the run stops first. Every field of `ModelGenerationResult` is optional: a durable run records only `text`.
+
+```typescript
+type ModelGenerationOutput = ModelGenerationResult | InterruptedSpanOutput
+
+interface ModelGenerationResult {
+  text?: string
+  object?: unknown
+  reasoning?: unknown
+  reasoningText?: string
+  files?: unknown[]
+  sources?: unknown[]
+  toolCalls?: unknown[]
+  warnings?: unknown[]
+}
+```
+
+### `ModelStepInput` {/* #modelstepinput */}
+
+輸入記錄於`MODEL_STEP` and `MODEL_INFERENCE` spans: a shallow preview of what the step sent to the model.
+
+```typescript
+type ModelStepInput = ModelStepMessage[] | Record<string, unknown> | string
+
+interface ModelStepMessage {
+  /** Message role (e.g., 'system', 'user', 'assistant', 'tool') */
+  role: string
+  /** Message text, with non-text parts summarized */
+  content: string
+}
+```
+
+### `ModelStepOutput` {/* #modelstepoutput */}
+
+輸出記錄於`MODEL_STEP` spans. A finished step records a `ModelStepResult`, which is the step output without `usage` (that lives on the attributes). A step cut short by a suspension or an abort records an `InterruptedSpanOutput` instead. `MODEL_INFERENCE` spans always record a `ModelStepResult`.
+
+```typescript
+type ModelStepOutput = ModelStepResult | InterruptedSpanOutput
+
+interface ModelStepResult {
+  text?: string
+  toolCalls?: unknown[]
+  steps?: unknown[]
+  object?: unknown
+}
+```
+
+### `InterruptedSpanOutput` {/* #interruptedspanoutput */}
+
+輸出記錄於`AGENT_RUN`, `MODEL_GENERATION` and `MODEL_STEP` spans when the run stops before the span's own result exists: a durable run suspended, the caller aborted, or the process running a durable run stopped and the run was recovered elsewhere. `MODEL_INFERENCE` spans never carry it.
+
+```typescript
+interface InterruptedSpanOutput {
+  status: 'suspended' | 'aborted' | 'interrupted'
+  /** Why the run stopped */
+  reason?: string
+  /** Tool that suspended the run */
+  toolName?: string
+  /** Tool call that suspended the run */
+  toolCallId?: string
+}
+```
+
+## 選擇權類型 {/* #options-types */}
 
 ### `StartSpanOptions` {/* #startspanoptions */}
 
-啟動新 span 的選項。
+用於啟動新跨度的選項。
 
 ```typescript
 interface StartSpanOptions<TType extends SpanType> {
@@ -733,7 +1218,7 @@ interface StartSpanOptions<TType extends SpanType> {
   metadata?: Record<string, any>
 
   /** Input data */
-  input?: any
+  input?: SpanInput<TType>
 
   /** Parent span */
   parent?: AnySpan
@@ -743,12 +1228,29 @@ interface StartSpanOptions<TType extends SpanType> {
 
   /** Options passed when using a custom sampler strategy */
   customSamplerOptions?: CustomSamplerOptions
+
+  /** Spans in other traces this span is related to. Links with invalid IDs are ignored. */
+  links?: SpanLink[]
+}
+```
+
+### `SpanLink` {/* #spanlink */}
+
+對另一個追蹤中的跨度的引用，例如呼叫者的跨度`MCPServer` serves a request. Unlike a parent, a link doesn't put the two spans in the same trace.
+
+```typescript
+interface SpanLink {
+  /** Trace ID of the linked span (1-32 hexadecimal characters) */
+  traceId: string
+
+  /** Span ID of the linked span (1-16 hexadecimal characters) */
+  spanId: string
 }
 ```
 
 ### `UpdateSpanOptions` {/* #updatespanoptions */}
 
-更新 span 的選項。
+更新範圍的選項。
 
 ```typescript
 interface UpdateSpanOptions<TType extends SpanType> {
@@ -759,21 +1261,21 @@ interface UpdateSpanOptions<TType extends SpanType> {
   metadata?: Record<string, any>
 
   /** Input data */
-  input?: any
+  input?: SpanInput<TType>
 
   /** Output data */
-  output?: any
+  output?: SpanOutput<TType>
 }
 ```
 
 ### `EndSpanOptions` {/* #endspanoptions */}
 
-結束 span 的選項。
+結束跨度的選項。
 
 ```typescript
 interface EndSpanOptions<TType extends SpanType> {
   /** Output data */
-  output?: any
+  output?: SpanOutput<TType>
 
   /** Span metadata */
   metadata?: Record<string, any>
@@ -785,7 +1287,7 @@ interface EndSpanOptions<TType extends SpanType> {
 
 ### `ErrorSpanOptions` {/* #errorspanoptions */}
 
-記錄 span 錯誤的選項。
+用於記錄跨度錯誤的選項。
 
 ```typescript
 interface ErrorSpanOptions<TType extends SpanType> {
@@ -803,11 +1305,11 @@ interface ErrorSpanOptions<TType extends SpanType> {
 }
 ```
 
-## Context 型別 {/* #context-types */}
+## 上下文類型 {/* #context-types */}
 
 ### `TracingContext` {/* #tracingcontext */}
 
-在 Workflow 與 Agent 執行中傳遞的 Tracing context。
+流經Workflow和Agent執行的追蹤上下文。
 
 ```typescript
 interface TracingContext {
@@ -818,7 +1320,7 @@ interface TracingContext {
 
 ### `TracingProperties` {/* #tracingproperties */}
 
-傳回給使用者、用於從外部處理 trace 的屬性。
+傳回給使用者用於在外部處理追蹤的屬性。
 
 ```typescript
 type TracingProperties = {
@@ -829,10 +1331,17 @@ type TracingProperties = {
 
 ### `TracingOptions` {/* #tracingoptions */}
 
-啟動新的 Agent 或 Workflow 執行時傳入的選項。
+啟動新Agent或Workflow執行時傳遞的選項。
 
 ```typescript
 interface TracingOptions {
+  /**
+   * Display name for the root span of this trace, replacing the default
+   * `agent run: '<id>'` / `workflow run: '<id>'` name. Use it to tell runs of the
+   * same agent or workflow apart in trace lists. Only applied to the root span.
+   */
+  rootSpanName?: string
+
   /** Metadata to add to the root trace span */
   metadata?: Record<string, any>
 
@@ -854,6 +1363,13 @@ interface TracingOptions {
    * If provided, the root span will be created as a child of this span.
    */
   parentSpanId?: string
+
+  /**
+   * Set to true together with parentSpanId to attach this run as a child of
+   * that span inside the existing trace. Exporters then keep the trace's own
+   * name, input, output, and tags. Ignored without a valid traceId and parentSpanId.
+   */
+  nestUnderParent?: boolean
 
   /**
    * Tags to apply to this trace.
@@ -878,7 +1394,7 @@ interface TracingOptions {
 
 ### `TracingPolicy` {/* #tracingpolicy */}
 
-建立 Workflow 或 Agent 時套用的 policy 層級 tracing 設定。
+建立Workflow或Agent程式時所應用的策略層級追蹤配置。
 
 ```typescript
 interface TracingPolicy {
@@ -891,11 +1407,11 @@ interface TracingPolicy {
 }
 ```
 
-## 設定型別 {/* #configuration-types */}
+## 配置類型 {/* #configuration-types */}
 
 ### `ObservabilityInstanceConfig` {/* #observabilityinstanceconfig */}
 
-單一可觀測性執行個體的設定。
+單一可觀察性實例的配置。
 
 ```typescript
 interface ObservabilityInstanceConfig {
@@ -922,9 +1438,11 @@ interface ObservabilityInstanceConfig {
 }
 ```
 
+這`@mastra/observability` implementation also supports `retainStorageExporterOnPlatform`. See the [configuration reference](/reference/observability/tracing/configuration#observabilityinstanceconfig) for this implementation-specific option.
+
 ### `ObservabilityRegistryConfig` {/* #observabilityregistryconfig */}
 
-完整的可觀測性 registry 設定。
+完整的可觀察性註冊表配置。
 
 ```typescript
 interface ObservabilityRegistryConfig {
@@ -941,11 +1459,11 @@ interface ObservabilityRegistryConfig {
 }
 ```
 
-## 取樣型別 {/* #sampling-types */}
+## 採樣類型 {/* #sampling-types */}
 
 ### `SamplingStrategy` {/* #samplingstrategy */}
 
-取樣策略設定。
+採樣策略配置。
 
 ```typescript
 type SamplingStrategy =
@@ -957,7 +1475,7 @@ type SamplingStrategy =
 
 ### `CustomSamplerOptions` {/* #customsampleroptions */}
 
-使用自訂 sampler 策略時傳入的選項。
+使用自訂採樣器策略時傳遞的選項。
 
 ```typescript
 interface CustomSamplerOptions {
@@ -966,11 +1484,11 @@ interface CustomSamplerOptions {
 }
 ```
 
-## Config selector 型別 {/* #config-selector-types */}
+## 配置選擇器類型 {/* #config-selector-types */}
 
 ### `ConfigSelector` {/* #configselector */}
 
-選取 span 要使用之可觀測性執行個體的函式。
+選擇用於跨度的可觀察性實例的函數。
 
 ```typescript
 type ConfigSelector = (
@@ -981,7 +1499,7 @@ type ConfigSelector = (
 
 ### `ConfigSelectorOptions` {/* #configselectoroptions */}
 
-使用自訂 tracing config selector 時傳入的選項。
+使用自訂追蹤配置選擇器時傳遞的選項。
 
 ```typescript
 interface ConfigSelectorOptions {
@@ -990,11 +1508,11 @@ interface ConfigSelectorOptions {
 }
 ```
 
-## 內部 span {/* #internal-spans */}
+## 內部跨度 {/* #internal-spans */}
 
 ### `InternalSpans` {/* #internalspans */}
 
-在 Workflow 或 Agent 執行中，將不同類型 span 設為內部 span 的位元選項。
+用於將不同類型的跨度設定為Workflow或Agent執行中的內部跨度的位元選項。
 
 ```typescript
 enum InternalSpans {
@@ -1018,16 +1536,16 @@ enum InternalSpans {
 }
 ```
 
-## 另請參閱 {/* #see-also */}
+## 參見 {/* #see-also */}
 
 ### 文件 {/* #documentation */}
 
-- [Tracing 概覽](/docs/observability/tracing/overview)：Tracing 完整指南
-- [建立子 Span](/docs/observability/tracing/overview#creating-child-spans)：使用 span 階層
-- [新增自訂 Metadata](/docs/observability/tracing/overview#adding-custom-metadata)：豐富 trace 資訊
+* [追蹤概述](/docs/observability/tracing/overview)：完整的追蹤指南
+* [創建子跨度](/docs/observability/tracing/overview#creating-child-spans)：使用跨距層次結構
+* [新增自訂元數據](/docs/observability/tracing/overview#adding-custom-metadata)：豐富痕跡
 
 ### 參考 {/* #reference */}
 
-- [設定](/reference/observability/tracing/configuration)：Registry 與設定
-- [Tracing 類別](/reference/observability/tracing/instances)：核心實作
-- [Span 參考](/reference/observability/tracing/spans)：Span 生命週期方法
+* [配置](/reference/observability/tracing/configuration): 註冊表和配置
+* [追蹤類](/reference/observability/tracing/instances)：核心實現
+* [跨度參考](/reference/observability/tracing/spans)：跨度生命週期方法

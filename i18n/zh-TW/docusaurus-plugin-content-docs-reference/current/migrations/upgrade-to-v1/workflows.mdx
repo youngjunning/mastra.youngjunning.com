@@ -1,0 +1,379 @@
+---
+title: "Workflows | v1 Migration Guide"
+description: "Migrate workflow code to Mastra v1 by replacing renamed workflow lookup APIs and updating affected workflow method calls."
+---
+
+# Workflow
+
+
+
+## 改變了 {/* #changed */}
+
+### `getWorkflows`到`listWorkflows` {/* #getworkflows-to-listworkflows */}
+
+這`mastra.getWorkflows()` method has been renamed to `mastra.listWorkflows()`. This change aligns with the naming convention used across the API where plural getter methods use the `list`前綴。
+
+若要遷移，請將所有呼叫替換為`mastra.getWorkflows()` with `mastra.listWorkflows()`.
+
+```diff
+- const workflows = mastra.getWorkflows();
++ const workflows = mastra.listWorkflows();
+```
+
+:::提示\[程式碼修改]
+
+您可以使用 Mastra 的 codemod CLI 自動更新導入：
+
+```bash
+npx @mastra/codemod@latest v1/mastra-plural-apis .
+```
+
+:::
+
+### `RuntimeContext`到`RequestContext` in step context {/* #runtimecontext-to-requestcontext-in-step-context */}
+
+參數名稱`runtimeContext` has been changed to `requestContext` in workflow step execution context. This change aligns with the global rename for clarity.
+
+若要遷移，請更新引用`runtimeContext` to `requestContext` in step execution functions.
+
+```diff
+  createStep({
+-   execute: async ({ runtimeContext } ) => {
+-     const userTier = context.runtimeContext.get('userTier');
++   execute: async ({ requestContext } ) => {
++     const userTier = requestContext.get('userTier');
+      return { result: userTier };
+    },
+  });
+```
+
+:::提示\[程式碼修改]
+
+您可以使用 Mastra 的 codemod CLI 自動更新導入：
+
+```bash
+npx @mastra/codemod@latest v1/runtime-context .
+```
+
+:::
+
+### `createRunAsync`到`createRun` {/* #createrunasync-to-createrun */}
+
+這`createRunAsync()` method has been renamed to `createRun()`. This change simplifies the API by removing the redundant "Async" suffix since all run creation is asynchronous.
+
+要遷移，請重新命名方法調用`createRunAsync` to `createRun`.
+
+```diff
+- await workflow.createRunAsync({ input: { ... } });
++ await workflow.createRun({ input: { ... } });
+```
+
+:::提示\[程式碼修改]
+
+您可以使用 Mastra 的 codemod CLI 自動更新您的程式碼：
+
+```bash
+npx @mastra/codemod@latest v1/workflow-create-run-async .
+```
+
+:::
+
+### `runCount`到`retryCount` (deprecated) {/* #runcount-to-retrycount-deprecated */}
+
+這`runCount` parameter has been deprecated in favor of `retryCount` in workflow step execution. The new name identifies the value as the number of retries. The old `runCount` still works but shows deprecation warnings.
+
+若要遷移，請重新命名`runCount` to `retryCount` in step execution functions.
+
+```diff
+  createStep({
+    execute: async (inputData, context) => {
+-     console.log(`Step run ${context.runCount} times`);
++     console.log(`Step retry count: ${context.retryCount}`);
+    },
+  });
+```
+
+:::提示\[程式碼修改]
+
+您可以使用 Mastra 的 codemod CLI 自動更新您的程式碼：
+
+```bash
+npx @mastra/codemod@latest v1/workflow-run-count .
+```
+
+:::
+
+### `getInitData`返回未知 {/* #getinitdata-returns-unknown */}
+
+這`getInitData` function in the execute function now returns unknown instead of any. You'll need to type it yourself.
+To migrate, change `getInitData()` into `getInitData<any>()`
+
+```diff
+  createStep({
+    execute: async ({ getInitData }) => {
+-     const initData = getInitData();
+-     if (initData.key === 'value') {}
++     const initData = getInitData<any>();
++     if (initData.key === 'value') {}
+    },
+  });
+```
+
+:::提示\[程式碼修改]
+
+您可以使用 Mastra 的 codemod CLI 自動更新您的程式碼：
+
+```bash
+npx @mastra/codemod@latest v1/workflow-get-init-data .
+```
+
+:::
+
+### `getWorkflowRuns`到`listWorkflowRuns` {/* #getworkflowruns-to-listworkflowruns */}
+
+這`getWorkflowRuns()` method has been renamed to `listWorkflowRuns()`. This change aligns with the convention that `list*` methods return collections.
+
+要遷移，請重新命名方法調用`getWorkflowRuns` to `listWorkflowRuns`.
+
+```diff
+- const runs = await workflow.getWorkflowRuns({ fromDate, toDate });
++ const runs = await workflow.listWorkflowRuns({ fromDate, toDate });
+```
+
+:::提示\[程式碼修改]
+
+您可以使用 Mastra 的 codemod CLI 自動更新您的程式碼：
+
+```bash
+npx @mastra/codemod@latest v1/workflow-list-runs .
+```
+
+:::
+
+### 預設驗證輸入 {/* #inputs-are-validated-by-default */}
+
+以前，預設不會驗證輸入。這[`validateInputs`](/reference/workflows/workflow#constructor-parameters) flag determines whether to validate the workflow inputs or not. This boolean has been flipped to `true`. If you want the old behavior or have workflows whose schemas don't need to be validated, set `validateInputs: false`.
+
+```diff
+createWorkflow({
++  options: {
++    validateInputs: false
++  }
+})
+```
+
+### 步`suspendPayload` validation {/* #step-suspendpayload-validation */}
+
+步`suspendPayload` is now validated for steps that have a `suspendSchema` defined. This also uses the `validateInputs` flag to determine whether to validate the `suspendPayload` or not.
+
+```diff
+  createStep({
+    id: "suspend-resume-step",
+    // ... other step properties
+    suspendSchema: z.object({
+      reason: z.string(),
+      otherReason: z.string()
+    }),
+    execute: async ({ suspend, resumeData}) => {
+      if (!resumeData) {
+-       return suspend({ reason: "Suspension reason" }); // Missing otherReason
++       return suspend({ reason: "Suspension reason", otherReason: "Other reason" });
+      }
+    },
+  });
+```
+
+### 分支結果欄位現在是可選的 {/* #branch-result-fields-are-now-optional */}
+
+這`.branch()` method now returns a schema where all branch output fields are optional. This reflects the runtime behavior where each branch only executes if its condition is truthy, so outputs from any branch may be undefined.
+
+若要遷移，請更新使用分支輸出的所有程式碼以處理可選值。
+
+```diff
+  const workflow = createWorkflow({...})
+    .branch([
+      [condition1, stepA],  // outputSchema: { result: z.string() }
+      [condition2, stepB],  // outputSchema: { data: z.number() }
+    ])
+-   // Previously: stepA.result typed as string, stepB.data typed as number
++   // Now: stepA.result typed as string | undefined, stepB.data typed as number | undefined
+    .then(nextStep);
+```
+
+如果您的程式碼依賴非可選類型，請在存取分支輸出時新增執行時間檢查或提供預設值。
+
+### `writableStream`到`outputWriter` in `Run.start()` & `Run.timeTravel()` {/* #writablestream-to-outputwriter-in-runstart--runtimetravel */}
+
+這`writableStream` parameter in `Run.start()` and `Run.timeTravel()` has been replaced with `outputWriter`. Instead of passing a `WritableStream`, you now pass an async callback function that receives each workflow event chunk directly.
+
+此更改簡化了 API - 而不是創建一個`WritableStream` wrapper, you handle chunks directly in the callback.
+
+**例子：**&#x5C07;Workflow事件串流傳輸到 HTTP 回應 (SSE)：
+
+```diff
+  const run = await workflow.createRun();
+
+- const stream = new WritableStream({
+-   write(chunk) {
+-     response.write(`data: ${JSON.stringify(chunk)}\n\n`);
+-   }
+- });
+- await run.start({ inputData, writableStream: stream });
+
++ await run.start({
++   inputData,
++   outputWriter: async (chunk) => {
++     response.write(`data: ${JSON.stringify(chunk)}\n\n`);
++   },
++ });
+```
+
+：：：筆記
+
+這`writer` parameter passed to step `execute` functions isn't affected by this change. It remains a `ToolStream` that extends `WritableStream<unknown>` and provides `.write()` and `.custom()` methods:
+
+```ts
+createStep({
+  id: 'my-step',
+  execute: async ({ writer }) => {
+    // This API is unchanged
+    await writer.write({ data: 'some output' })
+    await writer.custom({ type: 'custom-event', payload: {} })
+  },
+})
+```
+
+:::
+
+### `setState()`現在是異步的並且傳遞的數據經過驗證 {/* #setstate-is-now-async-and-the-data-passed-is-validated */}
+
+這`setState()` function is now async and validates data against the step's `stateSchema` when `validateInputs` is enabled. Pass only the fields you want to update, without spreading the previous state (`...state`).
+
+若要遷移，請更新`setState()` function to be async.
+
+```diff
+- setState({ ...state, sharedCounter: state.sharedCounter + 1 });
++ await setState({ sharedCounter: state.sharedCounter + 1 });
++ // await setState({ ...state, sharedCounter: state.sharedCounter + 1 });
++ // this also works, as the previous state spread remains supported
+```
+
+## 已刪除 {/* #removed */}
+
+### `streamVNext`, `resumeStreamVNext`, and `observeStreamVNext` methods {/* #streamvnext-resumestreamvnext-and-observestreamvnext-methods */}
+
+實驗的`streamVNext()`, `resumeStreamVNext()`, and `observeStreamVNext()` methods have been removed. These methods are now the standard implementation with updated event structures and return types.
+
+若要遷移，請使用標準`stream()`, `resumeStream()`, and `observeStream()` methods. Update event type checks to use workflow-prefixed names and access stream properties directly.
+
+看[`Run.stream()`](/reference/streaming/workflows/stream), [`Run.resumeStream()`](/reference/streaming/workflows/resumeStream), and [`Run.observeStream()`](/reference/streaming/workflows/observeStream) for details.
+
+:::提示\[程式碼修改]
+
+您可以使用 Mastra 的 codemod CLI 自動更新您的程式碼：
+
+```bash
+npx @mastra/codemod@latest v1/workflow-stream-vnext .
+```
+
+:::
+
+### `suspend()`和`setState()` aren't available in step condition functions parameters {/* #suspend-and-setstate-arent-available-in-step-condition-functions-parameters */}
+
+這`suspend()` and `setState()` functions aren't available in step condition function parameters.
+
+要遷移，請使用`suspend()` function in the step execute function instead.
+
+```diff
+.dowhile(step, async ({ suspend, state, setState }) => {
+- setState({...state, updatedState: "updated state"})
+- await suspend({ reason: "Suspension reason" });
++ // Use the suspend/setState in the step execute function instead
+});
+```
+
+這對於`dountil` and `branch` condition functions parameters.
+
+### 舊Workflow導出 {/* #legacy-workflows-export */}
+
+這`./workflows/legacy` export path has been removed from `@mastra/core`. Legacy workflows are no longer supported.
+
+若要進行遷移，請使用新的Workflow API。不存在從遺留Workflow直接遷移的路徑。
+
+```diff
+- import { LegacyWorkflow } from '@mastra/core/workflows/legacy';
++ // Legacy workflows are no longer supported
++ // Migrate to the new workflow API
+```
+
+### `pipeThrough`和`pipeTo` methods from `WorkflowRunOutput` {/* #pipethrough-and-pipeto-methods-from-workflowrunoutput */}
+
+這`pipeThrough()` and `pipeTo()` methods on `WorkflowRunOutput` are deprecated. These methods still work but show console warnings.
+
+要遷移，請使用`fullStream` property instead of calling methods directly on the run output.
+
+```diff
+  const run = await workflow.createRun({ input: { ... } });
+- await run.pipeTo(writableStream);
+- const transformed = run.pipeThrough(transformStream);
++ await run.fullStream.pipeTo(writableStream);
++ const transformed = run.fullStream.pipeThrough(transformStream);
+```
+
+### 觀看事件API {/* #watch-events-api */}
+
+舊版監視事件已被刪除並整合到 v2 事件 API 上。這`watch()` method and related watch endpoints are no longer available.
+
+若要遷移，請使用Workflow事件 API 或串流而不是監視事件。
+
+```diff
+- const workflow = mastraClient.getWorkflow('my-workflow');
+- const run = await workflow.createRun();
+- await run.watch((event) => {
+-   console.log('Step completed:', event);
+- });
+
++ const workflow = mastraClient.getWorkflow('my-workflow');
++ const run = await workflow.createRun();
++ const stream = await run.stream({ inputData: { ... } });
++ for await (const chunk of stream) {
++   console.log('Step completed:', chunk);
++ }
+```
+
+### `waitForEvent`應用程式介面 {/* #waitforevent-api */}
+
+這`waitForEvent` API has been removed from workflows. Use the suspend/resume API instead.
+
+若要遷移，請使用暫停/復原 API 等待Workflow執行里程碑。
+
+```diff
+- workflow.waitForEvent('step-complete', step1).commit();
++ workflow.then(step1).commit();
++ // Use suspend/resume API instead, in step1 execute function
+createStep({
+- execute: async (inputData, context) => {
+-  // ... execution logic
+- }
++ execute: async (inputData, context) => {
++   if (!context.resumeData) {
++     return context.suspend({})
++   }
++ }
+});
++
++ // after workflow is suspended, you can resume it
++ const result = await run.start({ inputData: { ... } });
++ if (result.status === 'suspended') {
++   const resumedResult = await run.resume({
++     resumeData: {
++       event: 'step-complete',
++     },
++     step: 'step1',
++   });
++ }
+```
+
+### `sendEvent`應用程式介面 {/* #sendevent-api */}
+
+這`sendEvent` API has been removed from workflows. Use the suspend/resume API instead.

@@ -1,0 +1,206 @@
+---
+title: "Cloudflare | Database"
+description: "Configure Mastra storage with Cloudflare KV or Durable Objects, choosing eventual or strong consistency, Worker bindings, REST access, and key namespaces."
+packages:
+  - "@mastra/cloudflare"
+---
+
+# 雲耀
+
+Mastra 提供兩種 Cloudflare 儲存實作：
+
+* **Cloudflare KV** (`CloudflareKVStorage`): A globally distributed, eventually consistent key-value store
+* **Cloudflare 耐用對象** (`CloudflareDOStorage`): A strongly consistent, SQLite-based storage using Durable Objects
+
+:::警告\[不支援可觀察性]
+
+Cloudflare 儲存**doesn't support the observability domain**. Traces from the `MastraStorageExporter` can't be persisted, and [Studio's](/docs/studio/overview) observability features won't work with Cloudflare as your only storage provider. To enable observability, use [composite storage](/reference/storage/composite#specialized-storage-for-observability)將Observability資料路由到受支援的Provider（例如 ClickHouse）。
+
+:::
+
+## 安裝 {/* #installation */}
+
+```bash npm2yarn
+npm install @mastra/cloudflare@latest
+```
+
+## Cloudflare KV 存儲 {/* #cloudflare-kv-storage */}
+
+KV 儲存實作使用 Cloudflare Workers KV 提供全球分散式、無伺服器鍵值儲存解決方案。
+
+### 用法 {/* #usage */}
+
+```typescript
+import { CloudflareKVStorage } from '@mastra/cloudflare/kv'
+
+// --- Example 1: Using Workers Binding ---
+const storageWorkers = new CloudflareKVStorage({
+  id: 'cloudflare-workers-storage',
+  bindings: {
+    threads: THREADS_KV, // KVNamespace binding for threads table
+    messages: MESSAGES_KV, // KVNamespace binding for messages table
+    // Add other tables as needed
+  },
+  keyPrefix: 'dev_', // Optional: isolate keys per environment
+})
+
+// --- Example 2: Using REST API ---
+const storageRest = new CloudflareKVStorage({
+  id: 'cloudflare-rest-storage',
+  accountId: process.env.CLOUDFLARE_ACCOUNT_ID!, // Cloudflare Account ID
+  apiToken: process.env.CLOUDFLARE_API_TOKEN!, // Cloudflare API Token
+  namespacePrefix: 'dev_', // Optional: isolate namespaces per environment
+})
+```
+
+### 參數 {/* #parameters */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'id',
+  type: 'string',
+  description: 'Unique identifier for this storage instance.',
+  isOptional: false,
+},
+{
+  name: 'bindings',
+  type: 'Record<string, KVNamespace>',
+  description: 'Cloudflare Workers KV bindings (for Workers runtime)',
+  isOptional: true,
+},
+{
+  name: 'accountId',
+  type: 'string',
+  description: 'Cloudflare Account ID (for REST API)',
+  isOptional: true,
+},
+{
+  name: 'apiToken',
+  type: 'string',
+  description: 'Cloudflare API Token (for REST API)',
+  isOptional: true,
+},
+{
+  name: 'namespacePrefix',
+  type: 'string',
+  description: 'Optional prefix for all namespace names (useful for environment isolation)',
+  isOptional: true,
+},
+{
+  name: 'keyPrefix',
+  type: 'string',
+  description: 'Optional prefix for all keys (useful for environment isolation)',
+  isOptional: true,
+},
+]}
+/>
+
+### 附加說明 {/* #additional-notes */}
+
+### 模式管理 {/* #schema-management */}
+
+儲存實作自動處理模式建立和更新。它會建立以下表：
+
+* `threads`：儲存對話線程
+* `messages`：儲存單獨的訊息
+* `metadata`：儲存線程和訊息的附加元數據
+
+### 一致性和傳播 {/* #consistency--propagation */}
+
+Cloudflare KV 是最終一致的存儲，這意味著寫入後資料可能無法在所有區域立即可用。
+
+:::警告\[正在跨 Workers 恢復運作]
+
+對 KV 的寫入可能需要大約 60 秒才能到達其他位置。如果一名工作人員暫停Workflow或[durable agent](/docs/harness/durable-agents) run and a different Worker resumes it soon after, for example when a user approves a tool call quickly, the resume can read an older snapshot. It then fails with `AGENT_RESUME_NO_SNAPSHOT_FOUND` or `WORKFLOW_RUN_NOT_SUSPENDED`, or resumes from an earlier step.
+
+如果運行可以由與暫停運行的不同的工作程序或進程恢復，請使用[Cloudflare Durable Objects storage](#cloudflare-durable-objects-storage) instead.
+
+:::
+
+### 關鍵結構與命名空間 {/* #key-structure--namespacing */}
+
+Cloudflare KV 中的鍵的結構為可配置前綴和表特定格式的組合（例如，`threads:threadId`).
+For Workers deployments, `keyPrefix` is used to isolate data within a namespace; for REST API deployments, `namespacePrefix` is used to isolate entire namespaces between environments or applications.
+
+## Cloudflare 持久化物件存儲 {/* #cloudflare-durable-objects-storage */}
+
+Durable Objects 儲存實作使用 Cloudflare Durable Objects 提供高度一致、基於 SQLite 的儲存。這對於需要交易一致性和 SQL 查詢功能的應用程式來說是理想的選擇。
+
+### 用法 {/* #usage-1 */}
+
+```typescript
+import { DurableObject } from 'cloudflare:workers'
+import { CloudflareDOStorage } from '@mastra/cloudflare/do'
+
+class AgentDurableObject extends DurableObject<Env> {
+  private storage: CloudflareDOStorage
+
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env)
+    this.storage = new CloudflareDOStorage({
+      sql: ctx.storage.sql,
+      tablePrefix: 'mastra_', // Optional: prefix for table names
+    })
+  }
+
+  async run() {
+    const memory = await this.storage.getStore('memory')
+    await memory?.saveThread({
+      thread: { id: 'thread-1', resourceId: 'user-1', title: 'Chat', metadata: {} },
+    })
+  }
+}
+```
+
+### 參數 {/* #parameters-1 */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'sql',
+  type: 'SqlStorage',
+  description: 'SqlStorage instance from Durable Objects ctx.storage.sql',
+  isOptional: false,
+},
+{
+  name: 'tablePrefix',
+  type: 'string',
+  description: 'Optional prefix for table names (only letters, numbers, and underscores allowed)',
+  isOptional: true,
+},
+{
+  name: 'disableInit',
+  type: 'boolean',
+  description:
+    'When true, automatic table creation/migrations are disabled. Useful for CI/CD pipelines where migrations run separately.',
+  isOptional: true,
+},
+]}
+/>
+
+### 一致性強 {/* #strong-consistency */}
+
+與 KV 不同，持久性物件提供強一致性保證。持久性物件中的所有讀取和寫入都是序列化的，使其非常適合快速、長時間運行的Agent。
+
+### SQL 功能 {/* #sql-capabilities */}
+
+持久性物件儲存在底層使用 SQLite，實現鍵值儲存無法實現的高效查詢、過濾和分頁。
+
+## 模式管理 {/* #schema-management-1 */}
+
+兩種儲存實作都會自動處理模式建立和更新。他們創建了下表：
+
+* `threads`：儲存對話線程
+* `messages`：儲存單獨的訊息
+* `workflow_snapshot`：儲存Workflow運作狀態
+
+## 已棄用的別名 {/* #deprecated-aliases */}
+
+為了向後相容，可以使用以下別名：
+
+```typescript
+// These are deprecated - use CloudflareKVStorage and CloudflareDOStorage instead
+import { CloudflareStore } from '@mastra/cloudflare/kv' // alias for CloudflareKVStorage
+import { DOStore } from '@mastra/cloudflare/do' // alias for CloudflareDOStorage
+```

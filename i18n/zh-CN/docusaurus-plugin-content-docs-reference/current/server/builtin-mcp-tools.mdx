@@ -1,0 +1,139 @@
+---
+title: 'Reference: Built-in MCP tools | Server'
+description: 'Every tool the built-in MCP server at /api/mcp can serve, with its arguments, the HTTP route it calls, and the permission that route needs.'
+packages:
+  - '@mastra/server'
+  - '@mastra/mcp'
+---
+
+# 内置 MCP Tool
+
+这[built-in MCP server](/docs/server/mcp)在`/api/mcp`从下面的Tool集中为每个调用者构建其Tool列表。每个Tool都会在进程中调用列出的 HTTP 路由，因此它需要该路由的权限`mcp:read`和`mcp:execute`，并且它运行与 HTTP 请求相同的 FGA 和所有权检查。未列出调用者无法调用其路由的Tool。
+
+参数标有`*` are required. Routes are relative to the API prefix (`/api` by default). Tools marked read-only carry the MCP `readOnlyHint` annotation and stay available with `readOnly: true` or `?readonly=1`.
+
+## `agents` {/* #agents */}
+
+|Tool|论点|路线 |许可 |
+| - | - | - | - |
+|`list_agents` | `query` | `GET /agents` | `agents:read` |
+| `get_agent` | `agentId*` | `GET /agents/:agentId` | `agents:read` |
+| `call_agent` | `agentId*`, `message*`, `threadId`, `resourceId` | `POST /agents/:agentId/generate` | `agents:execute` |
+| `agent_<id>` | `message*`, `threadId`, `resourceId` | `POST /agents/:agentId/generate` | `agents:execute` |
+
+* `list_agents`返回每个Agent的`id`, `name`, and `description`. `query` keeps agents whose id or name contains the text.
+* `call_agent`返回回复文本和`threadId` to pass back to continue the conversation.
+* `agent_<id>`为列出的每个Agent添加`server.mcp.featured.agents`.
+* 当调用者最多可以看到`enumLimit` agents (25 by default), `agentId` lists the allowed ids.
+
+## `workflows` {/* #workflows */}
+
+|Tool|论点|路线 |许可 |
+| - | - | - | - |
+|`list_workflows` | `query` | `GET /workflows` | `workflows:read` |
+| `get_workflow` | `workflowId*` | `GET /workflows/:workflowId` | `workflows:read` |
+| `start_workflow` | `workflowId*`, `inputData`, `runId` | `POST /workflows/:workflowId/start-async` | `workflows:execute` |
+| `get_workflow_run` | `workflowId*`, `runId*`, `fields` | `GET /workflows/:workflowId/runs/:runId` | `workflows:read` |
+| `resume_workflow_run` | `workflowId*`, `runId*`, `step`, `resumeData` | `POST /workflows/:workflowId/resume-async` | `workflows:execute` |
+| `cancel_workflow_run` | `workflowId*`, `runId*` | `POST /workflows/:workflowId/runs/:runId/cancel` | `workflows:execute` |
+| `workflow_<id>`|Workflow程的输入架构 |`POST /workflows/:workflowId/start-async` | `workflows:execute` |
+
+* `start_workflow`, `resume_workflow_run`, and `workflow_<id>` wait for the run to finish or suspend. A suspended run returns `status: 'suspended'`, its `runId`, `suspendPayload`, and `suspendedSteps`.
+* `get_workflow_run`需要`fields` as a comma-separated subset of `result`, `error`, `payload`, `steps`, and `activeStepsPath`.
+* `cancel_workflow_run`携带MCP`destructiveHint` annotation.
+* `workflow_<id>`为列出的每个Workflow程添加`server.mcp.featured.workflows`. When the input schema isn't an object, the tool takes it as `inputData`.
+
+## `tools` {/* #tools */}
+
+当调用者最多可以看到`enumLimit` tools and may call them, each tool gets its own entry:
+
+|Tool|论点|路线 |许可 |
+| - | - | - | - |
+|`tool_<id>` | The tool's input schema | `POST /tools/:toolId/execute` | `tools:execute` |
+
+多于`enumLimit`, or when the caller can't call tools (`readOnly: true` or no `tools:execute`), operation tools replace them. `call_tool` is only offered when the caller can call tools:
+
+|Tool|论点|路线 |许可 |
+| - | - | - | - |
+|`list_tools` | `query` | `GET /tools` | `tools:read` |
+| `get_tool` | `toolId*` | `GET /tools/:toolId` | `tools:read` |
+| `call_tool` | `toolId*`, `data` | `POST /tools/:toolId/execute` | `tools:execute` |
+
+一个`tool_<id>` entry uses the tool's own `mcp.annotations` when the tool defines them.
+
+## `memory` {/* #memory */}
+
+|Tool|论点|路线 |许可 |
+| - | - | - | - |
+|`list_threads` | `agentId`, `resourceId`, `page`, `perPage` | `GET /memory/threads` | `memory:read` |
+| `get_thread` | `threadId*`, `agentId` | `GET /memory/threads/:threadId` | `memory:read` |
+| `list_messages` | `threadId*`, `agentId`, `page`, `perPage` | `GET /memory/threads/:threadId/messages` | `memory:read` |
+| `search_memory` | `agentId*`, `searchQuery*`, `resourceId`, `threadId`, `limit` | `GET /memory/search` | `memory:read` |
+| `get_memory_status` | `agentId*`, `resourceId`, `threadId` | `GET /memory/status`, `GET /memory/config` | `memory:read` |
+| `get_observations` | `agentId*`, `threadId`, `resourceId`, `waitForPending` | `GET /memory/observational-memory` | `memory:read` |
+| `create_thread` | `agentId*`, `resourceId`, `title`, `metadata`, `threadId` | `POST /memory/threads` | `memory:write` |
+| `update_thread` | `threadId*`, `agentId*`, `title`, `metadata` | `PATCH /memory/threads/:threadId` | `memory:write` |
+| `clone_thread` | `threadId*`, `agentId*`, `newThreadId`, `title`, `metadata`, `messageLimit` | `POST /memory/threads/:threadId/clone` | `memory:execute` |
+| `save_messages` | `agentId*`, `messages*` | `POST /memory/save-messages` | `memory:write` |
+
+* `resourceId`默认为调用者`server.auth` sets `mapUserToResourceId`, and a caller can't read or write another resource's threads, messages, or Observational Memory. Without `mapUserToResourceId`, the tools use the `resourceId` the client sends, so set `mapUserToResourceId` to keep memory private. [FGA](/docs/auth/fga) protects threads, but `get_observations` called with only a `resourceId` isn't covered by the default FGA routes.
+* `get_observations`读取资源范围的观察记忆`threadId` is left out. `waitForPending: true` waits up to 30 seconds for pending observations, and is only offered when the caller may call `POST /memory/observational-memory/buffer-status`, which needs `memory:write`.
+* `search_memory`最多返回 20 个结果，除非`limit` is set.
+
+## `observability` {/* #observability */}
+
+|Tool|论点|路线 |许可 |
+| - | - | - | - |
+|`query_traces` | `timeRange*`, `where`, `textSearch`, `rootSource`, `group`, `orderBy`, `page` | `POST /observability/traces/query` | `observability:read` |
+| `aggregate_traces` | `timeRange*`, `measures*`, `where`, `groupBy`, `interval`, `having`, `orderBy`, `limit` | `POST /observability/traces/aggregate` | `observability:read` |
+| `query_spans` | `timeRange*`, `where`, `textSearch`, `orderBy`, `page` | `POST /observability/spans/query` | `observability:read` |
+| `aggregate_spans` | `timeRange*`, `measures*`, `where`, `groupBy`, `interval`, `having`, `orderBy`, `limit` | `POST /observability/spans/aggregate` | `observability:read` |
+| `query_threads` | `timeRange*`, `where`, `orderBy`, `page` | `POST /observability/threads/query` | `observability:read` |
+| `get_trace_query_fields` | `timeRange*`, `predicateScope*`, `search`, `limit` | `POST /observability/traces/query/fields` | `observability:read` |
+| `get_trace_query_values` | `timeRange*`, `predicateScope*`, `path*`, `search`, `limit` | `POST /observability/traces/query/values` | `observability:read` |
+| `list_traces` | Filters such as `entityType`, `entityName`, `status`, `traceId`, `threadId`, `dateRange`, plus `page`, `perPage`, `field`, `direction` | `GET /observability/traces` | `observability:read` |
+| `get_trace` | `traceId*`, `offset` | `GET /observability/traces/:traceId/light` | `observability:read` |
+| `get_span` | `traceId*`, `spanId*` | `GET /observability/traces/:traceId/spans/:spanId` | `observability:read` |
+| `get_trace_trajectory` | `traceId*` | `GET /observability/traces/:traceId/trajectory` | `observability:read` |
+| `list_logs`|过滤器如`level`, `traceId`, `entityName`, `threadId`, `timestamp`，加上`page`, `perPage`, `direction` | `GET /observability/logs` | `observability:read` |
+
+* 支持跟踪查询的商店提供查询和聚合Tool，而不是`list_traces`. A store without them serves `list_traces` instead. `list_logs` is served only when the store implements logs.
+* `predicateScope`是`trace`, `spans`, `scores`, or `feedback`. `interval` is `1m`, `5m`, `15m`, `1h`, or `1d`.
+* `get_trace`返回光跨度记录。通过返回的`nextOffset` as `offset` to read the rest of a cut trace.
+
+## `observability_analytics` {/* #observability_analytics */}
+
+|Tool|论点|路线 |许可 |
+| - | - | - | - |
+|`list_scores` | Filters such as `scorerId`, `traceId`, `entityName`, `timestamp`, plus `page`, `perPage`, `field`, `direction` | `GET /observability/scores` | `observability:read` |
+| `analyze_scores` | `op*`, `scorerId*`, `scoreSource`, `aggregation`, `filters`, `comparePeriod`, `groupBy`, `interval`, `percentiles` | `POST /observability/scores/<op>` | `observability:read` |
+| `list_feedback` | Filters such as `feedbackType`, `traceId`, `reviewStatus`, `timestamp`, plus `page`, `perPage`, `direction` | `GET /observability/feedback` | `observability:read` |
+| `analyze_feedback` | `op*`, `feedbackType*`, `feedbackSource`, `aggregation`, `filters`, `comparePeriod`, `groupBy`, `interval`, `percentiles` | `POST /observability/feedback/<op>` | `observability:read` |
+| `analyze_metrics` | `op*`, `name*`, `aggregation`, `distinctColumn`, `filters`, `comparePeriod`, `groupBy`, `limit`, `orderDirection`, `interval`, `percentiles` | `POST /observability/metrics/<op>` | `observability:read` |
+| `list_metric_names` | `metricName`, `labelKey`, `prefix`, `limit` | `GET /observability/discovery/metric-names`, `metric-label-keys`, `metric-label-values` | `observability:read` |
+
+* `op`是`aggregate`, `breakdown`, `timeseries`, or `percentiles`, and selects the route the tool calls.
+* `aggregation`是`sum`, `avg`, `min`, `max`, `count`, `count_distinct`, or `last`. `comparePeriod` is `previous_period`, `previous_day`, or `previous_week`.
+* `list_metric_names`列出指标名称。和`metricName`, it lists that metric's label keys. With `metricName` and `labelKey`, it lists that label's values.
+* 仅当商店实施匹配分数、反馈或指标查询时，才会提供每个Tool。
+
+## `stored_agents` {/* #stored_agents */}
+
+|Tool|论点|路线 |许可 |
+| - | - | - | - |
+|`list_available_models` | None | `GET /editor/builder/models/available` | `stored-agents:read` |
+| `list_stored_agents` | `status`, `page`, `perPage` | `GET /stored/agents` | `stored-agents:read` |
+| `get_stored_agent` | `storedAgentId*` | `GET /stored/agents/:storedAgentId` | `stored-agents:read` |
+| `create_stored_agent` | `name*`, `instructions*`, `model`, `tools`, `memory`, `visibility`, `autoPublish`, `id`, and the other stored agent fields | `POST /stored/agents` | `stored-agents:write` |
+| `update_stored_agent` | `storedAgentId*`, any stored agent field, `changeMessage`, `autoPublish` | `PATCH /stored/agents/:storedAgentId` | `stored-agents:write` |
+
+* `list_stored_agents`返回已发布的Agent，除非`status` is `draft` or `archived`, 100 per page by default.
+* `create_stored_agent`和`update_stored_agent` publish the change unless `autoPublish` is `false`. A created agent is owned by the caller and private unless `visibility` is `public`. See [stored agent visibility](/docs/studio/editor#visibility).
+* 当Agent构建器限制模型时，这两个Tool都会拒绝它不允许的模型。`list_available_models` returns the allowed models.
+
+## 有关的 {/* #related */}
+
+* [内置MCP服务器](/docs/server/mcp)
+* [`server.mcp`配置参考](/reference/configuration#servermcp)
+* [服务器路由](/reference/server/routes)
+* [`dispatchRoute()`](/reference/server/dispatch-route)

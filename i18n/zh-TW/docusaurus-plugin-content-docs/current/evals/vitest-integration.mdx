@@ -1,0 +1,179 @@
+---
+title: "Vitest integration | Evals"
+description: "Run runEvals evaluations as Vitest tests with expectEvals, expectEval, custom matchers, and a score reporter using @mastra/evals/vitest."
+packages:
+  - "@mastra/evals"
+---
+
+# 維泰集成
+
+這`@mastra/evals/vitest`模組集成[`runEvals`](/reference/evals/run-evals)和[維泰斯特](https://vitest.dev/)因此評估的行為就像常規測試一樣。當評估未通過時，流暢的斷言將導致測試失敗，報告者會在運行器輸出中列印分數表。
+
+要使用它，請安裝`@mastra/evals` and `vitest` (version 3, 4, or 5):
+
+```bash
+npm install @mastra/evals vitest
+```
+
+## 配置Vitest {/* #configuring-vitest */}
+
+註冊記者和配對者`vitest.config.ts`:
+
+```typescript title="vitest.config.ts"
+import { defineConfig } from 'vitest/config'
+import { MastraEvalsReporter } from '@mastra/evals/vitest'
+
+export default defineConfig({
+  test: {
+    reporters: ['default', new MastraEvalsReporter()],
+    setupFiles: ['@mastra/evals/vitest/setup'],
+  },
+})
+```
+
+設定檔案在上註冊自訂匹配器`expect`. Alternatively, call `registerEvalMatchers()` from `@mastra/evals/vitest` in your own setup file.
+
+## 對資料集進行斷言`expectEvals` {/* #asserting-on-a-dataset-with-expectevals */}
+
+`expectEvals`運行一個`runEvals` evaluation inside a regular `test()` and asserts a minimum pass rate. It accepts the same configuration as `runEvals`: a `target` agent or workflow, `data` items, and `scorers`, `gates`，或閾值。蓋茲對每個項目的通過/失敗進行評分，因此`toPass(0.8)`要求至少 80% 的物品通過每個門。評分者閾值仍然比較各個項目的平均分數，並且無論比率如何都必須通過：
+
+```typescript title="tests/weather-agent.eval.test.ts"
+import { test } from 'vitest'
+import { expectEvals } from '@mastra/evals/vitest'
+import { checks } from '@mastra/evals/checks'
+import { mastra } from '../src/mastra'
+
+test('weather agent calls the tool and answers relevantly', { timeout: 60_000 }, async () => {
+  await expectEvals({
+    target: mastra.getAgent('weatherAgent'),
+    data: [{ input: "What's the weather in London?" }],
+    gates: [checks.calledTool('weatherTool'), checks.noToolErrors(), checks.includes('London')],
+    scorers: [{ scorer: mastra.getScorer('answerRelevancyScorer'), threshold: 0.7 }],
+  }).toPass(0.8)
+})
+```
+
+`toPass()`如果沒有參數，則要求每個項目都通過每個閘。始終等待斷言：它會以完整的方式解決`RunEvalsResult` for further checks and attaches the run's scores to the current test so `MastraEvalsReporter` displays them.
+
+LLM 支援的評估比 Vitest 預設的 5 秒鐘超時慢得多，因此請通過每次測試`timeout` (or set `testTimeout` in the Vitest config).
+
+## 矩陣測試`expectEval` {/* #matrix-testing-with-expecteval */}
+
+`expectEval`是單項變體：`data` is one item instead of an array. Combine it with `test.for` (or `test.each`) to get one test (and one reporter entry) per data item instead of one aggregated result per dataset:
+
+```typescript title="tests/weather-agent.matrix.eval.test.ts"
+import { test } from 'vitest'
+import { expectEval } from '@mastra/evals/vitest'
+import { checks } from '@mastra/evals/checks'
+import { mastra } from '../src/mastra'
+
+test.for([
+  { input: "What's the weather in London?", groundTruth: 'London' },
+  { input: "What's the weather in Tokyo?", groundTruth: 'Tokyo' },
+  { input: "What's the weather in Sydney?", groundTruth: 'Sydney' },
+])('weather agent: $input', { timeout: 60_000 }, async item => {
+  await expectEval({
+    target: mastra.getAgent('weatherAgent'),
+    data: item,
+    gates: [checks.calledTool('weatherTool'), checks.includes(item.groundTruth)],
+  }).toPass()
+})
+```
+
+每個專案獨立通過或失敗。單一迴歸顯示為一次失敗的測試，而不是降低的總通過率。
+
+## 使用匹配器對結果進行斷言 {/* #asserting-on-results-with-matchers */}
+
+如需更細粒度的控制，請致電`runEvals` directly inside a regular `test()` and use the custom matchers on the result:
+
+```typescript title="tests/weather-agent.matchers.eval.test.ts"
+import { test, expect } from 'vitest'
+import { runEvals } from '@mastra/core/evals'
+import { checks } from '@mastra/evals/checks'
+import { mastra } from '../src/mastra'
+
+test('weather agent quality', { timeout: 60_000 }, async () => {
+  const result = await runEvals({
+    target: mastra.getAgent('weatherAgent'),
+    data: [{ input: "What's the weather in London?" }],
+    scorers: [mastra.getScorer('answerRelevancyScorer')],
+    gates: [checks.noToolErrors()],
+  })
+
+  expect(result).toHaveVerdict('passed')
+  expect(result).toPassGates()
+  expect(result).toHaveScoreAbove('answer-relevancy-scorer', 0.7)
+})
+```
+
+可用的匹配器：
+
+* `toHaveVerdict(verdict)`：斷言運行的結論（`"passed"`, `"scored"`, or `"failed"`).
+* `toHaveScoreAbove(scorerName, min)` / `toHaveScoreBelow(scorerName, max)`: asserts a scorer's average score. Categorized scorer configs use dot-paths, for example `"agent.my-scorer"` or `"steps.step-1.my-scorer"`.
+* `toPassGates()`：斷言所有門都已通過。未配置門時失敗。
+* `toPassThresholds()`：斷言所有得分者閾值均已通過。未配置閾值時失敗。
+
+## 評估Workflow {/* #evaluating-a-workflow */}
+
+Workflow也是有效的目標。使用一個`WorkflowScorerConfig` object for `scorers` to score the workflow output, individual steps, or the step execution trajectory, and reference nested scores with dot-paths in the matchers:
+
+```typescript title="tests/weather-workflow.eval.test.ts"
+import { test, expect } from 'vitest'
+import { runEvals } from '@mastra/core/evals'
+import { mastra } from '../src/mastra'
+
+test('weather workflow runs fetch-weather then plan-activities', { timeout: 60_000 }, async () => {
+  const result = await runEvals({
+    target: mastra.getWorkflow('weatherWorkflow'),
+    data: [
+      {
+        input: { city: 'London' },
+        expectedTrajectory: {
+          steps: [
+            { stepType: 'workflow_step', name: 'fetch-weather' },
+            { stepType: 'workflow_step', name: 'plan-activities' },
+          ],
+        },
+      },
+      {
+        input: { city: 'Tokyo' },
+        expectedTrajectory: {
+          steps: [
+            { stepType: 'workflow_step', name: 'fetch-weather' },
+            { stepType: 'workflow_step', name: 'plan-activities' },
+          ],
+        },
+      },
+    ],
+    scorers: {
+      trajectory: [mastra.getScorer('trajectoryAccuracyScorer')],
+    },
+  })
+
+  expect(result).toHaveScoreAbove('trajectory.code-trajectory-accuracy-scorer', 0.9)
+})
+```
+
+這`plan-activities` step in this workflow calls `mastra.getAgent('weatherAgent')` at runtime, which only works because the target was resolved with `mastra.getWorkflow()`. See the [`runEvals` reference](/reference/evals/run-evals#workflow-evaluation) for the full `WorkflowScorerConfig` shape.
+
+## 閱讀記者的輸出 {/* #reading-the-reporter-output */}
+
+`MastraEvalsReporter`運行完成後列印每個評估測試的分數表：
+
+```text
+ Mastra Evals
+
+✓ weather agent calls the tool and answers relevantly (1 item)
+   check-called-tool (gate)                        1.0  ✓
+   check-no-tool-errors (gate)                     1.0  ✓
+   check-includes (gate)                           1.0  ✓
+   answer-relevancy-scorer (threshold: min 0.7)    0.9  ✓
+
+ Eval runs: 1 (1 passed)
+```
+
+每個條目都會顯示運行的結論、門限、閾值以及每個記分員的平均得分。記者查閱元數據得知`expectEval`/`expectEvals` attach to `task.meta.mastraEval`, so it works with parallel test files and any test that populates that field.
+
+## 速率限制和併發數 {/* #rate-limits-and-concurrency */}
+
+Vitest 並行運行測試文件，並且`runEvals` accepts its own `concurrency` option, so total LLM traffic is multiplied across both. If you hit provider rate limits, lower `concurrency` in your eval options or set `fileParallelism: false` in the Vitest config.

@@ -1,0 +1,210 @@
+---
+title: "Skills"
+description: "Create filesystem-backed Mastra skills with SKILL.md instructions, supporting files, configurable discovery paths, and Agent Skills compatibility."
+packages:
+  - "@mastra/core"
+---
+
+# 文件系统支持的技能
+
+文件系统支持的技能是可重用指令和支持文件的目录。马斯特拉（Mastra）从道路上发现了它们`skills`选项，然后使它们可供使用该配置的每个Agent使用。技能遵循[Agent技能规范](https://agentskills.io).
+
+使用[agent skills](/docs/skills) instead when you want to define a skill directly in one agent's code. An agent can use both types. If a direct agent skill and a filesystem-backed skill have the same name, the direct agent skill takes precedence.
+
+## 快速入门 {/* #quickstart */}
+
+创建一个目录`SKILL.md` file:
+
+```markdown title="workspace/skills/code-review/SKILL.md"
+---
+name: code-review
+description: Reviews code for bugs and readability issues
+---
+
+# Code review
+
+Check the code for bugs, missing error handling, and unclear naming.
+```
+
+配置目录：
+
+```typescript title="src/mastra/workspaces.ts"
+import { LocalFilesystem, Workspace } from '@mastra/core/workspace'
+
+export const workspace = new Workspace({
+  filesystem: new LocalFilesystem({
+    basePath: './workspace',
+  }),
+  skills: ['skills'],
+})
+```
+
+这`skills` path is relative to the filesystem root, so Mastra discovers `./workspace/skills/code-review/SKILL.md`. An agent using this configuration can now discover and load `code-review` when a request needs it.
+
+## 技能结构 {/* #skill-structure */}
+
+每个技能都是一个包含所需技能的目录`SKILL.md` file. It can also contain supporting files:
+
+```plaintext title="workspace/skills/code-review"
+code-review/
+  SKILL.md
+  references/
+    style-guide.md
+  scripts/
+    lint.ts
+  assets/
+    review-template.md
+```
+
+* `SKILL.md`：当Agent选择技能时，Mastra 加载的元数据和指令
+* `references/`：Agent可以根据需要阅读或搜索的文档
+* `scripts/`：技能使用的脚本
+* `assets/`：模板、图像和其他支持文件
+
+保留主要Workflow程`SKILL.md`. Move detailed material to `references/` so the agent only reads it when needed.
+
+## `SKILL.md`格式 {/* #skillmd-format */}
+
+YAML frontmatter 要求`name` and `description`. The `name` must match the skill directory name, contain at most 64 lowercase letters, numbers, or hyphens, not start or end with a hyphen, and not contain consecutive hyphens. The Markdown body contains the instructions returned to the agent when it loads the skill.
+
+马斯特拉还阅读可选的`license`, `compatibility`, `user-invocable`, and `metadata` fields. See the [Agent Skills specification](https://agentskills.io/specification) for the complete package format and field guidance.
+
+## 特工如何使用技能 {/* #how-agents-use-skills */}
+
+配置技能后，Mastra 会将每个技能的名称、描述、路径和源类型添加到系统消息中。这使得Agent可以发现可用的技能，而无需将每个指令文件加载到其上下文中。
+
+Mastra 还为Agent提供了三种Tool：
+
+|Tool|是否 |
+| - | - |
+|`skill` | Loads a skill's `SKILL.md` instructions and lists its reference, script, and asset files. |
+| `skill_read` | Reads all or part of any file under the selected skill directory. |
+| `skill_search` | Searches skill names, descriptions, instructions, and reference files. |
+
+加载是无状态的。这些指令作为Tool结果保留在对话中，Agent可以调用`skill` again if they leave the context after compaction.
+
+### 关闭技能列表 {/* #turn-off-the-skills-list */}
+
+对于许多技能，在系统消息中列出所有技能都会在每次请求时花费代币。添加`SkillsProcessor` with `injectCatalog: false` to replace the list with a short instruction to find skills with `skill_search` and load them with `skill`:
+
+```typescript title="src/mastra/agents/support-agent.ts"
+import { Agent } from '@mastra/core/agent'
+import { SkillsProcessor } from '@mastra/core/processors'
+import { workspace } from '../workspaces'
+
+export const supportAgent = new Agent({
+  id: 'support-agent',
+  name: 'Support Agent',
+  instructions: 'You help customers with support requests.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  workspace,
+  inputProcessors: [new SkillsProcessor({ injectCatalog: false })],
+})
+```
+
+Agent保留`skill`, `skill_read`, and `skill_search` tools for both filesystem-backed and [agent skills](/docs/skills). `skill_search` works without any search setup: it matches query words against skill names, descriptions, and content. For larger collections, configure [BM25 or vector search](#search-skill-content) on the workspace to improve ranking. Agent skills are always indexed.
+
+当您拥有几十种技能时，请保留默认列表：Agent会立即看到每个选项，并且该列表是Provider可以缓存的稳定前缀。当您拥有大约一百种或更多技能时，或者当系统消息的大小很重要时，请将其关闭。无论您添加多少技能，搜索指令的大小都保持不变。
+
+[`SkillSearchProcessor`](/reference/processors/skill-search-processor)还隐藏了列表，但用自己的Tool替换了标准Tool`search_skills` and `load_skill` tools and only covers workspace skills. Configure one or the other, not both: together, the agent gets both sets of tools. See the [`SkillsProcessor`](/reference/processors/skills-processor) reference for all options.
+
+## 配置技能路径 {/* #configure-skill-paths */}
+
+这`skills` array accepts several path forms:
+
+|路径|发现行为|
+| - | - |
+|`skills` | Scans each immediate subdirectory for a `SKILL.md` file. |
+| `skills/code-review` | Loads one skill directory directly. |
+| `skills/code-review/SKILL.md` | Loads one skill file directly. |
+| `./**/skills` | Finds matching directories, then discovers skills under each one. |
+| `./**/SKILL.md` | Finds and loads matching skill files. |
+
+添加更多条目以从多个根源（例如项目、团队或包目录）发现技能。
+
+Glob 遍历仅限于 glob 基础以下的四个目录级别。
+
+当配置的文件系统可用时，路径会使用该文件系统。如果没有文件系统，Mastra 会从相对于应用程序进程当前工作目录的本地磁盘读取它们。明确的[`skillSource`](#custom-skill-sources) replaces both defaults.
+
+## 同名技能 {/* #same-named-skills */}
+
+Mastra 在系统消息中列出了每个不同的文件系统支持的技能，包括其路径和源类型。如果多个技能具有相同的名称，则按名称查找将使用此优先级：
+
+1. 本地项目路径
+2. 下的托管路径`.mastra/skills`
+3. 外部路径下`node_modules`
+
+如果多个最高优先级候选者具有相同的源类型，Mastra 无法在它们之间进行选择并引发错误。重命名一项技能或将其移至不同的源类型。
+
+Agent可以通过将系统消息中显示的确切路径传递给`skill` or `skill_read`. Paths with or without the trailing `/SKILL.md` work. If several configured paths resolve to the same canonical directory, Mastra treats them as aliases and lists the skill once.
+
+直接的[agent skills](/docs/skills) are resolved before filesystem-backed skills. A direct skill wins when both types use the same name.
+
+## 搜索技能内容 {/* #search-skill-content */}
+
+什么时候[BM25 or vector search](/docs/sandbox/search) is configured alongside skills, Mastra automatically indexes each skill's name, description, `SKILL.md` instructions, and reference files. Scripts and assets aren't indexed.
+
+没有 BM25 或矢量搜索，`skill_search` falls back to case-insensitive text matching across the name, description, instructions, and references. Results are ranked by how many query words they contain, and words found in a skill's name or description count more. This keeps skill search available without a separate search configuration, while indexed search provides ranking and semantic retrieval for larger collections.
+
+参考文件的结果包括文件路径，例如`references/style-guide.md`, so the agent can pass it to `skill_read`.
+
+当Agent询问不存在的技能名称时，`skill` and `skill_read` list every available skill if there are 20 or fewer. With more skills, they suggest up to five close matches and point the agent to `skill_search`, so a mistyped name doesn't add the whole skill list to the conversation.
+
+## 动态技能路径 {/* #dynamic-skill-paths */}
+
+当可用路径取决于请求上下文时，传递同步或异步函数。此示例为用户增加了开发技能`developer` role:
+
+```typescript title="src/mastra/workspaces.ts"
+import { LocalFilesystem, Workspace } from '@mastra/core/workspace'
+
+const workspace = new Workspace({
+  filesystem: new LocalFilesystem({ basePath: './workspace' }),
+  skills: ({ requestContext }) => {
+    const paths = ['skills']
+
+    if (requestContext?.get('user-role') === 'developer') {
+      paths.push('developer-skills')
+    }
+
+    return paths
+  },
+})
+```
+
+Mastra 解析每次执行的函数，并为Agent提供该请求的技能集。返回的路径支持与静态数组相同的目录、文件和 glob 形式。
+
+## 自定义技能来源 {/* #custom-skill-sources */}
+
+放`skillSource` when skills should come from a backend other than the configured filesystem or local disk. A custom source handles skill discovery and file reads for every configured path.
+
+例如，`CompositeVersionedSkillSource` mounts published skill versions from a content-addressable blob store under directories where Mastra can discover them:
+
+```typescript title="src/mastra/workspaces.ts"
+import { CompositeVersionedSkillSource, Workspace } from '@mastra/core/workspace'
+
+const skillSource = new CompositeVersionedSkillSource(
+  [
+    {
+      dirName: 'code-review',
+      tree: versionTree,
+      versionCreatedAt,
+    },
+  ],
+  blobStore,
+)
+
+const workspace = new Workspace({
+  skills: ['.'],
+  skillSource,
+})
+```
+
+明确的`skillSource` doesn't fall back to the configured filesystem or local disk when a path is missing. See the [configuration reference](/reference/workspace/workspace-class#constructor-parameters) for the source interface and related options.
+
+## 有关的 {/* #related */}
+
+* [Agent技巧](/docs/skills)
+* [Agent技能规范](https://agentskills.io)
+* [Sandbox](/docs/sandbox/overview)
+* [搜索和索引](/docs/sandbox/search)
+* [`createSkill()`参考](/reference/agents/createSkill)

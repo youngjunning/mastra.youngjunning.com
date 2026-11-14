@@ -1,0 +1,350 @@
+---
+title: "A2A (Agent-to-Agent) | Connections"
+description: "Expose Mastra agents through the Agent-to-Agent protocol and consume remote A2A agents as subagents or call them directly with the client SDK."
+packages:
+  - "@mastra/client-js"
+  - "@mastra/core"
+  - "@mastra/server"
+---
+
+# A2A（Agent對Agent）
+
+Mastra 支援 0.3.0 版本[Agent-to-Agent (A2A) protocol](https://a2a-protocol.org/latest/)適用於跨平台多Agent系統。使用 A2A 將 Mastra Agent程式公開為遠端Agent或使用遠端 A2A Agent程式作為 Mastra 子Agent程式。您也可以使用 JavaScript 用戶端 SDK 呼叫 A2A 端點。
+
+A2A 是一種開放協議，用於跨網路、框架、Provider和語言邊界將工作委託給Agent。遠端Agent將自己的Tool、提示、記憶體、Workflow和基礎設施保持私有，同時公開其他系統可以發現和呼叫的協定端點。
+
+## 何時使用 A2A {/* #when-to-use-a2a */}
+
+* 父Agent應將工作委託給專門的遠端Agent。
+* 遠端Agent由另一個服務、團隊、Provider或運行時擁有。
+* 後端、瀏覽器應用程式或其他 A2A 相容系統需要以程式設計方式存取 Mastra Agent程式。
+* 長時間運行的遠端工作需要任務 ID、狀態更新、工件、取消、重新訂閱或推播通知。
+
+## A2A 的運作方式 {/* #how-a2a-works */}
+
+A2A 使用Agent卡進行發現。該卡片是一個由眾所周知的 URL 提供的 JSON 文件。它描述遠端Agent並包含接受 A2A JSON-RPC 請求的執行 URL。
+
+使用預設 Mastra 伺服器時`apiPrefix` of `/api`, an agent registered as `weather-agent` exposes:
+
+* Agent卡：`/api/.well-known/weather-agent/agent-card.json`
+* 執行端點：`/api/a2a/weather-agent`
+
+Agent卡包含Agent名稱、描述、端點 URL、提供者、功能、安全元資料和技能等欄位：
+
+```json title="agent-card.json"
+{
+  "protocolVersion": "0.3.0",
+  "name": "Weather Agent",
+  "description": "Provides weather information.",
+  "url": "https://agent.example.com/api/a2a/weather-agent",
+  "version": "1.0",
+  "provider": {
+    "organization": "Acme",
+    "url": "https://acme.example.com"
+  },
+  "capabilities": {
+    "streaming": true,
+    "pushNotifications": true,
+    "stateTransitionHistory": false
+  },
+  "defaultInputModes": ["text/plain"],
+  "defaultOutputModes": ["text/plain"],
+  "skills": [
+    {
+      "id": "weather",
+      "name": "weather",
+      "description": "Gets weather conditions for a location.",
+      "tags": ["tool"]
+    }
+  ]
+}
+```
+
+A2A 將工作表示為訊息和任務。訊息攜帶文字、文件或結構化資料部分。
+
+任務是具有 ID 和生命週期狀態的有狀態工作單元。客戶可以追蹤長時間運行的工作並發送後續輪流。他們還可以在斷開連接後取消工作或重新訂閱。
+
+## 協議版本 {/* #protocol-versions */}
+
+Mastra 在同一Agent卡和執行 URL 上支援 A2A 協定 v0.3 和 v1.0。這`A2A-Version` request header selects the wire protocol:
+
+* 缺失、空置或`0.3`: Uses the existing v0.3 API.
+* `1.0`：使用 v1.0 API。
+* 任何其他值：返回`VersionNotSupported` protocol error.
+
+`A2AAgent`和`MastraClient.getA2A()` use v0.3 by default. Set `protocolVersion: '1.0'` on `A2AAgent` for v1.0 subagent delegation, or use `MastraClient.getA2AV1()` for direct v1.0 requests. Both v1.0 clients send `A2A-Version: 1.0` automatically. The direct v1.0 client also adds the `tasks/list` operation.
+
+從下列位置匯入 v1.0 協定類型和編解碼器`@mastra/core/a2a/v1`. The existing `@mastra/core/a2a/client` export remains on v0.3.
+
+## 開始使用 {/* #get-started */}
+
+A2A 在 Mastra 中有兩條常見路徑：
+
+* 使用遠端 A2A Agent程式作為 Mastra 子Agent`A2AAgent`.
+* 將請求傳送到 Mastra A2A 端點`MastraClient.getA2A()`.
+
+使用`A2AAgent` when another Mastra agent should delegate work to a remote agent. Use the client SDK when application code needs to call an A2A-enabled Mastra endpoint directly.
+
+## 使用 A2A Agent作為子Agent {/* #consume-a2a-agents-as-subagents */}
+
+使用`A2AAgent` to wrap a remote A2A agent, then add it to a parent agent with the [supervisor agents](/docs/subagents) pattern. Pass an explicit agent card URL when the remote server hosts multiple agents or uses a custom well-known path. Set `protocolVersion: '1.0'` when the remote agent requires A2A v1.0. Omit it to use v0.3.
+
+```typescript title="src/mastra/agents/support-agent.ts"
+import { Agent } from '@mastra/core/agent'
+import { A2AAgent } from '@mastra/core/a2a'
+
+const remoteWeatherAgent = new A2AAgent({
+  url: 'https://weather.example.com/api/.well-known/weather-agent/agent-card.json',
+  protocolVersion: '1.0',
+  headers: {
+    Authorization: `Bearer ${process.env.WEATHER_AGENT_TOKEN}`,
+  },
+})
+
+export const supportAgent = new Agent({
+  id: 'support-agent',
+  name: 'Support Agent',
+  instructions: 'Answer user questions and delegate weather questions when needed.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  agents: {
+    remoteWeatherAgent,
+  },
+})
+```
+
+如果`url` points to a domain, `A2AAgent` fetches the agent card from `/.well-known/agent-card.json`. Use a domain URL for single-agent servers that follow that discovery path. For multi-agent servers, pass the full card URL, such as `https://agent.example.com/api/.well-known/weather-agent/agent-card.json`.
+
+在執行過程中，`A2AAgent`:
+
+* 獲取並緩存遠端Agent卡。
+* 從卡片中讀取執行 URL 和功能。
+* 通話`message/send` or `message/stream` with v0.3, and `SendMessage` or `SendStreamingMessage` with v1.0.
+* 將遠端訊息、任務、工件和狀態更新轉換為 Mastra 子Agent程式結果。
+* 支援`resumeGenerate()` and `resumeStream()` when the remote task requires follow-up input or resubscription.
+
+如果遠端卡不宣傳串流媒體支持，`A2AAgent.stream()` falls back to the non-streaming generate path and returns a buffered stream result.
+
+## 使用客戶端 SDK 發送請求 {/* #send-requests-with-the-client-sdk */}
+
+使用`MastraClient.getA2A()` when you want application code to call an A2A-enabled Mastra agent. Configure `baseUrl` for the server origin and `apiPrefix` when the server doesn't use the default `/api` prefix.
+
+```typescript title="src/a2a-client.ts"
+import { MastraClient } from '@mastra/client-js'
+
+const client = new MastraClient({
+  baseUrl: 'https://agent.example.com',
+  headers: {
+    Authorization: `Bearer ${process.env.AGENT_API_TOKEN}`,
+  },
+})
+
+const a2a = client.getA2A('weather-agent')
+const card = await a2a.getAgentCard()
+
+console.log(card.name, card.capabilities)
+```
+
+使用`sendMessageStream()` to send a message and receive task status and artifact updates over Server-Sent Events (SSE):
+
+```typescript title="src/a2a-client.ts" oxfmt:false
+const stream = a2a.sendMessageStream({
+  message: {
+    kind: 'message',
+    role: 'user',
+    messageId: crypto.randomUUID(),
+    parts: [{ kind: 'text', text: "What's the weather in Prague?" }],
+  },
+})
+
+for await (const event of stream) {
+  if (event.kind === 'artifact-update') {
+    console.log(event.artifact.parts)
+  }
+}
+```
+
+如果流在任務仍在運行時斷開連接，請使用`resubscribeTask()` to receive live updates for the in-progress task:
+
+```typescript title="src/a2a-client.ts" oxfmt:false
+const updates = a2a.resubscribeTask({
+  id: 'task-123',
+})
+
+for await (const event of updates) {
+  console.log(event)
+}
+```
+
+### 使用v1.0客戶端 {/* #use-the-v10-client */}
+
+使用`getA2AV1()` to opt into the A2A v1.0 wire protocol. The protocol package provides codecs for creating v1 request values from JSON-shaped input:
+
+```typescript title="src/a2a-v1-client.ts"
+import { ListTasksRequest } from '@mastra/core/a2a/v1'
+import { MastraClient } from '@mastra/client-js'
+
+const client = new MastraClient({
+  baseUrl: 'https://agent.example.com',
+})
+
+const a2a = client.getA2AV1('weather-agent')
+const response = await a2a.listTasks(
+  ListTasksRequest.fromJSON({
+    contextId: 'customer-support',
+    pageSize: 20,
+  }),
+)
+
+for (const task of response.tasks) {
+  console.log(task.id, task.status)
+}
+```
+
+v1.0客戶端支援`getAgentCard()`, `sendMessage()`, `sendMessageStream()`, `getTask()`, `listTasks()`, `cancelTask()`, and `resubscribeTask()`.
+
+## 配置子Agent呼叫 {/* #configure-subagent-calls */}
+
+`A2AAgent`接受經過身份驗證或受限環境的請求選項：
+
+```typescript title="src/mastra/agents/support-agent.ts"
+import { A2AAgent } from '@mastra/core/a2a'
+
+const remoteWeatherAgent = new A2AAgent({
+  url: 'https://weather.example.com/api/.well-known/weather-agent/agent-card.json',
+  headers: {
+    Authorization: `Bearer ${process.env.WEATHER_AGENT_TOKEN}`,
+  },
+  retries: 2,
+  backoffMs: 250,
+  maxBackoffMs: 1000,
+  timeoutMs: 30_000,
+})
+```
+
+您也可以透過`credentials`, `fetch`, and `abortSignal` when the runtime needs custom fetch behavior or request cancellation.
+
+## 人在迴路 {/* #human-in-the-loop */}
+
+A2A 模型中的人機交互作用 (HITL) 與`input-required` task state. When a task pauses for input, the client provides the missing input by sending a follow-up message with the same `taskId`, and the server continues the task.
+
+Mastra 將其Agent懸浮模型在兩個方向上映射到此狀態：
+
+* **作為伺服器**：當暴露的Agent掛起時，任務將轉換為`input-required`. This includes suspensions caused by [tool approval](/docs/agents/human-in-the-loop) or a tool that calls `suspend()`. The task status message includes a text prompt and a data part with the structured `suspendPayload` and `resumeSchema`. A follow-up `message/send` or `message/stream` request with the same `taskId` resumes the suspended run with the provided input.
+* **作為客戶**：當遠端任務到達時`input-required` or `auth-required`, `A2AAgent` returns a suspended result with `finishReason: 'suspended'` and a `suspendPayload`. Calling `resumeGenerate()` or `resumeStream()` sends the input or credentials back to the remote task with the original `taskId`.
+
+```typescript title="src/a2a-hitl.ts"
+import { A2AAgent } from '@mastra/core/a2a'
+
+const agent = new A2AAgent({
+  url: 'https://agent.example.com/api/.well-known/booking-agent/agent-card.json',
+})
+
+const result = await agent.generate('Book a flight to Paris', { runId: 'run-1' })
+
+if (result.finishReason === 'suspended') {
+  // Inspect result.suspendPayload, collect input from a human,
+  // then resume the remote task.
+  const resumed = await agent.resumeGenerate({ approved: true }, { runId: 'run-1' })
+  console.log(resumed.text)
+}
+```
+
+後續訊息`input-required` task can carry the resume data as a structured data part, or as JSON or plain text in a text part.
+
+當恢復運行需要額外輸入時，任務返回到`input-required` and the flow repeats. Resuming a suspended run requires storage configured on the Mastra server so the suspended run state can be restored across requests.
+
+:::注意
+A2A 任務記錄位於記憶體儲存中，因此暫停的任務只能由暫停它的相同伺服器程序恢復。伺服器重新啟動或沒有黏性路由的水平擴展部署會遺失任務記錄，且後續訊息會因任務未找到錯誤而失敗。
+:::
+
+## 推播通知 {/* #push-notifications */}
+
+Mastra 支援遠端Agent的 A2A 推播通知`capabilities.pushNotifications`. Use push notifications when a client can't keep a stream open, or when a long-running task should update a callback URL after the original request ends.
+
+用戶端取得任務 ID 後，可以為該任務註冊回呼 URL：
+
+```typescript title="src/a2a-client.ts"
+await a2a.setTaskPushNotificationConfig({
+  taskId: 'task-123',
+  pushNotificationConfig: {
+    url: 'https://app.example.com/a2a/tasks',
+    token: process.env.A2A_WEBHOOK_TOKEN,
+  },
+})
+```
+
+當任務到達時，Mastra Server 將目前任務快照傳送到已註冊的回呼`completed`, `failed`, `canceled`, `rejected`, `input-required`, or `auth-required`. Push notification delivery is best-effort. Protect callback URLs, validate notification tokens, and avoid exposing internal network targets as push notification destinations.
+
+推播通知配置儲存在記憶體中，伺服器重新啟動後必須重新註冊。
+
+## 簽署並驗證Agent卡 {/* #sign-and-verify-agent-cards */}
+
+Mastra 支援簽署的 A2A Agent卡，因此客戶可以驗證發現的卡是否來自受信任的發行商，並且在傳輸過程中未發生變更。在公開遠端Agent的 Mastra 伺服器上設定簽章：
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core/mastra'
+
+export const mastra = new Mastra({
+  server: {
+    a2a: {
+      agentCardSigning: {
+        privateKey: process.env.A2A_AGENT_CARD_PRIVATE_KEY!,
+        protectedHeader: {
+          alg: 'ES256',
+          kid: 'agent-card-key',
+        },
+      },
+    },
+  },
+})
+```
+
+配置簽名時，Mastra 包括`signatures` array on the agent card. Client verification is opt-in, and unsigned cards still return unchanged.
+
+驗證簽名卡`MastraClient.getA2A()`:
+
+```typescript title="src/a2a-client.ts"
+const card = await a2a.getAgentCard({
+  verifySignature: {
+    algorithms: ['ES256'],
+    keyProvider: async ({ kid, jku }) => {
+      return fetchTrustedPublicJwk({ kid, jku })
+    },
+  },
+})
+
+if (!card.signatures?.length) {
+  throw new Error('Expected a signed A2A agent card.')
+}
+```
+
+當客戶端在呼叫遠端Agent之前必須強制執行可信任金鑰時，請使用客戶端簽署驗證。
+
+## 驗證子Agent卡 {/* #verify-subagent-cards */}
+
+使用`verifyAgentCard` when a parent agent should validate a remote agent before delegating work to it. The verification hook receives the fetched agent card and context about where and when it was fetched.
+
+```typescript title="src/mastra/agents/support-agent.ts"
+import { A2AAgent } from '@mastra/core/a2a'
+
+const remoteWeatherAgent = new A2AAgent({
+  url: 'https://weather.example.com/api/.well-known/weather-agent/agent-card.json',
+  verifyAgentCard: {
+    verify: async (card, context) => {
+      if (card.provider?.organization !== 'Weather Inc') {
+        throw new Error(`Unexpected provider for ${context.cardUrl}`)
+      }
+    },
+  },
+})
+```
+
+在父Agent委託給遠端Agent之前，使用此掛鉤可以強制執行預期提供者、預期端點、憑證綁定身分、簽署卡或其他信任要求。
+
+## 有關的 {/* #related */}
+
+* [Agent參考](/reference/agents/agent)
+* [JavaScript 用戶端Agent參考](/reference/client-js/agents)
+* [A2A核心概念](https://a2a-protocol.org/latest/topics/key-concepts/)
+* [A2A 發現指南](https://a2a-protocol.org/latest/topics/agent-discovery/)
+* 📹 [Agent-to-agent with Mastra workshop](https://www.youtube.com/watch?v=LQDzyNGm-aw)

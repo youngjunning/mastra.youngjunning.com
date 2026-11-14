@@ -1,0 +1,169 @@
+---
+title: "Braintrust | Observability"
+description: "Export Mastra traces to Braintrust for LLM evaluation and monitoring with zero-config environment variables or explicit project configuration."
+packages:
+  - "@mastra/braintrust"
+  - "@mastra/observability"
+---
+
+# 智囊團
+
+[智囊團](https://www.braintrust.dev/)是一個評估和監控平台，可幫助您衡量和提高 LLM 申請品質。 Braintrust 匯出器將您的痕跡發送到 Braintrust，以便進行系統評估、評分和實驗。
+
+## 安裝 {/* #installation */}
+
+```bash npm2yarn
+npm install @mastra/braintrust@latest
+```
+
+## 配置 {/* #configuration */}
+
+### 先決條件 {/* #prerequisites */}
+
+1. **智囊團帳戶**: 報名於[braintrust.dev](https://www.braintrust.dev/)
+2. **專案**：為您的追蹤建立或選擇一個項目
+3. **API金鑰**：在 Braintrust 設定 → API 金鑰中生成
+4. **環境變數**：設定您的憑證：
+
+```bash title=".env"
+BRAINTRUST_API_KEY=sk-xxxxxxxxxxxxxxxx
+
+# Optional
+BRAINTRUST_ENDPOINT=https://api.braintrust.dev  # Custom endpoint if needed
+```
+
+### 零配置設定 {/* #zero-config-setup */}
+
+設定環境變數後，無需配置即可使用匯出器：
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { Observability } from '@mastra/observability'
+import { BraintrustExporter } from '@mastra/braintrust'
+
+export const mastra = new Mastra({
+  observability: new Observability({
+    configs: {
+      braintrust: {
+        serviceName: 'my-service',
+        exporters: [new BraintrustExporter()],
+      },
+    },
+  }),
+})
+```
+
+### 明確配置 {/* #explicit-configuration */}
+
+您也可以直接傳遞憑證（優先於環境變數）：
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { Observability } from '@mastra/observability'
+import { BraintrustExporter } from '@mastra/braintrust'
+
+export const mastra = new Mastra({
+  observability: new Observability({
+    configs: {
+      braintrust: {
+        serviceName: 'my-service',
+        exporters: [
+          new BraintrustExporter({
+            apiKey: process.env.BRAINTRUST_API_KEY,
+            projectName: 'my-project',
+          }),
+        ],
+      },
+    },
+  }),
+})
+```
+
+### 完整配置 {/* #complete-configuration */}
+
+```typescript
+new BraintrustExporter({
+  // Required
+  apiKey: process.env.BRAINTRUST_API_KEY!,
+
+  // Optional settings
+  projectName: 'my-project', // Default: 'mastra-tracing'
+  endpoint: 'https://api.braintrust.dev', // Custom endpoint if needed
+  logLevel: 'info', // Diagnostic logging: debug | info | warn | error
+})
+```
+
+## 將痕跡附加到 Braintrust 評估 {/* #attach-traces-to-braintrust-evals */}
+
+當您的應用程式使用時，直接安裝 Braintrust SDK`Eval()`, `logger.traced()`, or `currentSpan`:
+
+```bash npm2yarn
+npm install braintrust@latest
+```
+
+當您在 Braintrust 內執行 Mastra 時`Eval()` or `logger.traced()`, pass the Braintrust logger and `currentSpan` resolver to the exporter. Import `currentSpan` from the same `braintrust` package instance that creates the eval or traced span.
+
+當您的應用程式和`@mastra/braintrust` resolve different installed copies of the Braintrust SDK.
+
+導出器接受來自 Braintrust SDK v2 和 v3 的相容記錄器和跨距物件。您的應用程式的 Braintrust SDK 版本不需要與安裝的版本相符`@mastra/braintrust`.
+
+```typescript title="src/mastra/index.ts"
+import { currentSpan, initLogger } from 'braintrust'
+import { BraintrustExporter } from '@mastra/braintrust'
+
+const logger = initLogger({
+  projectName: 'my-project',
+  apiKey: process.env.BRAINTRUST_API_KEY,
+})
+
+const exporter = new BraintrustExporter({
+  braintrustLogger: logger,
+  currentSpan,
+})
+```
+
+使用 Braintrust 評估任務中配置的 Mastra 實例。這`currentSpan` resolver above reads the active span created by `Eval()`.
+
+```typescript title="src/evals/braintrust.ts"
+import { Eval } from 'braintrust'
+import { mastra } from '../mastra'
+
+await Eval('my-project', {
+  data: () => [{ input: 'Say hello', expected: 'Hello' }],
+  task: async input => {
+    const agent = mastra.getAgent('assistant')
+    return (await agent.generate(input)).text
+  },
+  scores: [],
+})
+```
+
+[Braintrust v2 to v3 migration guide](https://www.braintrust.dev/docs/sdks/typescript/migrations/v2-to-v3).
+
+## `spanId` {/* #querying-braintrust-with-returned-spanid */}
+
+Mastra 使用其傳回的`spanId` as both the Braintrust row ID and span ID. Use it to find the corresponding Braintrust span by `id` or `span_id`.
+
+`root_span_id`, so the returned Mastra `spanId` isn't the Braintrust `root_span_id`.
+
+```typescript title="src/mastra/usage.ts"
+const result = await agent.stream('Summarize this ticket')
+
+console.log('Mastra trace ID:', result.traceId)
+console.log('Braintrust row and span ID:', result.spanId)
+
+// Use result.spanId in your Braintrust lookup/query path
+```
+
+這同樣適用於`agent.generate()` and workflow run results (`run.start()`, `run.stream()` final state, `run.resume()`).
+
+## 成本追蹤 {/* #cost-tracking */}
+
+當模型Provider報告請求的成本時（如 OpenRouter 和 Vercel AI Gateway 所做的那樣），導出者將該成本發送給 Braintrust。然後，Braintrust 顯示Provider收取的費用，而不是根據其自己的模型價格進行估算。沒有報告成本的世代保留 Braintrust 的估計。
+
+請參閱[`BraintrustExporter` reference](/reference/observability/tracing/exporters/braintrust#cost-tracking) for the exact rules.
+
+## 有關的 {/* #related */}
+
+* [追蹤概述](/docs/observability/tracing/overview)
+* [智囊團文檔](https://www.braintrust.dev/docs)

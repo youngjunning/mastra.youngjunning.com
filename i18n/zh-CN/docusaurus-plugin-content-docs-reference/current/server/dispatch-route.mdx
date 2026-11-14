@@ -1,0 +1,194 @@
+---
+title: "Reference: dispatchRoute() | Server"
+description: "Use dispatchRoute() to run any Mastra server route in-process with the authorization, validation, and error responses an HTTP request to it would get."
+packages:
+  - "@mastra/server"
+---
+
+import PropertiesTable from "@site/src/components/PropertiesTable";
+
+# 调度路由()
+
+这`dispatchRoute()`函数作为调用用户在进程中运行服务器路由。它期望 Mastra 服务器身份验证已经验证了请求上下文，然后将服务器适配器应用于该路由的 HTTP 请求：您的身份验证提供者的`authorize`, `authorizeUser`， 和`rules`、架构验证、RBAC 权限和细粒度授权 (FGA)。它绝不允许 HTTP 请求拒绝的调用。
+
+使用它在内置路由（包括流路由）之上构建另一个传输。对于从Tool调用的 JSON 路由，[`invokeRoute()`](/reference/server/invoke-route) is the smaller API.
+
+## 使用示例 {/* #usage-example */}
+
+```typescript title="src/server/run-tool.ts"
+import type { Mastra } from '@mastra/core/mastra'
+import type { RequestContext } from '@mastra/core/request-context'
+import { SERVER_ROUTES, dispatchRoute } from '@mastra/server/server-adapter'
+
+const executeTool = SERVER_ROUTES.find(
+  route => route.method === 'POST' && route.path === '/tools/:toolId/execute',
+)!
+
+export async function runWeatherTool(
+  mastra: Mastra,
+  requestContext: RequestContext,
+  request: Request,
+) {
+  const outcome = await dispatchRoute(
+    executeTool,
+    { pathParams: { toolId: 'weather' }, body: { data: { city: 'Paris' } } },
+    { mastra, requestContext, abortSignal: request.signal, request },
+  )
+  if (!outcome.ok) throw new Error(`Tool route failed with status ${outcome.status}`)
+  return outcome.result
+}
+```
+
+## 进口 {/* #import */}
+
+```typescript
+import { dispatchRoute } from '@mastra/server/server-adapter'
+```
+
+## 签名 {/* #signature */}
+
+```typescript
+function dispatchRoute(
+  route: ServerRoute,
+  input: DispatchRouteInput,
+  context: ServerContext,
+): Promise<DispatchRouteResult>
+```
+
+## 参数 {/* #parameters */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'route',
+  type: 'ServerRoute',
+  description:
+    'The route to run, such as one from `SERVER_ROUTES`, exported from `@mastra/server/handlers/*`, or created with [`createRoute()`](/reference/server/create-route).',
+  isOptional: false,
+},
+{
+  name: 'input.pathParams',
+  type: 'Record<string, unknown>',
+  description:
+    "Path parameters, validated against the route's `pathParamSchema`. Every `:param` in the route path needs a non-empty string that isn't `.` or `..`.",
+  isOptional: true,
+},
+{
+  name: 'input.query',
+  type: 'Record<string, unknown>',
+  description: "Query parameters, validated against the route's `queryParamSchema`.",
+  isOptional: true,
+},
+{
+  name: 'input.body',
+  type: 'unknown',
+  description: "Request body, validated against the route's `bodySchema`.",
+  isOptional: true,
+},
+{
+  name: 'context.mastra',
+  type: 'Mastra',
+  description: 'The Mastra instance the route runs against.',
+  isOptional: false,
+},
+{
+  name: 'context.requestContext',
+  type: 'RequestContext',
+  description:
+    "The caller's request context, already authenticated by Mastra server auth. Its user, permissions, and auth mode decide what the caller may do.",
+  isOptional: false,
+},
+{
+  name: 'context.abortSignal',
+  type: 'AbortSignal',
+  description: 'Cancels the route handler.',
+  isOptional: false,
+},
+{
+  name: 'context.request',
+  type: 'Request',
+  description:
+    "The caller's HTTP request. Its headers are passed to `authorizeUser`, and it's handed to route handlers that read the request.",
+  isOptional: true,
+},
+{
+  name: 'context.routePrefix',
+  type: 'string',
+  description:
+    'The prefix of the server adapter whose paths apply, such as `/api`. Required when no adapter is registered, or when several are and the request context comes from none of them.',
+  isOptional: true,
+},
+]}
+/>
+
+## 退货 {/* #returns */}
+
+一个`DispatchRouteResult`, which is one of two shapes:
+
+<PropertiesTable
+  content={[
+{
+  name: 'ok',
+  type: 'boolean',
+  description: '`true` when the handler ran, `false` when a check failed or the handler threw.',
+},
+{
+  name: 'result',
+  type: 'unknown',
+  description:
+    "When `ok` is `true`: the handler's raw return value. Streaming routes return their stream unconverted.",
+},
+{
+  name: 'status',
+  type: 'number',
+  description:
+    'When `ok` is `false`: the HTTP status an adapter would have answered with, such as `400`, `401`, or `403`.',
+},
+{
+  name: 'body',
+  type: 'unknown',
+  description: 'When `ok` is `false`: the JSON error body an adapter would have sent.',
+},
+]}
+/>
+
+## 行为 {/* #behavior */}
+
+* **不会重新运行身份验证。**&#x914D;置服务器或 Studio 身份验证时，请求上下文必须已包含已解析的用户 Mastra 服务器身份验证。否则`dispatchRoute()` returns `401`, unless the route's path is public.
+* **授权挂钩查看 HTTP 路径。** `authorize()`, `authorizeUser()`, and `rules` receive the route's method and the path it's served under: the adapter's prefix plus the route path with path parameters filled in.
+* **服务适配器的路径和检查适用。**&#x6BCF;个适配器将自己绑定到它创建的请求上下文，在上下文的条目之外，因此Agent和Tool代码无法读取它，因此使用该请求上下文分派的路由会获取该适配器的前缀并覆盖，即使另一个适配器在相同的前缀下提供相同的 Mastra 实例也是如此。在请求之外，为 Mastra 实例提供服务的唯一适配器（或`context.routePrefix`) is used. If the adapter can't be told, or no adapter serves `routePrefix`, `dispatchRoute()` returns `401` for a caller without a user and throws otherwise. It never picks one of several adapters on its own.
+* **像 URL 一样检查路径参数。**&#x7F3A;失的、空的、非字符串的，`.`, or `..` value returns `400`. An optional `:param?` can be left out.
+* **路径参数获胜。**&#x4E0E;路径参数同名的正文或查询字段将被覆盖，因此授权和处理程序将作用于路径中指定的资源。
+* **受保护的模式不会打开其他路径。**&#x914D;置身份验证后，路由需要用户，除非其路径被声明为公共，即使它位于您的外部`protected` patterns.
+* **适配器覆盖适用。**&#x4E00;个`checkRoutePermission()` override on the serving `MastraServer` subclass also runs for dispatched routes.
+* **`authorizeUser()`收到替代请求。**&#x5B83;接收对调度路由的路径和方法的请求，其中包含以下标头`context.request` and no body.
+* **服务器上下文不能来自输入。** `request`, `routePrefix`, `registeredTools`, and `taskStore` reach the handler only from `context`, never from body or query fields with those names.
+
+## 定制适配器 {/* #custom-adapters */}
+
+可扩展的适配器`MastraServer` tell `dispatchRoute()` where they serve routes. An adapter that doesn't must register itself, and bind the returned handle to each request context it creates:
+
+```typescript
+import { bindDispatchAdapter, registerDispatchAdapter } from '@mastra/server/server-adapter'
+
+const handle = registerDispatchAdapter(mastra, { prefix: '/api' })
+
+// For each request:
+bindDispatchAdapter(requestContext, handle)
+```
+
+不扩展的适配器`MastraServer` can run the route permission and FGA checks of the built-in adapters with `authorizeRoute()`, after authenticating the request and validating its parameters. It resolves to `null` when the call is allowed, or to a `403` error to send back. `checkRouteRBAC()` runs the permission check alone.
+
+```typescript
+import { authorizeRoute } from '@mastra/server/server-adapter'
+
+const denied = await authorizeRoute(mastra, route, params, requestContext)
+if (denied)
+  return Response.json({ error: denied.error, message: denied.message }, { status: denied.status })
+```
+
+## 有关的 {/* #related */}
+
+* [`invokeRoute()`](/reference/server/invoke-route)
+* [`createRoute()`](/reference/server/create-route)
+* [服务器路由](/reference/server/routes)

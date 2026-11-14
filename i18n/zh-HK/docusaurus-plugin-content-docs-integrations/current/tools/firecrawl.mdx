@@ -1,0 +1,150 @@
+---
+title: "Firecrawl | Tools"
+description: "Build Mastra tools with Firecrawl so agents and workflows can search, scrape, and extract live web content as markdown or structured JSON."
+packages:
+  - '@mastra/core'
+---
+
+import Steps from "@site/src/components/Steps";
+import StepItem from "@site/src/components/StepItem";
+
+# 火行
+
+Firecrawl 是一種 Web 資料 API，可將網站轉換為乾淨的 Markdown 或結構化 JSON。在本指南中，您將把 Firecrawl 連接到 Mastra Tool中，以便您的Agent程式和Workflow可以按需搜尋和抓取即時 Web 資料。
+
+## 先決條件 {/* #prerequisites */}
+
+* Node.js`v22.13.0` or later installed
+* Firecrawl API 金鑰（在[https://firecrawl.dev](https://firecrawl.dev))
+* 來自受支援的 API 金鑰[Model Provider](/models)
+* 現有的 Mastra 專案。跟隨[Get started](/docs) to create one.
+
+## 安裝 {/* #installation */}
+
+安裝Firecrawl SDK：
+
+```bash npm2yarn
+npm install firecrawl
+```
+
+## 配置環境變數 {/* #configure-environment-variables */}
+
+創建一個`.env` file in your project root:
+
+```bash title=".env"
+FIRECRAWL_API_KEY=fc-your-api-key
+# Optional: FIRECRAWL_API_URL=http://localhost:3002
+```
+
+## 建構 Firecrawl Tool {/* #build-the-firecrawl-tools */}
+
+建立一個向 Mastra 公開 Firecrawl 搜尋和抓取的Tool檔案。
+
+<Steps>
+  <StepItem>
+    創造`src/mastra/tools/firecrawl.ts` and set up Firecrawl:
+
+    ```ts title="src/mastra/tools/firecrawl.ts"
+    import { Firecrawl } from 'firecrawl'
+    import { createTool } from '@mastra/core/tools'
+    import { z } from 'zod'
+
+    const firecrawl = new Firecrawl({ apiKey: process.env.FIRECRAWL_API_KEY! })
+
+    export const firecrawlSearch = createTool({
+      id: 'firecrawl-search',
+      description: 'Search the web and return top results.',
+      inputSchema: z.object({ query: z.string().min(1) }),
+      outputSchema: z.object({
+        results: z.array(
+          z.object({
+            title: z.string().nullable(),
+            url: z.string(),
+          }),
+        ),
+      }),
+      execute: async ({ query }) => {
+        const results = await firecrawl.search(query, { limit: 3 })
+        return {
+          results: (results.web ?? []).map(item => ({
+            title: item.title ?? null,
+            url: item.url,
+          })),
+        }
+      },
+    })
+
+    export const firecrawlScrape = createTool({
+      id: 'firecrawl-scrape',
+      description: 'Scrape a URL and return markdown content.',
+      inputSchema: z.object({ url: z.string().url() }),
+      outputSchema: z.object({ markdown: z.string() }),
+      execute: async ({ url }) => {
+        const result = await firecrawl.scrape(url, {
+          formats: ['markdown'],
+          onlyMainContent: true,
+        })
+        return { markdown: result.markdown ?? '' }
+      },
+    })
+    ```
+  </StepItem>
+
+  <StepItem>
+    建立一個新Agent`src/mastra/agents/web-agent.ts`:
+
+    ```ts title="src/mastra/agents/web-agent.ts"
+    import { Agent } from '@mastra/core/agent'
+    import { firecrawlSearch, firecrawlScrape } from '../tools/firecrawl'
+
+    export const webAgent = new Agent({
+      id: 'web-agent',
+      name: 'Web Agent',
+      instructions: 'Use Firecrawl tools to search and scrape web pages, then summarize the results.',
+      model: '__GATEWAY_OPENAI_MODEL__',
+      tools: { firecrawlSearch, firecrawlScrape },
+    })
+    ```
+  </StepItem>
+
+  <StepItem>
+    將新建立的Agent註冊到`src/mastra/index.ts` on your Mastra instance:
+
+    ```ts title="src/mastra/index.ts" {2, 5}
+    import { Mastra } from '@mastra/core'
+    import { webAgent } from './agents/web-agent'
+
+    export const mastra = new Mastra({
+      agents: { webAgent },
+    })
+    ```
+  </StepItem>
+</Steps>
+
+## 在工作室測試 {/* #test-in-studio */}
+
+運行開發伺服器並打開[Studio](/docs/studio/overview):
+
+```bash
+mastra dev
+```
+
+在 Studio 中，開啟**Web Agent** and try:
+
+* “查找最新的 Mastra 變更日誌並總結上一個版本。”
+* “搜尋 Firecrawl 定價並提取計劃等級。”
+
+## 自託管 Firecrawl {/* #self-hosted-firecrawl */}
+
+如果您在本機上運行 Firecrawl，請設定`FIRECRAWL_API_URL` or pass `apiUrl` in the client:
+
+```ts title="src/mastra/tools/firecrawl.ts"
+const firecrawl = new Firecrawl({
+  apiKey: process.env.FIRECRAWL_API_KEY!,
+  apiUrl: process.env.FIRECRAWL_API_URL,
+})
+```
+
+## 有關的 {/* #related */}
+
+* [Firecrawl 文檔](https://docs.firecrawl.dev)

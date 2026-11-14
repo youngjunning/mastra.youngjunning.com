@@ -1,0 +1,403 @@
+---
+title: 'Reference: Agent Controller API | Client SDK'
+description: 'The Agent Controller API connects a UI in another process to an agent controller session over HTTP, streaming its events and sending messages, approvals, and suspension responses.'
+packages:
+  - '@mastra/client-js'
+---
+
+# Agent控制器API
+
+Agent控制器 API 達到[`AgentController`](/reference/agent-controller/agent-controller-class)透過其 HTTP 路由在 Mastra 實例上註冊。從瀏覽器或不擁有控制器的任何其他進程使用它。擁有控制器的進程使用進程內[`Session`](/reference/agent-controller/session)反而。
+
+## 使用範例 {/* #usage-example */}
+
+```typescript
+import { MastraClient } from '@mastra/client-js'
+
+const client = new MastraClient({ baseUrl: 'http://localhost:4111' })
+const session = client.getAgentController('coding-controller').session('user-123')
+
+await session.create()
+
+const subscription = await session.subscribe({
+  onEvent: event => handleEvent(event),
+  onError: error => showDisconnected(error),
+  onReconnect: () => {
+    void session.state().then(resync).catch(showDisconnected)
+  },
+  reconnect: true,
+})
+
+await session.sendMessage('Summarize the open pull requests')
+
+// Call when the UI disconnects.
+subscription.unsubscribe()
+```
+
+## 上市Agent控制器 {/* #listing-agent-controllers */}
+
+擷取連線的 Mastra 執行個體上所託管的Agent控制器：
+
+```typescript
+const controllers = await client.listAgentControllers()
+```
+
+每個條目的`id` is the key the controller is registered under in `new Mastra({ agentControllers })`, not the controller's own `id`.
+
+## 使用特定Agent控制器 {/* #working-with-a-specific-agent-controller */}
+
+透過註冊的密鑰獲取Agent控制器的實例`new Mastra({ agentControllers })`. The key can differ from the controller's `id`. In this example, pass `'coding'`, not `'coding-controller'`:
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { AgentController } from '@mastra/core/agent-controller'
+
+const codingController = new AgentController({ id: 'coding-controller', agent, modes })
+
+export const mastra = new Mastra({
+  agentControllers: { coding: codingController },
+})
+```
+
+```typescript
+const controller = client.getAgentController('coding')
+```
+
+### `listModes()` {/* #listmodes */}
+
+列出控制器上配置的模式，例如`build` and `plan`.
+
+返回：`Promise<AgentControllerModeInfo[]>`
+
+### `listModels()` {/* #listmodels */}
+
+列出控制器上可用的型號及其身份驗證狀態和使用計數。
+
+返回：`Promise<AgentControllerAvailableModel[]>`
+
+### `listActiveRuns()` {/* #listactiveruns */}
+
+列出控制器上所有資源的運作中的運作。
+
+返回：`Promise<AgentControllerActiveRun[]>`
+
+### `workspaceStatus()` {/* #workspacestatus */}
+
+返回控制器的Workspace狀態。
+
+返回：`Promise<AgentControllerWorkspaceStatus>`
+
+### `session(sessionId)` {/* #sessionsessionid */}
+
+返回一個`AgentControllerSession` addressed by its session id. Every request goes to `/agent-controller/:controllerId/sessions/:sessionId/...`. Sessions are get-or-create on the server, so calling `create()` with the same `sessionId` resumes the existing conversation instead of forking it.
+
+共享資源但使用不同會話 ID 的會話各自擁有自己的運行循環、線程綁定、模式、模型和狀態。它們儲存的線程和資源範圍的記憶體屬於共享資源。將資源傳遞給`create()`:
+
+```typescript
+const runA = client.getAgentController('code').session('run-a')
+await runA.create({ resourceId: 'factory-1' })
+
+const runB = client.getAgentController('code').session('run-b')
+await runB.create({ resourceId: 'factory-1' })
+```
+
+## 會話方法 {/* #session-methods */}
+
+### `create(options?)` {/* #createoptions */}
+
+建立或恢復會話。
+
+<PropertiesTable
+  content={[
+{
+  name: 'resourceId',
+  type: 'string',
+  isOptional: true,
+  description:
+    "Memory resource that owns the session's threads. Defaults to the session id, so a session created with only an id keeps one resource of its own.",
+},
+{
+  name: 'tags',
+  type: 'Record<string, string>',
+  isOptional: true,
+  description:
+    'Scopes initial thread selection. A thread is a resume candidate only when its metadata matches every tag.',
+},
+{
+  name: 'threadId',
+  type: 'string',
+  isOptional: true,
+  description: 'Binds the session to one exact thread, creating it with that ID when it does not exist.',
+},
+]}
+/>
+
+返回：`Promise<CreateAgentControllerSessionResponse>`
+
+### `subscribe(options)` {/* #subscribeoptions */}
+
+透過 SSE 訂閱會話的事件流。一旦流建立，承諾就會解決，而當流無法連接時，承諾就會被拒絕。被拒絕的呼叫不會在後台留下任何運行。`reconnect` only governs re-establishing a stream that drops after it was established. To retry the initial connection, loop around `subscribe()`.
+
+<PropertiesTable
+  content={[
+{
+  name: 'onEvent',
+  type: '(event: AgentControllerEvent) => void',
+  description: 'Called for each event received over the stream. See Events for the event types.',
+},
+{
+  name: 'onError',
+  type: '(error: unknown) => void',
+  isOptional: true,
+  description:
+    'Called when the stream errors or ends and no further reconnect will be attempted. The subscription is dead after this fires.',
+},
+{
+  name: 'onReconnect',
+  type: '() => void',
+  isOptional: true,
+  description:
+    'Called each time the stream is re-established after a drop. The server does not replay events missed while disconnected, so re-sync from here with `session.state()` and, for the message gap, `session.listMessages()`.',
+},
+{
+  name: 'reconnect',
+  type: 'boolean | { maxRetries?: number; delayMs?: number; maxDelayMs?: number }',
+  isOptional: true,
+  description:
+    'Re-establishes the stream after an established stream drops. Retries back off exponentially from `delayMs` (default `1000`) up to `maxDelayMs` (default `30000`). `maxRetries` (default `Infinity`) bounds the attempts per outage and resets once a connection is re-established. When retries are exhausted, `onError` fires. A reconnect request that fails with a 4xx (other than `408` and `429`) or `501` stops reconnecting immediately and passes that `MastraClientError` to `onError`.',
+},
+{
+  name: 'idleTimeoutMs',
+  type: 'number',
+  isOptional: true,
+  defaultValue: '60000',
+  description:
+    'Treats the stream as dropped after this many milliseconds without receiving any data. Server heartbeats, sent every 25 seconds, reset the timer, so only a silent connection, such as one left half-open by laptop sleep or a proxy timeout, trips it. A timeout is handled like any other drop: it triggers `reconnect` and `onReconnect` when reconnect is enabled, otherwise `onError`. Also bounds opening the stream: `subscribe()` rejects, and a reconnect attempt counts as failed, when no response arrives in time. Set to `0` to disable.',
+},
+]}
+/>
+
+返回：`Promise<AgentControllerSubscription>`, an object with an `unsubscribe()` method that stops reading and releases the stream.
+
+### `sendMessage(message, options?)` {/* #sendmessagemessage-options */}
+
+向會話發送使用者訊息。傳遞一個字串，或者`{ content, files }` to attach base64-encoded files, where each file is `{ data, mediaType, filename? }`. The reply arrives as `message_*` events on the subscription, not as the return value of the call.
+
+經過`options.requestContext` to merge custom context into the run's request context. Server-controlled keys win.
+
+### `steer(message, options?)` {/* #steermessage-options */}
+
+中止正在進行的運行，然後作為新一輪發送訊息。傳遞一個字串，或者`{ content, files }` to attach files in the same shape as `sendMessage()`.
+
+### `followUp(message, options?)` {/* #followupmessage-options */}
+
+將後續訊息排隊。如果會話空閒，它會立即發送。如果運行處於活動狀態，它將在運行完成後排隊等待。傳遞一個字串，或者`{ content, files }` to attach files in the same shape as `sendMessage()`.
+
+### `abort()` {/* #abort */}
+
+中止飛行中的運作。
+
+### `approveTool(toolCallId, approved, options?)` {/* #approvetooltoolcallid-approved-options */}
+
+批准或拒絕由某個人提出的待處理Tool調用`tool_approval_required` event.
+
+### `respondToToolSuspension(toolCallId, resumeData, options?)` {/* #respondtotoolsuspensiontoolcallid-resumedata-options */}
+
+恢復由 a 引發的暫停的互動Tool`tool_suspended` event. The `resumeData` shape depends on the tool: a `string` or `string[]` for `ask_user`, `"Yes"` or `"No"` for `request_access`, and a `PlanResume` for `submit_plan`.
+
+```typescript
+interface PlanResume {
+  action: 'approved' | 'rejected'
+  feedback?: string
+  path?: string
+  title?: string
+  plan?: string
+}
+```
+
+### `state(options?)` {/* #stateoptions */}
+
+傳回會話的目前模式、模型和線程，以進行初始 UI 水合作用以及重新連接後的重新同步。經過`{ threadId }` to read the state for a specific thread.
+
+返回：`Promise<AgentControllerSessionState>`
+
+### `setState(updates)` {/* #setstateupdates */}
+
+將鍵值對合併到會話狀態中。不在有效負載中的現有金鑰將被保留。
+
+### `switchMode(modeId)` {/* #switchmodemodeid */}
+
+切換活動模式。
+
+### `switchModel(modelId, options?)` {/* #switchmodelmodelid-options */}
+
+切換會話的活動模型並將其保留為活動執行緒的目前模型，與模式變更無關。經過`{ thinkingLevel }` as the second argument to apply and persist a thinking level with the model.
+
+```typescript
+await session.switchModel('__GATEWAY_ANTHROPIC_MODEL_SONNET__', {
+  thinkingLevel: 'high',
+})
+```
+
+### `listThreads(options?)` {/* #listthreadsoptions */}
+
+列出會話的線程，最新的在前。經過`{ limit }` to cap the count and `{ tags }` to scope to threads matching every tag. A bare number is shorthand for `{ limit }`.
+
+返回：`Promise<AgentControllerThreadInfo[]>`
+
+### `switchThread(threadId)` {/* #switchthreadthreadid */}
+
+將會話切換到現有執行緒並重新綁定流和狀態。
+
+### `createThread(title?)` {/* #createthreadtitle */}
+
+建立一個新執行緒並將會話綁定到它。
+
+返回：`Promise<CreateAgentControllerThreadResponse>`
+
+### `cloneThread(options?)` {/* #clonethreadoptions */}
+
+克隆線程及其訊息，然後將會話綁定到克隆。接受`{ sourceThreadId?, title? }`.
+
+返回：`Promise<CreateAgentControllerThreadResponse>`
+
+### `renameThread(threadId, title)` {/* #renamethreadthreadid-title */}
+
+重命名線程。
+
+### `deleteThread(threadId)` {/* #deletethreadthreadid */}
+
+刪除一個執行緒。如果它是活動線程，則會話解除綁定。
+
+### `listMessages(threadId, limit?)` {/* #listmessagesthreadid-limit */}
+
+列出線程的訊息`createdAt` hydrated to `Date`.
+
+返回：`Promise<MastraDBMessage[]>`
+
+### `getGoal()`, `setGoal(objective, options?)`, `updateGoal(options)`, `clearGoal()` {/* #getgoal-setgoalobjective-options-updategoaloptions-cleargoal */}
+
+讀取、設定、更新和清除會話執行緒的目標。`setGoal` accepts `{ judgeModelId?, maxRuns? }`. `updateGoal` also accepts `status: 'active' | 'paused' | 'done'`. The agent's in-loop judge evaluates progress after each turn and reports it as `goal_evaluation` events.
+
+### `getPermissions()`, `setPermissionForCategory(category, policy)`, `setPermissionForTool(toolName, policy)` {/* #getpermissions-setpermissionforcategorycategory-policy-setpermissionfortooltoolname-policy */}
+
+閱讀並設定每個類別和每個Tool的批准策略。
+
+### `getResourceIds()`, `setResourceId(newResourceId)` {/* #getresourceids-setresourceidnewresourceid */}
+
+讀取會話的已知資源 ID 並變更會話的資源標識。
+
+### `getOMRecord()` {/* #getomrecord */}
+
+傳回會話線程的觀察記憶體記錄。
+
+### `sendNotification(input)` {/* #sendnotificationinput */}
+
+向會話發送通知訊號。Agent的傳遞策略決定通知是立即喚醒空閒執行緒還是保留並彙總以供稍後使用。
+
+返回：`Promise<SendNotificationResult>`
+
+## 活動 {/* #events */}
+
+`onEvent`接收會話發出的每個事件，區分為`event.type`:
+
+|集團|活動 |
+| - | - |
+|運行|`agent_start`, `agent_end`, `usage_update`, `goal_evaluation`, `follow_up_queued` |
+| Messages | `message_start`, `message_update`, `message_end` |
+| Tools | `tool_input_start`, `tool_input_delta`, `tool_input_end`, `tool_start`, `tool_update`, `tool_end`, `shell_output`, `command_exit`, `tool_approval_required`, `tool_suspended`, `tool_suspension_cancelled`, `task_updated` |
+| Session | `state_changed`, `display_state_changed`, `mode_changed`, `model_changed`, `thread_changed`, `thread_created`, `thread_deleted`, `thread_title_updated` |
+| Subagents | `subagent_start`, `subagent_text_delta`, `subagent_tool_start`, `subagent_tool_end`, `subagent_end`, `subagent_model_changed`|
+|內存|`om_observation_start`, `om_observation_end`, `om_observation_failed`, `om_reflection_start`, `om_reflection_end`, `om_reflection_failed`, `om_buffering_start`, `om_buffering_end`, `om_buffering_failed`, `om_model_changed`, `om_activation`, `om_status`, `om_thread_title_updated`|
+|工作空間 |`workspace_ready`, `workspace_error`, `workspace_status_changed`|
+|診斷 |`info`, `error` |
+
+通知作為訊息上攜帶的Agent信號傳遞，而不是作為`notification` or `notification_summary` controller events.
+
+訊息生命週期使用三種事件形狀：
+
+* `message_start`帶有初始的`MastraDBMessage`, with `createdAt` hydrated to `Date`.
+* `message_update`攜帶訊息`id` and a compact text, reasoning, or part update.
+* `message_end`攜帶`id` of the completed message.
+
+`thread_created`還附帶一個帶有時間戳記的線程`Date`.
+
+控制器可以發出 SDK 未鍵入的事件。`AgentControllerEvent` is the union of `KnownAgentControllerEvent` and `OtherAgentControllerEvent`. Because `OtherAgentControllerEvent.type` is `string`, comparing `event.type` to a literal doesn't narrow the union. Narrow with `isKnownAgentControllerEvent(event)` first, then reconstruct messages by ID:
+
+```typescript
+import {
+  isKnownAgentControllerEvent,
+  type AgentControllerEvent,
+  type KnownAgentControllerEvent,
+  type MastraDBMessage,
+} from '@mastra/client-js'
+
+type MessageUpdate = Extract<KnownAgentControllerEvent, { type: 'message_update' }>['event']
+
+const activeMessages = new Map<string, MastraDBMessage>()
+
+function applyUpdate(message: MastraDBMessage, update: MessageUpdate): MastraDBMessage {
+  const parts = [...message.content.parts]
+
+  if (update.type === 'text-delta') {
+    const index = parts.findLastIndex(part => part.type === 'text')
+    const part = parts[index]
+
+    if (part?.type === 'text') {
+      parts[index] = { ...part, text: part.text + update.delta }
+    } else {
+      parts.push({ type: 'text', text: update.delta })
+    }
+  } else if (update.type === 'reasoning-delta') {
+    const part = parts[update.index]
+    const reasoning = part?.type === 'reasoning' ? part.reasoning + update.delta : update.delta
+    parts[update.index] = {
+      ...(part?.type === 'reasoning' ? part : { type: 'reasoning' as const }),
+      reasoning,
+      details: [{ type: 'text', text: reasoning }],
+    }
+  } else {
+    parts[update.index] = update.part
+  }
+
+  return { ...message, content: { ...message.content, parts } }
+}
+
+function handleEvent(event: AgentControllerEvent) {
+  if (!isKnownAgentControllerEvent(event)) return
+
+  switch (event.type) {
+    case 'message_start':
+      activeMessages.set(event.message.id, structuredClone(event.message))
+      break
+    case 'message_update': {
+      const message = activeMessages.get(event.id)
+      if (!message) break
+
+      const updated = applyUpdate(message, event.event)
+      activeMessages.set(event.id, updated)
+      render(updated)
+      break
+    }
+    case 'message_end': {
+      const message = activeMessages.get(event.id)
+      if (!message) break
+
+      renderComplete(message)
+      activeMessages.delete(event.id)
+      break
+    }
+    case 'tool_approval_required':
+      showApproval(event.toolCallId)
+      break
+  }
+}
+```
+
+使用`agentControllerMessageText(message)` to pull the plain text out of a reconstructed message's nested content parts.
+
+## 有關的 {/* #related */}
+
+* [Agent控制器](/docs/harness/agent-controller)
+* [`AgentController`](/reference/agent-controller/agent-controller-class)
+* [`Session`](/reference/agent-controller/session)

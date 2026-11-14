@@ -1,0 +1,144 @@
+---
+title: 'BrowserViewer | Browser'
+description: 'Run CLI browser tools through BrowserViewer with a Playwright-managed Chrome session, CDP access, live viewing, and Mastra workspace integration.'
+packages:
+  - '@mastra/browser-viewer'
+---
+
+# 浏览器查看器
+
+这`@mastra/browser-viewer`软件包为基于 CLI 的Tool提供浏览器自动化，例如[Agent浏览器](https://www.npmjs.com/package/agent-browser), [浏览器使用](https://pypi.org/project/browser-use/)， 和[浏览](https://www.npmjs.com/package/browse)。 BrowserViewer 通过 Playwright 启动 Chrome，公开 Chrome DevTools 协议 (CDP) URL，并自动将其注入到运行的 CLI 命令中[SandboxTool](/docs/sandbox/overview#using-the-sandbox).
+
+## 何时使用浏览器查看器 {/* #when-to-use-browserviewer */}
+
+当您的Agent通过 CLI Tool而不是 SDK 驱动浏览器时，请使用 BrowserViewer。 BrowserViewer 处理：
+
+* 启动和管理 Chrome 以供 CLI Tool连接
+* 自动 CDP URL 注入`workspace_execute_command` calls
+* 实时截屏直播流式传输到 Studio
+* 线程范围的浏览器隔离
+
+对于基于 SDK 的浏览器自动化，请使用[AgentBrowser](/integrations/browsers/agent-browser) or [Stagehand](/integrations/browsers/stagehand) instead.
+
+## 快速入门 {/* #quickstart */}
+
+安装`@mastra/browser-viewer` and the CLI tool your agent will use. BrowserViewer manages Chrome, but the CLI tool itself must be installed separately.
+
+```bash npm2yarn
+npm install @mastra/browser-viewer
+```
+
+在您的Workspace环境中安装 CLI Tool。本示例使用`browser-use`:
+
+```bash
+pip install browser-use
+```
+
+安装相应的[skill](/docs/sandbox/skills) so the agent knows how to use the CLI:
+
+```bash
+npx skills add browser-use/browser-use --skill browser-use
+```
+
+使用 BrowserViewer 创建一个Workspace并将其分配给Agent：
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core/mastra'
+import { Agent } from '@mastra/core/agent'
+import { Memory } from '@mastra/memory'
+import { LibSQLStore } from '@mastra/libsql'
+import { Workspace, LocalSandbox } from '@mastra/core/workspace'
+import { BrowserViewer } from '@mastra/browser-viewer'
+
+const workspace = new Workspace({
+  sandbox: new LocalSandbox({
+    workingDirectory: './workspace',
+  }),
+  browser: new BrowserViewer({
+    cli: 'browser-use',
+    headless: false,
+  }),
+})
+
+const browserAgent = new Agent({
+  id: 'browser-agent',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  workspace,
+  instructions: `You are a web automation assistant.
+Use browser-use commands to navigate and interact with websites.`,
+  memory: new Memory(),
+})
+
+export const mastra = new Mastra({
+  agents: { browserAgent },
+  storage: new LibSQLStore({
+    id: 'mastra-storage',
+    url: 'file:./mastra.db',
+  }),
+})
+```
+
+当Agent运行浏览器 CLI 命令时，Mastra 会自动启动 Chrome，将 CDP 连接传递到 CLI，并开始将截屏视频流式传输到 Studio。对于浏览器使用，Agent可以通过 stdin 传递 Python：
+
+```bash
+browser-use <<'PY'
+print("Connected to the managed browser")
+PY
+```
+
+## 它是如何运作的 {/* #how-it-works */}
+
+1. Agent打电话`workspace_execute_command` with a browser CLI command.
+2. Mastra 检测 CLI 命令并通过 Playwright 启动 Chrome（如果尚未运行）。
+3. CDP URL 被注入到命令中，以便 CLI 连接到托管浏览器。
+4. 截屏视频帧从页面级 CDP 会话流式传输到 Studio。
+
+## 支持的 CLI {/* #supported-clis */}
+
+BrowserViewer 支持三个 CLI 提供程序。每个 CLI 必须单独安装在您的Workspace环境中。每个 CLI 还发布了一个[skill](/docs/sandbox/skills) that teaches the agent its commands and workflows.
+
+设置`cli` option to match the CLI your agent uses:
+
+```typescript
+const viewer = new BrowserViewer({
+  cli: 'browser-use',
+  headless: false,
+})
+```
+
+### `agent-browser` {/* #agent-browser */}
+
+```bash
+npm install -g agent-browser
+npx skills add vercel-labs/agent-browser
+```
+
+中国民主党标志：`--cdp`
+
+### `browser-use` {/* #browser-use */}
+
+```bash
+pip install browser-use
+npx skills add browser-use/browser-use --skill browser-use
+```
+
+对于直接标准输入调用（`browser-use`, `browseruse`, `browser`, or `bu`, optionally followed by `<` redirection or a heredoc), Mastra sets `BU_CDP_WS` to the managed browser's CDP URL and `BU_NAME` to a stable daemon name. The name is unique to the thread and browser endpoint, so repeated calls reuse the same daemon while different threads or endpoints stay isolated. Mastra preserves the stdin script without adding CLI arguments.
+
+旧版子命令保留`--cdp-url` and `--session` injection for compatibility. These flags aren't added to stdin invocations.
+
+### `browse` {/* #browse */}
+
+```bash
+npm install -g browse
+browse skills install
+```
+
+中国民主党标志：`--ws` See [BrowserViewer reference](/reference/browser/browser-viewer) for all configuration options, advanced connection modes, and method details.
+
+## 有关的 {/* #related */}
+
+* [浏览器概述](/docs/browser)
+* [Agent浏览器](/integrations/browsers/agent-browser)
+* [舞台工作人员](/integrations/browsers/stagehand)
+* [沙盒](/docs/sandbox/overview)
+* [工作空间技能](/docs/sandbox/skills)

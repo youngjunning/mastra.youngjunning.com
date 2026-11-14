@@ -1,0 +1,584 @@
+---
+title: 'Background tasks | Long-running agents'
+description: 'Run long-lived Mastra tool calls and subagents as background tasks while streams remain open, with per-call dispositions, cancellation, and completion events.'
+packages:
+  - '@mastra/core'
+  - '@mastra/memory'
+---
+
+# 後台任務
+
+**添加於：** `@mastra/core@1.29.0`
+
+後台任務允許Agent分派長時間運行的Tool調用，而不會阻塞Agent循環。該Tool立即返回確認，而法學碩士繼續響應。然後該任務在背景運行直至完成。當它完成時，其結果被寫入內存，並且Agent運行後續輪次來報告它。隨著[`untilIdle`](/reference/streaming/agents/stream) option, that turn streams on the same call; otherwise the agent is notified on the thread, as described in [Report a result after the stream ends](#report-a-result-after-the-stream-ends).
+
+## 何時使用後台任務 {/* #when-to-use-background-tasks */}
+
+當Tool呼叫可能需要足夠長的時間而使用者不應該等待它才能看到回應時，請使用後台任務。常見案例：
+
+* 子Agent代表團本身進行多步驟研究或寫作。
+* 影響緩慢的外部服務、佇列或大數據作業的Tool呼叫。
+* 由Tool呼叫觸發的Workflow可能需要幾分鐘才能完成。
+
+對於快速返回的Tool調用，前台執行使用`agent.stream()` and `agent.generate()` is simpler.
+
+
+
+後台任務需要配置[storage](/docs/storage) backend on the Mastra instance. Tasks are persisted so they survive process restarts.
+
+:::
+
+## 快速入門 {/* #quickstart */}
+
+後台任務預設為關閉。透過設定啟用它們`backgroundTasks.enabled` on the Mastra instance:
+
+```typescript title="src/mastra/index.ts" {6-12}
+import { Mastra } from '@mastra/core'
+import { LibSQLStore } from '@mastra/libsql'
+
+export const mastra = new Mastra({
+  storage: new LibSQLStore({ id: 'storage', url: 'file:mastra.db' }),
+  backgroundTasks: {
+    enabled: true,
+    globalConcurrency: 10,
+    perAgentConcurrency: 5,
+    backpressure: 'queue',
+    defaultTimeoutMs: 300_000,
+  },
+})
+```
+
+完整的選項集列在[backgroundTasks configuration reference](/reference/configuration#backgroundtasks).
+
+## 在背景運行Tool {/* #run-a-tool-in-the-background */}
+
+啟用管理器本身不會在背景執行任何內容。Tool在兩層之一上變得合格：
+
+1. **Tool級配置**：該Tool本身將其聲明為後台合格。
+2. ****
+
+符合條件的Tool預設為`deferred` execution. Set `defaultDisposition: 'foreground'` at either layer when eligibility should only give the LLM the option to run a call in the background. The LLM can include a `_background` field in the tool arguments to select `foreground`, `deferred`, or `awaited` execution for a specific call and override its timeout or retries.
+
+### Tool級 {/* #tool-level */}
+
+放`background.enabled: true` on the tool definition. Tools opted in at this layer are eligible for background execution when called by an agent that has the manager enabled. Their configured default disposition determines whether each call runs inline or in the background unless the call includes a `_background` override.
+
+```typescript title="src/mastra/tools/research.ts"
+import { createTool } from '@mastra/core/tools'
+import { z } from 'zod'
+
+export const researchTool = createTool({
+  id: 'research',
+  description: 'Run a long research job',
+  inputSchema: z.object({ topic: z.string() }),
+  // highlight-start
+  background: {
+    enabled: true,
+    defaultDisposition: 'deferred',
+    timeoutMs: 600_000,
+    maxRetries: 1,
+  },
+  // highlight-end
+  execute: async ({ topic }) => {
+    // Run the research job for topic
+  },
+})
+```
+
+### Agent級 {/* #agent-level */}
+
+使用`backgroundTasks.tools` on the agent to opt in specific tools or override timeouts for individual tools, or alternatively run all background-eligible tools in the background. Use `disabled: true` to short-circuit background dispatch for the agent entirely.
+
+```typescript title="src/mastra/agents/researcher.ts"
+import { Agent } from '@mastra/core/agent'
+
+export const researcher = new Agent({
+  id: 'researcher',
+  instructions: 'You research topics and answer questions.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  tools: { researchTool, summarizeTool },
+  // highlight-start
+  backgroundTasks: {
+    tools: {
+      researchTool: { enabled: true, timeoutMs: 600_000 },
+      summarizeTool: false,
+    },
+  },
+  // highlight-end
+})
+```
+
+放`tools: 'all'` to opt in every tool the agent has.
+
+### LLM 每次調用覆蓋 {/* #llm-per-call-override */}
+
+當Tool在啟用了後台任務的Agent上註冊時，模型可以包括`_background` field in the tool arguments to override the resolved configuration for that specific call. The model only includes what it wants to override, all fields in `_background` are optional. The override is stripped from the arguments before the tool runs.
+
+```json
+{
+  "topic": "solana",
+  "_background": { "disposition": "awaited", "timeoutMs": 900000 }
+}
+```
+
+可用的配置有：
+
+* `foreground`
+* `deferred`：調度Tool並讓Agent程式繼續。該任務仍然附加到運行，並使用串流傳輸`untilIdle` wait for it to reconcile.
+* `awaited`：透過後台任務管理器調度該Tool，但保留當前分支，直到其權威結果得到協調。
+
+為了相容性，`_background.enabled: true` selects `deferred`, and `_background.enabled: false` selects `foreground`. An explicit `disposition` takes precedence over `enabled`.
+
+這`_background` override only *modifies* tools the developer has already opted in at the tool or agent layer. If a tool hasn't been opted in, a model-selected background disposition is ignored and the tool runs in the foreground. This keeps deterministic, foreground-only tools (calculators, lookups, schema validators) from being silently dispatched as tasks.
+
+### 決議順序 {/* #resolution-order */}
+
+分派Tool调用时，Agent级别和Tool级别设置将确定资格和后备值。對於合格的Tool，法學碩士`_background` fields override the corresponding values for that call. Manager defaults fill timeout and retry values that remain unset. An `_background` field can't enable a tool that's not eligible.
+
+超時時間為`0` means no timeout. Set `timeoutMs: 0` on a tool or agent tool entry, or `defaultTimeoutMs: 0` on the manager, for tasks that should run until they finish or are cancelled.
+
+如果Agent有`backgroundTasks.disabled: true`, every tool call runs synchronously regardless of the layers above.
+
+## 與流塊相關的後台任務 {/* #background-tasks-related-stream-chunks */}
+
+當Tool呼叫作為後台任務分派時，兩個流可能會為其顯示生命週期事件：Agent自己的流和Agent的流[`backgroundTaskManager.stream()`](/docs/harness/background-tasks#subscribe-to-all-task-events) SSE stream. Each stream covers a different set of chunk types:
+
+|塊類型 |當它發生時 |發射者 |
+| - | - | - |
+|`background-task-started` | The task has been enqueued and assigned a `taskId`. | Agent stream |
+| `background-task-running` | The task picked up a worker and started executing. | Manager stream |
+| `background-task-progress` | Shows number of running background tasks. | Agent stream |
+| `background-task-output` | A streamed output chunk from the task's `execute`. | Manager stream |
+| `background-task-completed` | The task finished successfully. The `payload.result` matches the eventual tool result. | Manager stream |
+| `background-task-failed` | The task threw or timed out. | Manager stream |
+| `background-task-cancelled` | The task was cancelled before completing. | Manager stream |
+| `background-task-suspended` | The tool called `suspend()` from inside its execute. | Manager stream |
+| `background-task-resumed` | A suspended task was resumed via `manager.resume(taskId, resumeData)`. | Manager stream |
+
+`agent.stream().fullStream`只發出Agent循環區塊（`background-task-started`, `background-task-progress`) on its own. `agent.stream()` with `untilIdle: true` emits the same two chunks and additionally subscribes to the manager pubsub for the run's memory scope and pipes the seven manager chunks (`background-task-running`, `background-task-output`, `background-task-completed`, `background-task-failed`, `background-task-cancelled`, `background-task-suspended`, `background-task-resumed`) into the same `fullStream`.
+
+`backgroundTaskManager.stream()`只發出七個管理器塊。
+
+完整的有效負載形狀記錄在[background task chunks reference](/reference/streaming/ChunkType#background-task-chunks).
+
+## 保持Agent流打開`untilIdle` {/* #keep-the-agent-stream-open-with-untilidle */}
+
+`agent.stream()`一旦 LLM 發出最終回應，即使後台任務仍在運行，也會返回。經過`untilIdle: true` when you want the stream to stay open until every dispatched background task has completed and the LLM has had a chance to respond to the result:
+
+```typescript title="src/mastra/run.ts"
+const stream = await agent.stream('Research solana for me', {
+  memory: { thread: 't1', resource: 'u1' },
+  untilIdle: true,
+})
+
+for await (const chunk of stream.fullStream) {
+  // chunks from the initial turn AND any continuation turns triggered by
+  // background task completions flow through here
+}
+```
+
+當後台任務完成時，結果將注入到Agent記憶體中，`stream()` re-enters the agentic loop so the LLM can react to it. The stream closes when no tasks are running and no completions are queued.
+
+透過傳遞物件而不是自訂空閒超時`true`. The timer only runs while the wrapper is between turns, so a slow first token won't close the stream. The default is 5 minutes:
+
+```typescript
+const stream = await agent.stream('Research solana for me', {
+  memory: { thread: 't1', resource: 'u1' },
+  untilIdle: { maxIdleMs: 30_000 },
+})
+```
+
+訪問[`Agent.stream()`](/reference/streaming/agents/stream) for the full API.
+
+更改每個的預設值`untilIdle: true` call, including calls Mastra makes internally, set `untilIdleMaxIdleMs` on the Mastra `backgroundTasks` config. Use a value longer than your slowest background task so its completion still triggers a continuation turn. A per-call `maxIdleMs` still takes precedence:
+
+```typescript
+export const mastra = new Mastra({
+  backgroundTasks: {
+    enabled: true,
+    untilIdleMaxIdleMs: 30 * 60_000,
+  },
+})
+```
+
+### 流結束後報告結果 {/* #report-a-result-after-the-stream-ends */}
+
+當延遲任務完成且沒有`untilIdle` stream is open for its thread, Mastra sends the agent a `notification` signal with the tag `background-task`. The signal names the tool call and task, and tells the agent the result is now on the tool call. It doesn't copy the result into the prompt. This covers a `stream()` call without `untilIdle`, a client that disconnected, and a task resumed after it [suspended](#suspending-and-resuming).
+
+* 如果執行緒空閒，訊號會喚醒Agent，Agent程式在執行緒上執行一次以報告結果。喚醒的運行使用分派任務的運行的請求上下文，因此從該上下文解析的模型、指令或記憶體以相同的方式解析。當聲明該執行緒的Agent程式在另一台伺服器上執行時，這也適用：上下文與訊號一起發送，減去身份驗證令牌、登入使用者以及任何無法作為 JSON 發送或太大而無法序列化的值。該伺服器的運作保留其自己的身份驗證令牌和使用者。
+* 如果執行緒上的運行已處於活動狀態，包括分派任務的運行，則訊號將傳遞到該運行的下一個模型請求。如果該運行結束時沒有發出另一個請求，則該訊號將自行運作。
+* 如果另一個Agent程式的運行持有該線程，例如在等待Tool批准時，訊號將等待並在運行結束後喚醒Agent程式。
+* 如果一個`untilIdle` stream is open for the thread, no signal is sent, because that stream runs its own follow-up turn.
+* 如果呼叫者取消或中止`untilIdle` stream that was waiting for the task, no signal is sent either: stopping the stream means the caller doesn't want a reply for that work. A task that suspended and is answered later isn't covered by this, because the stream stopped waiting for it when it suspended.
+
+訊號在空閒執行緒上啟動的運行，例如發送的訊息`agent.sendSignal()`, stays open until the tasks it dispatched finish, and reports them itself. To end woken runs after their own turn instead, set the temporary `wokenRunsEndAfterTurn` option. Their tasks then report back with this signal when they finish:
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+
+export const mastra = new Mastra({
+  backgroundTasks: {
+    enabled: true,
+    wokenRunsEndAfterTurn: true,
+  },
+})
+```
+
+訊號本身`ifIdle.streamOptions.untilIdle` takes precedence over the option in both directions. In the next major release, ending after the turn becomes the only behavior and `wokenRunsEndAfterTurn` is removed. To keep a woken run open after that, pass `untilIdle: true` in `ifIdle.streamOptions`. Agent controller sessions and channels already pass it.
+
+如果你結合`wokenRunsEndAfterTurn` with `notifyAgentOnFinish: false`, nothing reports the tasks of a woken run, so your app has to send the completion itself.
+
+如果您的應用程式發送自己的完成訊號，例如來自`onTaskComplete`, set `notifyAgentOnFinish: false` on the Mastra `backgroundTasks` config so the agent isn't told twice:
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+
+export const mastra = new Mastra({
+  backgroundTasks: {
+    enabled: true,
+    notifyAgentOnFinish: false,
+    onTaskComplete: async task => {
+      // Send your own notification to task.threadId
+    },
+  },
+})
+```
+
+訊號需要帶有線程和資源的記憶體。沒有它們調度的任務僅將其結果寫入任務記錄。等待的任務不會發送訊號，因為調度它們的運作會等待結果。
+
+### 聚合屬性 {/* #aggregate-properties */}
+
+`stream()`和`untilIdle` returns a `MastraModelOutput` that looks like the one from a regular `stream()` call, but `fullStream` alone spans the initial turn and any auto-continuations. Aggregate properties (`text`, `toolCalls`, `toolResults`, `finishReason`, `messageList`, `getFullOutput()`) still resolve against the **first turn's** internal buffer. If you need an aggregate view across continuations, consume `fullStream` yourself and accumulate.
+
+## 後台子Agent {/* #subagents-in-the-background */}
+
+子Agent程式呼叫在後台作為Tool呼叫進行分派，因此套用相同的後台配置。建議的模式是選擇每個子Agent加入主管，這樣更清晰，讓您可以調整`timeoutMs` per subagent in one place:
+
+```typescript title="src/mastra/agents/supervisor.ts"
+import { Agent } from '@mastra/core/agent'
+
+const supervisor = new Agent({
+  id: 'supervisor',
+  instructions: 'Coordinate research and writing using the available agents.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  agents: { researchAgent, writingAgent },
+  // highlight-start
+  backgroundTasks: {
+    tools: {
+      researchAgent: { enabled: true, timeoutMs: 900_000 },
+      writingAgent: { enabled: true, timeoutMs: 900_000 },
+    },
+  },
+  // highlight-end
+})
+
+const stream = await supervisor.stream('Research AI in education and write an article', {
+  memory: { thread: 't1', resource: 'u1' },
+  untilIdle: true,
+})
+```
+
+### 從子Agent繼承 {/* #inheriting-from-the-subagent */}
+
+如果子Agent未在主管的清單中列出`backgroundTasks.tools` but has background-eligible tools of its own (either via tool-level `background.enabled: true` or its own `backgroundTasks.tools` entry) the framework still dispatches the entire subagent invocation as a background task. The supervisor inherits the subagent's intent: the subagent itself becomes the background task, and it can dispatch its eligible ordinary tools in the background inside its loop. Further delegated-agent calls run in the foreground.
+
+用於繼承調度的後台配置（例如`waitTimeoutMs`) is derived from the subagent's own `backgroundTasks` config.
+
+```typescript title="src/mastra/agents/researcher.ts"
+import { Agent } from '@mastra/core/agent'
+
+const researchAgent = new Agent({
+  id: 'research-agent',
+  description: 'Gathers factual information.',
+  model: '__GATEWAY_OPENAI_MODEL_LUNA__',
+  tools: { deepResearchTool },
+  // highlight-start
+  backgroundTasks: {
+    tools: {
+      deepResearchTool: { enabled: true, timeoutMs: 600_000 },
+    },
+    waitTimeoutMs: 900_000,
+  },
+  // highlight-end
+})
+```
+
+當這個`researchAgent` is delegated to from a supervisor that has no background task configuration for the `researchAgent`, the supervisor still dispatches the whole `researchAgent` invocation as a background task.
+
+Mastra 支援委託運行中的一個嵌套後台Tool層級：根Agent可以委託給子Agent，而該子Agent程式可以在背景調度符合條件的普通Tool。第二個委託Agent邊緣在前台運行，並且不接收嵌套的後台指導。此限制是執行範圍的，不會改變共用子Agent程式配置。
+
+使用哪一層取決於一致性的重要性：子Agent程式層級的配置與Agent程式一起移動，這使其後台行為在每個主管下保持相同，而上面的主管端選擇將調整集中在一個地方。此邊界停止於單一嵌套委託級別，並且沒有Workflow整合。
+
+## 暫停和恢復 {/* #suspending-and-resuming */}
+
+後台任務可以在執行過程中暫停自身，並在繼續之前等待外部訊號。這對於人工批准、網路鉤子或下一步取決於稍後到達的資料的任何流程非常有用。
+
+一個Tool調用`suspend(data)` from inside its `execute`, which:
+
+* 堅持`status: 'suspended'` and the `data` payload on the task record.
+* 儲存Workflow快照，以便在流程重新啟動後執行繼續執行。
+* 發出一個`background-task-suspended` chunk on the manager stream.
+* 釋放並發槽以便其他任務可以運行。
+
+恢復任務`mastra.backgroundTaskManager.resume(taskId, resumeData)`. The `resumeData` arrives in the tool's `execute` options on the resumed run, and the task transitions back to `running`.
+
+```typescript title="src/mastra/tools/approval.ts"
+import { createTool } from '@mastra/core/tools'
+import { z } from 'zod'
+
+export const reviewTool = createTool({
+  id: 'review',
+  description: 'Submit a draft for human review.',
+  inputSchema: z.object({ draft: z.string() }),
+  outputSchema: z.object({ approvedBy: z.string(), edits: z.string().optional() }),
+  background: { enabled: true },
+  execute: async ({ draft }, context) => {
+    const { suspend, resumeData } = context.agent
+    if (!resumeData) {
+      await suspend?.({ awaiting: 'approval', draft })
+      return { approvedBy: '', edits: undefined }
+    }
+    const { reviewer, edits } = resumeData as { reviewer: string; edits?: string }
+    return { approvedBy: reviewer, edits }
+  },
+})
+```
+
+第一次調用`execute` sees `resumeData === undefined` and calls `suspend`. After the task is resumed, the runtime restarts the tool with `resumeData` populated. The `if` condition is false. The tool returns its real result.
+
+要在批准到達後恢復任務：
+
+```typescript title="src/server/approvals.ts"
+await mastra.backgroundTaskManager?.resume(taskId, {
+  reviewer: 'alice@example.com',
+  edits: 'Reworded paragraph 3.',
+})
+```
+
+在恢復運作中，`context.agent.suspendPayload` holds the `data` the tool suspended with. Use it to tell which request an answer belongs to without encoding that in `resumeData`.
+
+### 應答客戶端暫停的任務 {/* #answer-a-suspended-task-from-a-client */}
+
+當座席後台Tool呼叫暫停時，保持呼叫的助理訊息會將開啟的請求記錄在`metadata.suspendedTools[toolCallId]`. The entry carries `toolName`, `args`, `suspendPayload`, `taskId`, `runId`, and `suspendedAt`, so a chat that reloads the thread can still show the request. The entry is removed when the task resumes or is cancelled.
+
+該條目由調度Tool呼叫的進程寫入，該進程與將任務結果寫入執行緒的進程相同。重新啟動後工作執行緒拾取的任務沒有這樣的過程，因此開啟的請求和結果都不會到達執行緒。
+
+若要透過 HTTP 應答請求，請呼叫`POST /api/background-tasks/:backgroundTaskId/resume` with the answer in `resumeData`. The [client SDK](/reference/client-js/mastra-client) wraps the route as `resumeBackgroundTask()`:
+
+```typescript title="src/client/answer-request.ts"
+import { MastraClient } from '@mastra/client-js'
+
+const client = new MastraClient({ baseUrl: 'http://localhost:4111' })
+
+const task = await client.getBackgroundTask(taskId)
+await client.resumeBackgroundTask(
+  taskId,
+  { reviewer: 'alice@example.com' },
+  { suspendedAt: task.suspendedAt },
+)
+```
+
+透過`suspendedAt` you read from the task or the `suspendedTools` entry. When the task has resumed or suspended again since, the server returns `409 Conflict` instead of delivering a stale answer. The route also returns `409` when the task isn't suspended or no concurrency slot is free, and `404` when the task doesn't exist or belongs to another resource. Calling it requires the `background-tasks:execute` permission.
+
+### 當沒有空閒插槽時恢復 {/* #resume-when-no-slot-is-free */}
+
+預設情況下，`resume()` throws `Concurrency limit reached` when every concurrency slot is in use. Pass `{ onNoSlot: 'queue' }` to queue the resume instead:
+
+```typescript
+const task = await mastra.backgroundTaskManager?.resume(taskId, resumeData, { onNoSlot: 'queue' })
+// task.status is still 'suspended' until a slot frees up
+```
+
+任務停留`suspended` until a slot frees up, then resumes with the queued `resumeData`. Cancelling the task drops the queued resume.
+
+隊列位於呼叫進程的記憶體中`resume()`. If that process exits before the resume runs, the task stays `suspended` and the `resumeData` is lost. To survive restarts, persist the resume data yourself and call `resume()` again.
+
+### Agent循環會發生什麼情況 {/* #what-happens-to-the-agent-loop */}
+
+當任務中途掛起時`stream()` with `untilIdle`, the wrapper treats it as terminal for the current iteration and closes. Once the resume payload is available, call `agent.resumeStream(resumeData, { runId, toolCallId, memory, untilIdle: true })` to continue immediately. The resumed background task completes and adds its result to the message list before the agent runs a follow-up turn on the same SSE connection. To drive the resume out of band, call `mastra.backgroundTaskManager.resume(taskId, resumeData)` directly, or use the [resume route](#answer-a-suspended-task-from-a-client). When the task finishes, its result is written into the thread and the agent [wakes to report it](#report-a-result-after-the-stream-ends).
+
+### 在履歷上重新註冊執行人 {/* #re-registering-the-executor-on-resume */}
+
+管理器將Tool執行器保存在進程記憶體中。如果进程在任务挂起时重新启动，则执行器闭包消失，调用者`resume()` must re-register it first via `manager.registerTaskContext(taskId, ...)`. Tasks dispatched and resumed inside the same process don't need this.
+
+### 取消暫停的任務 {/* #cancelling-a-suspended-task */}
+
+`manager.cancel(taskId)`處理掛起任務的方式與處理執行任務的方式相同。該行更改為`cancelled` and the workflow snapshot is cleaned up. A `task.cancelled` event then fires.
+
+## 生命週期回調 {/* #lifecycle-callbacks */}
+
+每層都可以註冊終端狀態回呼。它們不會互相取代，成功/失敗的鉤子會根據它們的結果而觸發：
+
+* Tool級`background.onComplete` / `onFailed`: scoped to one tool.
+* Agent級`backgroundTasks.onTaskComplete` / `onTaskFailed`: scoped to all tasks dispatched by this agent.
+* 經理級`onTaskComplete` / `onTaskFailed`: scoped globally. These fire for every task, including tasks from [non-agent owners](#non-agent-owners).
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+
+export const mastra = new Mastra({
+  storage,
+  backgroundTasks: {
+    enabled: true,
+    onTaskComplete: task => {
+      logger.info('Background task complete', { taskId: task.id, toolName: task.toolName })
+    },
+    onTaskFailed: task => {
+      logger.error('Background task failed', { taskId: task.id, error: task.error })
+    },
+  },
+})
+```
+
+## 串流媒體 {/* #streaming */}
+
+### 訂閱所有任務事件 {/* #subscribe-to-all-task-events */}
+
+經過`allResources: true` to receive every task event in the system, across all resources. On connection, the stream emits a snapshot of all currently running tasks, then forwards live events as they happen.
+
+```typescript title="src/mastra/run.ts" oxfmt:false
+const bgManager = mastra.backgroundTaskManager;
+if (!bgManager) throw new Error('Background tasks are not enabled');
+
+const controller = new AbortController();
+const stream = bgManager.stream({ allResources: true, abortSignal: controller.signal });
+
+for await (const chunk of stream) {
+  switch (chunk.type) {
+    case 'background-task-running':
+      console.log('started', chunk.payload.taskId, chunk.payload.toolName);
+      break;
+    case 'background-task-completed':
+      console.log('done', chunk.payload.taskId, chunk.payload.result);
+      break;
+    case 'background-task-failed':
+      console.error('failed', chunk.payload.taskId, chunk.payload.error);
+      break;
+  }
+}
+```
+
+該流保持開啟狀態，直到呼叫者`AbortSignal` fires. Always pass an `abortSignal` so you can disconnect cleanly.
+
+：：：警告
+
+`allResources: true`為每個使用者提供任務參數和結果。僅在受信任的伺服器端程式碼中使用它，切勿為單一使用者的請求提供服務。沒有`resourceId` or `allResources`, `stream()` only delivers tasks that have no `resourceId`. Agent tasks dispatched with memory always have a `resourceId`, so they won't appear in that stream.
+
+:::
+
+### 過濾流 {/* #filter-the-stream */}
+
+透過篩選器選項的任意組合來縮小您收到的事件的範圍。過濾器適用於初始快照和即時事件訂閱。
+
+```typescript
+const stream = bgManager.stream({
+  agentId: 'researcher',
+  threadId: 't1',
+  resourceId: 'u1',
+  abortSignal: controller.signal,
+})
+```
+
+|過濾|描述 |
+| - | - |
+|`agentId` | Only events from tasks dispatched by this agent |
+| `runId` | Only events from this specific agent run |
+| `threadId` | Only events from tasks scoped to this memory thread |
+| `resourceId` | Only events from tasks scoped to this resource |
+| `taskId` | Only events for a single task |
+| `allResources` | Include tasks from every resource when `resourceId` is omitted. Trusted server-side code only |
+| `abortSignal` | Closes the stream when the signal aborts |
+
+### 直接查看任務狀態 {/* #look-up-task-state-directly */}
+
+對於一次性查找而不是即時串流，請使用`getTask` and `listTasks`:
+
+```typescript
+const task = await mastra.backgroundTaskManager?.getTask(taskId)
+const { tasks, total } = await mastra.backgroundTaskManager?.listTasks({
+  status: 'running',
+  agentId: 'researcher',
+})
+```
+
+它們從儲存而不是 pubsub 流中讀取，因此它們適合分頁列表和詳細視圖。
+
+## 非Agent業主 {/* #non-agent-owners */}
+
+Agent程式以外的程式碼可以透過管理員運行任務。例如，MCP 伺服器可以將長Tool呼叫作為後台任務來運行。任務的`agentId` is its owner key, and agent streams, `untilIdle`, and the end-of-step wait only see tasks whose `agentId` matches the agent. Use a namespaced owner key such as `mcp-server:<serverId>` so it can't collide with a real agent ID. Mastra doesn't enforce this.
+
+非Agent所有者通常會註冊一個靜態執行器`registerStaticExecutor()` so any process can run or recover their tasks. They can also set these optional task fields:
+
+* `expiresAt`：當cleanup刪除任務時。一旦任務完成、失敗、被取消或逾時，清理就會在之後刪除它`expiresAt` passes instead of using `completedTtlMs` or `failedTtlMs`. Cleanup only runs when you set the `cleanup` option, and it never deletes a pending, running, or suspended task, so cancel expired work first. It also needs a storage adapter version that supports `expiresAt`. Older adapters keep using the global retention settings.
+* `metadata`：與任務一起儲存的 JSON。經理不讀。
+
+```typescript
+mastra.backgroundTaskManager?.registerStaticExecutor('mcp-server:ops:deploy', {
+  execute: runDeploy,
+})
+
+await mastra.backgroundTaskManager?.enqueue({
+  agentId: 'mcp-server:ops',
+  toolName: 'mcp-server:ops:deploy',
+  toolCallId: taskId,
+  runId: taskId,
+  args,
+  resourceId: principalId,
+  expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+  metadata: { ttlMs: 86_400_000 },
+})
+```
+
+使用`perOwnerConcurrency` to give an owner its own concurrency limit instead of `perAgentConcurrency`. Its tasks still count toward `globalConcurrency`:
+
+```typescript title="src/mastra/index.ts"
+export const mastra = new Mastra({
+  storage,
+  backgroundTasks: {
+    enabled: true,
+    globalConcurrency: 60,
+    perOwnerConcurrency: { 'mcp-server:ops': 50 },
+  },
+})
+```
+
+已知限制：
+
+* 恢復的任務在沒有原始請求的情況下運行。儲存執行者所需的任何內容，例如委託人`resourceId` or other JSON in `metadata`, on the task itself.
+* 一個`pending` task that isn't pinned holds no lease. On startup, another process can pick it up and dispatch it. If its executor only existed in the original process, the task fails with `No executor registered`. Static executors registered in every process avoid this. Use `pinToWorker` when the original process already started the work.
+* Agent循環中的步驟結束等待僅等待`running` tasks, not `pending` ones. [#28228](https://github.com/mastra-ai/mastra/pull/28228) tracks the fix.
+
+### 將任務固定到目前工作人員 {/* #pin-a-task-to-the-current-worker */}
+
+有時，在您將任務放入佇列之前，該進程中的工作已經在運行。例如，MCP 伺服器可以在請求內啟動Tool調用，並僅在運行時間較長時交給後台任務。經過`pinToWorker: true` with a task context so no other process starts the same work:
+
+```typescript
+await mastra.backgroundTaskManager?.enqueue(
+  {
+    agentId: 'mcp-server:ops',
+    toolName: 'mcp-server:ops:deploy',
+    toolCallId: taskId,
+    runId: taskId,
+    args,
+  },
+  { executor: { execute: adoptRunningDeploy } },
+  { pinToWorker: true },
+)
+```
+
+`pinToWorker`意味著此任務的工作已經在該工作人員身上進行。這`pending` task records this worker as its owner and holds an execution lease, which the worker renews while the task waits for a free slot. Other processes don't recover or dispatch the task while the lease is live.
+
+如果工人先死亡或關閉，那麼該工作就會失去。恢復將任務視為失敗的嘗試，就像一個正在運行的任務，其工作執行緒已死亡。如果`retryCount` is below `maxRetries`, the task uses a retry and runs on another worker, which needs a static executor for it. Otherwise the task fails with `Worker process terminated before task completed`. A task with `maxRetries: 0` never runs on another worker. Other processes check for lapsed pins at startup and then every `leaseDurationMs`, unless `recoverStaleTasksOnStart` is `false`.
+
+租約失效僅表示工人停止續約，而不表示工作停止。當另一個工作人員重試該任務時，其事件循環在租約之後停止的工作人員仍然可以運行該任務。使固定工作冪等，或保護其副作用（如果可以重試）。
+
+`pinToWorker`在沒有任務上下文的情況下拋出。未固定的任務（包括所有Agent任務）在下列情況下不保留租約：`pending`.
+
+## 有關的 {/* #related */}
+
+* [`Agent.stream()`參考](/reference/streaming/agents/stream)
+* [後台任務配置參考](/reference/configuration#backgroundtasks)
+* [持久劑](../harness/durable-agents)
+* [主管Agent](/docs/subagents)
+* [流塊類型](/reference/streaming/ChunkType)
+* [貯存](/docs/storage)

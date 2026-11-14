@@ -1,0 +1,207 @@
+---
+title: 'Connect | Mastra platform'
+description: 'Use Mastra Connect to manage provider connections on Mastra platform and make them available to your app as agent tools, chat channels, or raw credentials.'
+packages:
+  - '@mastra/connect'
+---
+
+import { IntegrationGrid } from '@site/src/components/integrations/grid';
+import { getIntegrationItems } from '@site/src/components/integrations/data';
+
+# 連接
+
+:::beta 公開測試版
+
+Mastra Connect 在測試階段可在 Mastra 平台上免費使用。
+
+:::
+
+Connect 管理與您的 GitHub、Slack 和 Linear 等服務的連接[Mastra platform](/docs/mastra-platform/overview) project. The `@mastra/connect` package makes those connections available to your application in three ways:
+
+* **Tool**讓Agent呼叫提供者的 API。 Connect 提供現成的Tool並透過平台Agent程式發送請求。Agent程式新增憑證並刷新 OAuth 令牌。
+* **頻道**讓人們透過 Slack、Telegram、Discord 或 Microsoft Teams 與客服人員交談。將供應憑證連接到 Mastra 的[channel](/docs/channels) providers.
+* **原始憑證**當Tool無法滿足您的需求時，讓您的程式碼直接呼叫提供者的 SDK。
+
+此頁面涵蓋每個提供者共享的設定。每個提供者的[integration page](#providers) covers its connection steps and capabilities.
+
+## 何時使用連接 {/* #when-to-use-connect */}
+
+當您希望平台管理提供者帳戶時，請使用 Connect，這樣您的應用程式就不會儲存憑證或刷新 OAuth 令牌。您可以新增或取代連接，而無需更改Agent程式碼。Tool解析器在快取刷新時會拾取連接更改，而無需重新部署。
+
+Connect 需要一個平台項目，但您的應用程式可以在本地或您自己的基礎架構上運行。您可以將 Connect Tool和管道與您自己的Tool和管道一起使用[custom tools](/docs/agents/tools) and [self-managed channels](/docs/channels).
+
+## 連結如何運作 {/* #how-connections-work */}
+
+一個**provider** is a service you can connect, identified by a provider ID such as `linear` or `google-mail`. A **connection** authorizes one account on that provider. Connections belong to your organization, and you can link one connection to more than one project without authorizing again.
+
+一個專案可以有多個與相同提供者的連接，例如不同 Slack Workspace中的帳戶。為每個連線指定一個不同的顯示名稱，以便Agent可以選擇正確的帳戶。
+
+提供者在提供的內容和授權方式上有所不同。有些使用 OAuth，其他需要 API 金鑰，頻道可能需要Provider控制台中的機器人或應用程式。提供者的整合頁面列出了這些要求。
+
+## 開始使用 {/* #get-started */}
+
+您需要一個 Mastra 平台專案和[`mastra` CLI](/reference/cli/mastra), signed in with `mastra auth login`.
+
+### 安裝包 {/* #install-the-package */}
+
+```bash npm2yarn
+npm install @mastra/connect
+```
+
+### 配置環境 {/* #configure-the-environment */}
+
+您的應用程式使用存取權令牌對平台進行身份驗證。為應用程式建立一個：
+
+```bash
+mastra auth tokens create my-app
+```
+
+將令牌另存為`MASTRA_PLATFORM_ACCESS_TOKEN`, which is the name `@mastra/connect` reads. The CLI suggests `MASTRA_API_TOKEN`, but `@mastra/connect` ignores that name. Add the token and your project ID to the app's environment:
+
+```bash title=".env"
+MASTRA_PLATFORM_ACCESS_TOKEN=your-token
+MASTRA_PROJECT_ID=your-project-id
+```
+
+看[environment variables](/reference/connect/tools#environment-variables) for regions and other optional variables.
+
+### 連接帳戶 {/* #connect-an-account */}
+
+在提供者的網站上尋找提供者 ID[integration page](#providers), then run `mastra connect add` with that ID. For example, to authorize a Linear account:
+
+```bash
+mastra connect add linear
+```
+
+從包含您的目錄的目錄執行命令`.env` file. The CLI guides you through the provider's authorization flow. Run [`mastra connect list`](/reference/cli/mastra#mastra-connect-list) to see the providers available to your project and their connection status. The [`mastra connect` reference](/reference/cli/mastra#mastra-connect) covers naming, removing, and replacing connections.
+
+## 向Agent添加Tool {/* #add-tools-to-an-agent */}
+
+經過[`tools()`](/reference/connect/tools) to the agent's `tools` option:
+
+```typescript title="src/mastra/agents/ops.ts"
+import { Agent } from '@mastra/core/agent'
+import { tools } from '@mastra/connect'
+
+export const opsAgent = new Agent({
+  id: 'ops',
+  name: 'ops',
+  instructions: 'You help the team track work in Linear and GitHub.',
+  model: '__GATEWAY_OPENAI_MODEL_LUNA__',
+  tools: tools(),
+})
+```
+
+如果沒有任何選項，Agent程式將為每個擁有Tool集的連線提供者取得Tool。每個Tool鍵都以提供者前綴開頭，例如`linear_list_issues`. The prefix can differ from the provider ID: `google-calendar` tools start with `google_calendar_`. The [provider toolsets reference](/reference/connect/providers) lists every key. Some providers serve their tools from a hosted Model Context Protocol (MCP) server instead. You use the same `tools()` API for them, but their tools are discovered at runtime.
+
+為了保留您自己的Tool，請將解析器的結果傳播到`tools` function. Your tools win when a key collides:
+
+```typescript title="src/mastra/agents/ops.ts"
+import { Agent } from '@mastra/core/agent'
+import { tools } from '@mastra/connect'
+import { weatherTool } from '../tools/weather'
+
+const connectTools = tools()
+
+export const opsAgent = new Agent({
+  id: 'ops',
+  name: 'ops',
+  instructions: 'You help the team track work in Linear and GitHub.',
+  model: '__GATEWAY_OPENAI_MODEL_LUNA__',
+  tools: async ctx => ({ ...(await connectTools(ctx)), weatherTool }),
+})
+```
+
+## 選擇Tool並需要批准 {/* #choose-tools-and-require-approval */}
+
+僅向Agent提供其需要的Tool。使用`providers` to select providers, `allowTools` to allow specific tool keys, and `requireApproval` to pause before selected tools run:
+
+```typescript
+tools({
+  providers: {
+    linear: {
+      allowTools: ['linear_list_issues', 'linear_create_issue'],
+      requireApproval: ['linear_create_issue'],
+    },
+  },
+})
+```
+
+預設情況下，Tool無需批准即可運作。經過`requireApproval: true` to require approval for every tool from a provider. Approval works for toolsets and MCP providers. Follow the [human-in-the-loop guide](/docs/agents/human-in-the-loop) to handle approval requests.
+
+對於具有多個連接的提供者，該Tool集新增了一個`<provider>__list_connections` tool. Every other tool from that provider takes a `connection_name` input that selects the account. To always use one connection, set `connectionId` for that provider.
+
+這[`tools()` reference](/reference/connect/tools#parameters) covers exclusion filters, wildcard patterns, options that vary per request, and caching.
+
+## 新增頻道 {/* #add-channels */}
+
+經過[`channels()`](/reference/connect/channels) to the `Mastra` constructor:
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { channels } from '@mastra/connect'
+import { assistant } from './agents/assistant'
+
+export const mastra = new Mastra({
+  agents: { assistant },
+  channels: await channels(),
+})
+```
+
+這會註冊通道提供者及其 Webhook 路由。使通道正常工作需要兩個單獨的步驟：
+
+1. **連接提供者。**&#x5E73;台連接儲存機器人或應用程式憑證。每個提供者的整合頁面都描述了此步驟：[Slack](/integrations/channels/slack#agent-chat), [Discord](/integrations/channels/discord#agent-chat), [Telegram](/integrations/channels/telegram#connect), and [Microsoft Teams](/integrations/channels/teams#agent-chat).
+2. **在Agent上安裝通道。**&#x5728; Studio 中，將通道連接到Agent，以便人們可以向該Agent發送訊息。
+
+對於 Webhook 傳遞和 OAuth 回調，提供者必須透過公用 URL 到達您的伺服器。 Mastra 平台提供此 URL。當您在其他地方託管時，請設定`MASTRA_SERVER_URL` to your public server URL. For local development, use a public HTTPS tunnel.
+
+這[`channels()` reference](/reference/connect/channels) covers selecting providers, startup errors, and connection refresh. It also shows how to [combine Connect channels with self-managed channels](/reference/connect/channels#combine-with-self-managed-channels) and [vary tools by channel](/reference/connect/channels#vary-tools-by-channel).
+
+## 使用原始憑證 {/* #use-a-raw-credential */}
+
+稱呼[`credential()`](/reference/connect/credential) with a connection ID to get the connection's credential for your own code. Use this when you need a provider SDK or an API the tools don't cover.
+
+## 安全模型 {/* #security-model */}
+
+對於Tool調用，平台將憑證新增至伺服器上的請求。您的應用程式永遠不會收到它們。此平台會記錄每個Agent呼叫，以便您可以審核和統計Tool的使用情況。它不記錄Tool參數或結果。
+
+Agent請求只能到達提供者的 API 主機。某些連線允許額外的主機，例如 Supabase 專案 URL。您的程式碼控制Agent程式取得哪些Tool以及哪些呼叫需要批准。
+
+原始憑證是不同的。`credential()` returns the secret to your application, and requests you make with it bypass the proxy. They skip its host restrictions and call records. Don't log the credential or return it in agent output.
+
+## Provider {/* #providers */}
+
+每個整合頁面都會顯示提供者 ID、提供者提供的服務及其設定步驟。有些頁面也介紹了不使用 Connect 的設定。
+
+<IntegrationGrid
+  section="Email / Calendar"
+  additionalItems={[
+...getIntegrationItems('Documents'),
+...getIntegrationItems('Project management'),
+...getIntegrationItems('CRM'),
+...getIntegrationItems('Other providers'),
+...getIntegrationItems('Channels', [
+  'channels/discord',
+  'channels/github',
+  'channels/teams',
+  'channels/slack',
+  'channels/telegram',
+]),
+...getIntegrationItems('Auth', ['auth/clerk', 'auth/supabase', 'auth/workos']),
+...getIntegrationItems('Databases', ['databases/neon']),
+...getIntegrationItems('Deploy', ['deploy/render']),
+...getIntegrationItems('File storage', ['file-storage/google-drive']),
+...getIntegrationItems('Observability', ['observability/posthog']),
+...getIntegrationItems('Voice', ['voice/openai']),
+]}
+/>
+
+## 故障排除 {/* #troubleshooting */}
+
+大多數失敗的提供者呼叫來自連接的憑證或配置。一個`proxy_error` includes the provider's response in its `status` and `detail` properties.
+
+* **地位`401`:**&#x8A72;憑證可能已過期、被撤銷或輪調。[Reauthorize the connection](/reference/cli/mastra#replace-a-connection-that-needs-reauthorization) if it needs replacing.
+* **地位`403`:**&#x6AA2;查提供者的回應是否缺少範圍、資源限製或帳戶要求。過濾Tool有`allowTools` doesn't change what the credential can do.
+* **提供者沒有提供Tool：**&#x8DD1;步`mastra connect list` to check the project and the connection's status. Check your provider selection and tool filters. Confirm that your installed `@mastra/connect` version includes the toolset. Look in your app logs for `[@mastra/connect] Skipping` warnings, which mean a connection couldn't be resolved.
+
+看[errors](/reference/connect/tools#errors) for every error code.

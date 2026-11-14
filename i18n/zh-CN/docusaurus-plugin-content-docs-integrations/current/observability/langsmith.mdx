@@ -1,0 +1,219 @@
+---
+title: "LangSmith | Observability"
+description: "Export Mastra traces to LangSmith for LLM monitoring and evaluation with project, API key, endpoint, and environment configuration."
+packages:
+  - "@mastra/langsmith"
+  - "@mastra/observability"
+---
+
+# 兰·史密斯
+
+[兰·史密斯](https://smith.langchain.com/)是LangChain用于监控和评估LLM申请的平台。 LangSmith 导出器将您的跟踪发送到 LangSmith，提供有关模型性能和调试功能以及评估Workflow程的见解。
+
+## 安装 {/* #installation */}
+
+```bash npm2yarn
+npm install @mastra/langsmith@latest
+```
+
+## 配置 {/* #configuration */}
+
+### 先决条件 {/* #prerequisites */}
+
+1. **朗史密斯账户**: 报名于[smith.langchain.com](https://smith.langchain.com)
+2. **API密钥**：在 LangSmith 设置 → API 密钥中生成 API 密钥
+3. **环境变量**：设置您的凭据
+
+```bash title=".env"
+# Required
+LANGSMITH_API_KEY=ls-xxxxxxxxxxxx
+
+# Optional
+LANGCHAIN_PROJECT=my-project  # Default project for traces
+LANGSMITH_BASE_URL=https://api.smith.langchain.com  # For self-hosted
+```
+
+### 零配置设置 {/* #zero-config-setup */}
+
+设置环境变量后，无需配置即可使用导出器：
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { Observability } from '@mastra/observability'
+import { LangSmithExporter } from '@mastra/langsmith'
+
+export const mastra = new Mastra({
+  observability: new Observability({
+    configs: {
+      langsmith: {
+        serviceName: 'my-service',
+        exporters: [new LangSmithExporter()],
+      },
+    },
+  }),
+})
+```
+
+### 显式配置 {/* #explicit-configuration */}
+
+您还可以直接传递凭据（优先于环境变量）：
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { Observability } from '@mastra/observability'
+import { LangSmithExporter } from '@mastra/langsmith'
+
+export const mastra = new Mastra({
+  observability: new Observability({
+    configs: {
+      langsmith: {
+        serviceName: 'my-service',
+        exporters: [
+          new LangSmithExporter({
+            apiKey: process.env.LANGSMITH_API_KEY,
+          }),
+        ],
+      },
+    },
+  }),
+})
+```
+
+## 配置选项 {/* #configuration-options */}
+
+### 完整配置 {/* #complete-configuration */}
+
+```typescript
+new LangSmithExporter({
+  // Required credentials
+  apiKey: process.env.LANGSMITH_API_KEY!,
+
+  // Optional settings
+  apiUrl: process.env.LANGSMITH_BASE_URL, // Default: https://api.smith.langchain.com
+  projectName: 'my-project', // Project to send traces to (overrides LANGCHAIN_PROJECT env var)
+  callerOptions: {
+    // HTTP client options
+    timeout: 30000, // Request timeout in ms
+    maxRetries: 3, // Retry attempts
+  },
+  logLevel: 'info', // Diagnostic logging: debug | info | warn | error
+
+  // LangSmith-specific options
+  hideInputs: false, // Hide input data in UI
+  hideOutputs: false, // Hide output data in UI
+})
+```
+
+### 环境变量 {/* #environment-variables */}
+
+|变量|描述 |
+| - | - |
+|`LANGSMITH_API_KEY` | Your LangSmith API key (required) |
+| `LANGCHAIN_PROJECT` | Default project name for traces (optional, defaults to "default") |
+| `LANGSMITH_BASE_URL` | API URL for self-hosted instances (optional) |
+
+这`projectName` config option takes precedence over the `LANGCHAIN_PROJECT` environment variable, allowing you to programmatically route traces to different projects.
+
+## 动态配置 {/* #dynamic-configuration */}
+
+您可以使用以下命令在运行时覆盖每个跨度的 LangSmith 设置`withLangsmithMetadata`. This is useful for routing traces to different projects based on runtime conditions (e.g., customer, environment, or feature).
+
+### 使用助手 {/* #using-the-helper */}
+
+使用`withLangsmithMetadata` with `buildTracingOptions` to set LangSmith-specific options:
+
+```typescript title="src/agents/support-agent.ts"
+import { Agent } from '@mastra/core/agent'
+import { buildTracingOptions } from '@mastra/observability'
+import { withLangsmithMetadata } from '@mastra/langsmith'
+
+export const supportAgent = new Agent({
+  id: 'support-agent',
+  name: 'support-agent',
+  instructions: 'You are a helpful support agent.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  defaultOptions: {
+    tracingOptions: buildTracingOptions(withLangsmithMetadata({ projectName: 'customer-support' })),
+  },
+})
+```
+
+### 动态项目路由 {/* #dynamic-project-routing */}
+
+使用`requestContext` to route traces to different projects based on runtime conditions.
+
+```typescript title="src/mastra/agents/support-agent.ts"
+import { Agent } from '@mastra/core/agent'
+import { buildTracingOptions } from '@mastra/observability'
+import { withLangsmithMetadata } from '@mastra/langsmith'
+
+export const supportAgent = new Agent({
+  id: 'support-agent',
+  name: 'support-agent',
+  instructions: 'You are a helpful support agent.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  defaultOptions: ({ requestContext }) => {
+    const userTier = requestContext?.get('user-tier') as string
+    const userId = requestContext?.get('user-id') as string
+
+    return {
+      tracingOptions: buildTracingOptions(
+        withLangsmithMetadata({
+          projectName: userTier === 'enterprise' ? 'enterprise-traces' : 'standard-traces',
+          sessionId: userId,
+        }),
+      ),
+    }
+  },
+})
+```
+
+### 可用字段 {/* #available-fields */}
+
+这`withLangsmithMetadata` helper accepts these fields:
+
+|领域 |类型 |描述 |
+| - | - | - |
+|`projectName` | string | Override the project for this trace |
+| `sessionId` | string | Group related traces by session |
+| `sessionName` | string | Display name for the session |
+
+所有字段都是可选的。该帮助器与任何现有元数据合并，因此您可以多次调用它或与其他跟踪选项结合使用。
+
+## 对话主题 {/* #conversation-threads */}
+
+LangSmith 集团遇到了[Thread](https://docs.langchain.com/langsmith/threads) using the `session_id` metadata key. The exporter sets it on every run of a trace. The root run takes the first value it finds: an explicit `withLangsmithMetadata({ sessionId })`, then `sessionId` in span metadata, then the Mastra memory `threadId`. Child runs take the session of their parent run, so a delegated sub-agent stays in the conversation's Thread even though it runs on its own derived thread.
+
+具有记忆设置的Agent`threadId` on each run, so turns on the same memory thread appear as one Thread in LangSmith without extra configuration:
+
+```typescript
+const memory = { thread: 'thread-123', resource: 'user-1' }
+
+await agent.generate('hi', { memory })
+await agent.generate('and again', { memory })
+```
+
+## 分数和反馈 {/* #scores-and-feedback */}
+
+成绩已发送`mastra.observability.addScore()` show up in LangSmith as feedback on the matching run. A score with only a `traceId` is attached to the trace's root run; a score with a `spanId` is attached to that span's run.
+
+```typescript title="src/feedback.ts"
+await mastra.observability.addScore({
+  traceId,
+  correlationContext: { traceId },
+  score: { scorerId: 'user-feedback', scoreSource: 'user', score: 1, reason: 'Helpful answer' },
+})
+```
+
+每个 LangSmith 运行 ID 均源自其 Mastra 跨度 ID，因此跨度级别分数适用于任何进程、重新启动后以及导出跟踪后很长时间。跟踪级别分数通过以下方式找到导出器项目中的根运行`mastra_trace_id` metadata the exporter stores on every run. Runs exported by earlier versions of `@mastra/langsmith` keep their original ids and can only be scored from the process that exported them. The same derivation is exported as `langsmithRunIdFor()` if you need to link to a run from your own UI:
+
+```typescript
+import { langsmithRunIdFor } from '@mastra/langsmith'
+
+const runId = langsmithRunIdFor(spanId)
+```
+
+## 有关的 {/* #related */}
+
+* [追踪概述](/docs/observability/tracing/overview)
+* [朗史密斯文档](https://docs.smith.langchain.com/)

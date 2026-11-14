@@ -1,0 +1,423 @@
+---
+title: "Search and indexing"
+description: "Index filesystem or application content in Mastra workspaces and search it with BM25 keyword, vector semantic, or hybrid retrieval modes."
+packages:
+  - "@mastra/core"
+---
+
+# 搜索和索引
+
+搜索为Agent提供了一种快速查找相关内容的方法，而无需阅读每个文件。它适用于[direct filesystem access](/docs/sandbox/filesystem#direct-filesystem-access)和[`mounts`](/docs/sandbox/filesystem#mounts)，但将可搜索内容存储在单独的索引中。
+
+查询读取该索引，而不是实时文件系统。这种分离还允许您对来自数据库、API 或其他应用程序源的内容进行索引。
+
+## 快速入门 {/* #quickstart */}
+
+启用BM25关键字搜索，将文档添加到索引并搜索：
+
+```typescript title="src/mastra/workspaces.ts"
+import { LocalFilesystem, Workspace } from '@mastra/core/workspace'
+
+const workspace = new Workspace({
+  filesystem: new LocalFilesystem({ basePath: './workspace' }),
+  bm25: true,
+})
+
+await workspace.index('/docs/guide.md', 'Reset passwords from the account settings page.')
+
+const results = await workspace.search('password reset')
+
+for (const result of results) {
+  console.log(`${result.id}: ${result.score}`)
+  console.log(result.content)
+}
+```
+
+第一个参数`workspace.index()` is the document ID returned in search results. It looks like a file path in this example, but `index()` doesn't read or create that file.
+
+配置搜索还为Agent提供搜索和索引Tool。看[Agent tools](#agent-tools) to control them.
+
+## 选择搜索模式 {/* #choose-a-search-mode */}
+
+Mastra 支持三种搜索模式：
+
+|模式|最适合 |示例查询 |
+| - | - | - |
+|`bm25` | Exact terms, technical queries, and code | "useState hook", "404 error", "config.yaml" |
+| `vector` | Concepts and natural-language questions | "how to handle user authentication" |
+| `hybrid` | A mix of exact and conceptual queries | Most agent search use cases |
+
+如果你不传递模式`workspace.search()`, Mastra uses hybrid search when both BM25 and vector search are configured. Otherwise, it uses the configured mode.
+
+### BM25关键词搜索 {/* #bm25-keyword-search */}
+
+BM25 按词频和文档长度对文档进行评分。它不需要外部服务或嵌入模型。经过`bm25: true` to use the defaults shown in the quickstart.
+
+要调整术语频率饱和度和文档长度标准化，请通过`k1` and `b`:
+
+```typescript title="src/mastra/workspaces.ts"
+import { Workspace, LocalFilesystem } from '@mastra/core/workspace'
+
+const workspace = new Workspace({
+  filesystem: new LocalFilesystem({ basePath: './workspace' }),
+  bm25: {
+    k1: 1.5,
+    b: 0.75,
+  },
+})
+```
+
+### 矢量搜索 {/* #vector-search */}
+
+矢量搜索使用嵌入来查找语义相似的内容。配置向量存储和一次嵌入一个字符串的函数：
+
+```typescript title="src/mastra/workspaces.ts"
+import { openai } from '@ai-sdk/openai'
+import { Workspace, LocalFilesystem } from '@mastra/core/workspace'
+import { PineconeVector } from '@mastra/pinecone'
+import { embed } from 'ai'
+
+const workspace = new Workspace({
+  filesystem: new LocalFilesystem({ basePath: './workspace' }),
+  vectorStore: new PineconeVector({
+    id: 'workspace-search',
+    apiKey: process.env.PINECONE_API_KEY!,
+  }),
+  embedder: async (text: string) => {
+    const { embedding } = await embed({
+      model: openai.embedding('__AI_SDK_OPENAI_EMBEDDING_MODEL__'),
+      value: text,
+    })
+    return embedding
+  },
+})
+```
+
+#### 批量嵌入 {/* #batch-embedding */}
+
+单文本嵌入器为每个文档进行单独的提供程序调用。对于大型索引，请使用Provider的批处理 API 在一次调用中嵌入多个文档。
+
+批量包埋机必须：
+
+* 接受字符串数组。
+* 以相同的顺序为每个字符串返回一个嵌入。
+* 有一个`batch: true` property so Mastra can detect it at runtime.
+* 可选设置`maxBatchSize` to the largest array the provider accepts.
+
+Mastra 根据以下条件分割更大的索引集`maxBatchSize` and can process the resulting groups concurrently. Set this value to the provider's documented limit:
+
+|Provider|最大输入|
+| - | - |
+|开放人工智能 | 2048 | 2048
+|连贯| 96 | 96
+|航程| 128 | 128
+
+如果你省略`maxBatchSize`, Mastra uses its internal batch size.
+
+将单文本嵌入器替换为批量嵌入器：
+
+```typescript title="src/mastra/workspaces.ts"
+import { openai } from '@ai-sdk/openai'
+import { LocalFilesystem, Workspace } from '@mastra/core/workspace'
+import { PineconeVector } from '@mastra/pinecone'
+import { embedMany } from 'ai'
+
+const model = openai.embedding('__AI_SDK_OPENAI_EMBEDDING_MODEL__')
+
+const workspace = new Workspace({
+  filesystem: new LocalFilesystem({ basePath: './workspace' }),
+  vectorStore: new PineconeVector({
+    id: 'workspace-search',
+    apiKey: process.env.PINECONE_API_KEY!,
+  }),
+  embedder: Object.assign(
+    async (texts: string[]) => {
+      const { embeddings } = await embedMany({ model, values: texts })
+      return embeddings
+    },
+    { batch: true as const, maxBatchSize: 2048 },
+  ),
+})
+```
+
+`Object.assign()`添加`batch` and `maxBatchSize` as properties on the function. Mastra reads them as metadata and doesn't pass them to the provider. Single-text embedders with the `(text: string) => Promise<number[]>` signature remain supported.
+
+### 服务器端嵌入 {/* #server-side-embeddings */}
+
+一些向量存储本身生成嵌入。带着其中之一离开`embedder` out: Mastra sends the file text, and the database embeds it on write and embeds the search string on query.
+
+MongoDB 通过以下方式做到这一点[Automated Embedding](/integrations/vectors/mongodb#automated-embedding). Name a Voyage AI model on the vector store:
+
+```typescript title="src/mastra/workspaces.ts"
+import { LocalFilesystem, Workspace } from '@mastra/core/workspace'
+import { MongoDBVector } from '@mastra/mongodb'
+
+const workspace = new Workspace({
+  filesystem: new LocalFilesystem({ basePath: './workspace' }),
+  vectorStore: new MongoDBVector({
+    id: 'workspace-search',
+    uri: process.env.MONGODB_URI!,
+    dbName: process.env.MONGODB_DB_NAME!,
+    // highlight-next-line
+    autoEmbed: { model: 'voyage-4' },
+  }),
+})
+```
+
+MongoDB 在后台嵌入新文档，因此刚才索引的内容可能还不会显示在搜索结果中。请参阅[MongoDB reference](/integrations/vectors/mongodb#automated-embedding) for what Automated Embedding requires.
+
+所有其他商店都希望您的应用程序提供向量并一直要求`embedder`.
+
+### 混合搜索 {/* #hybrid-search */}
+
+配置 BM25 和矢量搜索以组合关键字和语义结果：
+
+```typescript title="src/mastra/workspaces.ts"
+import { Workspace, LocalFilesystem } from '@mastra/core/workspace'
+
+const workspace = new Workspace({
+  filesystem: new LocalFilesystem({ basePath: './workspace' }),
+  bm25: true,
+  vectorStore: pineconeVector,
+  embedder: embedderFn,
+})
+```
+
+### 自定义索引名称 {/* #custom-index-name */}
+
+矢量索引名称默认为Workspace ID 的清理版本，后跟`_search`, or `_search_selfembed` when the vector store generates the embeddings. Set `searchIndexName` when you need a stable or shared name:
+
+```typescript title="src/mastra/workspaces.ts"
+import { Workspace, LocalFilesystem } from '@mastra/core/workspace'
+
+const workspace = new Workspace({
+  filesystem: new LocalFilesystem({ basePath: './workspace' }),
+  vectorStore: pineconeVector,
+  embedder: embedderFn,
+  // highlight-next-line
+  searchIndexName: 'my_workspace_vectors',
+})
+```
+
+名称必须以字母或`_`, contain only letters, numbers, or `_`, and contain at most 63 characters.
+
+## 索引内容 {/* #index-content */}
+
+使用`workspace.index()` to add supplied text to the search index. Mastra tokenizes the content for BM25 search and generates an embedding when vector search is configured.
+
+文件系统中不需要存在文档 ID。当结果需要过滤或更多上下文时添加元数据：
+
+```typescript
+await workspace.index('/docs/guide.md', 'Content of the guide...')
+
+await workspace.index('/docs/api.md', apiDocContent, {
+  metadata: {
+    category: 'api',
+    version: '2.0',
+  },
+})
+```
+
+手动索引非常适合数据库记录和 API 响应，或者当您需要自己对内容进行预处理、分块或注释时。
+
+### 指数申请内容 {/* #index-application-content */}
+
+一个工作空间需要一个`filesystem`, `sandbox`, or `skills` provider even when your application reads content and passes it to `workspace.index()`. Without one, the `Workspace` constructor throws `Workspace requires at least a filesystem, sandbox, or skills`.
+
+配置文件系统并不意味着Agent应该使用它。默认情况下，具有此Workspace的Agent还会获取文件Tool，例如`mastra_workspace_read_file` and `mastra_workspace_write_file`. To expose only search, disable all workspace tools and re-enable the search tool:
+
+```typescript title="src/mastra/workspaces.ts"
+import { LocalFilesystem, Workspace, WORKSPACE_TOOLS } from '@mastra/core/workspace'
+
+const workspace = new Workspace({
+  filesystem: new LocalFilesystem({ basePath: './workspace' }),
+  bm25: true,
+  tools: {
+    enabled: false,
+    [WORKSPACE_TOOLS.SEARCH.SEARCH]: { enabled: true },
+  },
+})
+
+for (const document of documents) {
+  await workspace.index(document.id, document.content)
+}
+```
+
+您的应用程序不断调用`workspace.index()` directly. The tool settings only control what the agent can call.
+
+### 保持文件和索引同步 {/* #keep-files-and-the-index-in-sync */}
+
+文件系统和索引突变是独立的。写入、编辑或删除文件不会更新其索引内容，并且`workspace.index()` doesn't read or change a file.
+
+要写入文件并使其可搜索，请执行以下两个操作：
+
+```typescript
+const path = 'notes/launch.md'
+const content = '# Launch notes\n\nShip the new dashboard on Friday.'
+const filesystem = workspace.filesystem
+
+if (!filesystem) {
+  throw new Error('This operation requires a static filesystem')
+}
+
+await filesystem.writeFile(path, content)
+await workspace.index(path, content)
+```
+
+编辑文件后，再次索引其完整更新的内容。删除文件会保留其索引文档，而 Mastra 目前并未公开用于删除索引文档的公共方法。使用`grep` file tool instead when an agent must search the current filesystem state without maintaining a separate index.
+
+## 搜索内容 {/* #search-content */}
+
+使用`workspace.search()` to return documents ranked by relevance:
+
+```typescript
+const results = await workspace.search('authentication flow', {
+  topK: 10,
+  mode: 'hybrid',
+  vectorWeight: 0.5,
+})
+```
+
+|选项|描述 |
+| - | - |
+|`topK` | Maximum number of results. Direct API calls default to 10. The agent search tool defaults to 5. |
+| `mode` | Search mode: `'bm25'`, `'vector'`, or `'hybrid'`. Defaults to the best available mode for the workspace configuration. |
+| `minScore` | Removes results below this score. The scale depends on the mode, vector provider, and indexed content. |
+| `vectorWeight` | In hybrid mode, the weight given to vector scores. `0` gives vector scores zero weight, `1` gives BM25 scores zero weight, and `0.5` weights both equally. |
+| `filter` | Vector-store metadata filter used by vector retrieval. In hybrid mode, it doesn't filter BM25-only results. The syntax depends on the configured vector store. |
+
+每个结果包含匹配的内容及其分数：
+
+```typescript
+interface SearchResult {
+  id: string
+  content: string
+  score: number
+  lineRange?: {
+    start: number
+    end: number
+  }
+  metadata?: Record<string, unknown>
+  scoreDetails?: {
+    vector?: number
+    bm25?: number
+  }
+}
+```
+
+分数等级不可互换：
+
+* 独立 BM25 搜索返回原始 BM25 分数，不限于 0 到 1。
+* 矢量分数的含义取决于配置的矢量存储。
+* 混合搜索最小-最大标准化 BM25 进行加权计算，但使用向量提供者的分数不变。综合得分不会限制在 0 到 1 之间。
+* `scoreDetails`保留原始组件分数，包括非标准化 BM25 分数。
+* 调`minScore` for the active mode, vector provider, and indexed content instead of reusing one threshold across indexes.
+
+## AgentTool {/* #agent-tools */}
+
+配置搜索后，Agent会收到`mastra_workspace_search` and `mastra_workspace_index`. Configure them independently with `WORKSPACE_TOOLS.SEARCH`.
+
+当Agent应搜索现有内容而不更改索引时禁用索引：
+
+```typescript title="src/mastra/workspaces.ts"
+import { LocalFilesystem, Workspace, WORKSPACE_TOOLS } from '@mastra/core/workspace'
+
+const workspace = new Workspace({
+  filesystem: new LocalFilesystem({ basePath: './workspace' }),
+  bm25: true,
+  tools: {
+    [WORKSPACE_TOOLS.SEARCH.INDEX]: {
+      enabled: false,
+    },
+  },
+})
+```
+
+索引Tool接受相同的提供`path`, `content`, and optional metadata as `workspace.index()`. Because it can trigger embedding calls and vector-store writes, require approval when agents shouldn't mutate the index without review:
+
+```typescript title="src/mastra/workspaces.ts"
+import { Workspace, LocalFilesystem } from '@mastra/core/workspace'
+
+const workspace = new Workspace({
+  filesystem: new LocalFilesystem({ basePath: './workspace' }),
+  bm25: true,
+  tools: {
+    [WORKSPACE_TOOLS.SEARCH.INDEX]: {
+      requireApproval: true,
+    },
+  },
+})
+```
+
+`requireReadBeforeWrite`适用于文件系统写入Tool，不适用于索引突变。当静态文件系统为只读时，Mastra 还会排除索引Tool，即使索引不会写入该文件系统。
+
+请参阅[search tool reference](/reference/workspace/workspace-class#search-tools) for the complete tool list and the [tool configuration reference](/reference/workspace/workspace-class#tool-configuration) for shared settings.
+
+## 自动索引 {/* #auto-indexing */}
+
+使用`autoIndexPaths` to build an index from static filesystem content during application startup.
+
+：：：警告
+
+`autoIndexPaths`作为一部分运行`workspace.init()`. Passing the workspace to `new Mastra({ workspace })` registers it but doesn't initialize it or build the index. Call and await `workspace.init()` unless another runtime, such as `AgentController`, owns workspace initialization.
+
+```typescript
+await workspace.init()
+```
+
+当您的应用程序拥有初始化时，请在启动期间在服务请求之前调用它一次。
+
+:::
+
+在正常的 Mastra 应用程序中，构造`Mastra` first so its logger is available to the workspace. Then initialize the workspace at module startup:
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { LocalFilesystem, Workspace } from '@mastra/core/workspace'
+
+const workspace = new Workspace({
+  filesystem: new LocalFilesystem({ basePath: './workspace' }),
+  bm25: true,
+  autoIndexPaths: ['docs', 'support/faq'],
+})
+
+export const mastra = new Mastra({ workspace })
+
+await workspace.init()
+```
+
+顶级`await` keeps module startup pending until initialization finishes. When `init()` resolves, Mastra has attempted to read and index every matching file.
+
+每个`autoIndexPaths` entry can be a file, directory, or glob pattern. Recursive directory and glob traversal is limited to ten levels:
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { Workspace, LocalFilesystem } from '@mastra/core/workspace'
+
+const workspace = new Workspace({
+  filesystem: new LocalFilesystem({ basePath: './workspace' }),
+  bm25: true,
+  autoIndexPaths: ['docs/**/*.md', 'support/**/*.txt'],
+})
+
+export const mastra = new Mastra({ workspace })
+
+await workspace.init()
+```
+
+自动索引支持静态`filesystem` or `mounts`. Include mount prefixes in paths, such as `/docs/**/*.md`. It doesn't support a filesystem resolver because no provider has been selected when the workspace initializes. Index resolver-backed content manually instead.
+
+初始化执行一次扫描，不监视以后的更改。它在对大文件进行索引之前将其分割成块，并以矢量模式生成嵌入。
+
+保持配置的路径狭窄并避免依赖或输出目录。不包括二进制文件树。对大型向量索引使用批量嵌入器。
+
+呼唤`workspace.init()` again scans the paths again and clears the process-local BM25 index before rebuilding it. Don't call it from an agent call, tool, workflow step, or request handler.
+
+持久向量索引的行为有所不同。自动索引会替换它读取的文件，但可以保留在以后扫描之前删除的文件的文档。使用稳定的工作空间`id` or `searchIndexName` when vectors must survive process restarts, and plan cleanup around the vector store's persistence behavior.
+
+## 有关的 {/* #related */}
+
+* [Sandbox](/docs/sandbox/overview)
+* [文件系统](/docs/sandbox/filesystem)
+* [检索增强生成概述](/reference/rag/overview)
+* [Workspace配置参考](/reference/workspace/workspace-class)

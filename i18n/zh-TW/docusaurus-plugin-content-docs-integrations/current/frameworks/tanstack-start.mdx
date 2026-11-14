@@ -1,0 +1,111 @@
+---
+title: "TanStack Start | Frameworks"
+description: "Build a tool-calling Mastra agent in TanStack Start and use the server adapter to expose Mastra's HTTP API from a catch-all route."
+packages:
+  - '@mastra/core'
+  - '@mastra/tanstack-start'
+---
+
+# TanStack 啟動
+
+在 TanStack Start 中建立一個呼叫Tool的 Mastra Agent，然後將 Mastra 伺服器安裝在一個包羅萬象的 API 路由上。這[Server Adapters](/docs/server/server-adapters)概述解釋了共享概念，以及[TanStack 啟動適配器](/reference/server/tanstack-start-adapter)參考文件包 API。
+
+## 開始之前 {/* #before-you-begin */}
+
+* 您需要來自受支援的 API 金鑰[model provider](/models). If you don't have a preference, use [OpenAI](/models/providers/openai).
+* 安裝 Node.js`v22.13.0` or later
+
+## 建立新的 TanStack Start 應用程式（可選） {/* #create-a-new-tanstack-start-app-optional */}
+
+您需要一個正在運行的 TanStack Start 應用程式`src/routes` directory. If you don't already have one, follow the [TanStack Start quick start](https://tanstack.com/start/latest/docs/framework/react/getting-started) to create and run an app before continuing.
+
+## 初始化瑪斯特拉 {/* #initialize-mastra */}
+
+從 TanStack Start 專案目錄中，執行[`mastra init`](/reference/cli/mastra#mastra-init). When prompted, choose a provider, such as OpenAI, and enter your API key:
+
+```bash npm2yarn
+npx mastra@latest init
+```
+
+這創建了一個`src/mastra` directory with an example weather agent and the following files:
+
+* `index.ts`：Mastra 配置，包括內存
+* `tools/weather-tool.ts`
+* `agents/weather-agent.ts`
+
+您將傳遞從下列位置匯出的 Mastra 實例`src/mastra/index.ts` to the server adapter.
+
+## 配置 Vite 和 Nitro {/* #configure-vite-and-nitro */}
+
+更新`vite.config.ts` so Vite and Nitro leave DuckDB's and `@mastra/core`'s Node-only dependencies out of their processing pipelines:
+
+```diff title="vite.config.ts"
+ const config = defineConfig({
+   resolve: { tsconfigPaths: true },
++  optimizeDeps: {
++    exclude: ['@mastra/duckdb', 'execa'],
++  },
+   plugins: [
+     devtools(),
+-    nitro({ rollupConfig: { external: [/^@sentry\//] } }),
++    nitro({
++      rollupConfig: {
++        external: [/^@sentry\//, /^@duckdb\//],
++      },
++    }),
+```
+
+這`optimizeDeps.exclude` setting prevents Vite's development optimizer from opening DuckDB's native `.node` binary as JavaScript. Excluding `execa` stops the optimizer from pre-bundling the server-only dependency `@mastra/core` uses for local process execution; its transitive `npm-run-path` and `unicorn-magic` packages use Node-only conditional exports that the optimizer cannot resolve in the browser build. Adding `/^@duckdb\//` to Nitro's `rollupConfig.external` keeps DuckDB's native Node packages out of the production bundle so Node.js can load them at runtime.
+
+這些變更僅適用於`vite.config.ts`; you don't need to change your application or Mastra source files.
+
+## 新增伺服器適配器 {/* #add-the-server-adapter */}
+
+
+
+```bash npm2yarn
+npm install @mastra/tanstack-start@latest hono
+```
+
+建立一個 splat 路由，將所有支援的 HTTP 方法傳遞給適配器：
+
+```typescript title="src/routes/api/$.ts"
+import { createStartRouteHandler } from '@mastra/tanstack-start'
+import { createFileRoute } from '@tanstack/react-router'
+import { mastra } from '../../mastra'
+
+export const Route = createFileRoute('/api/$')({
+  server: {
+    handlers: createStartRouteHandler({ mastra }),
+  },
+})
+```
+
+這`prefix` option defaults to `/api` and must match the splat route's mount path. For example, when mounting the adapter at `src/routes/api/mastra/$.ts`, use `createStartRouteHandler({ mastra, prefix: '/api/mastra' })`.
+
+此適配器公開 Mastra 的 REST 和流端點、自訂 API 路由、MCP 端點和 A2A 端點。 A2A 任務使用記憶體中的任務儲存。
+
+## 測試你的Agent {/* #test-your-agent */}
+
+啟動您的 TanStack Start 應用程式：
+
+```bash npm2yarn
+npm run dev
+```
+
+在單獨的終端機視窗中，使用`curl` to ask the weather agent:
+
+```bash
+curl -X POST http://localhost:3000/api/agents/weather-agent/generate -H "Content-Type: application/json" -d "{\"messages\":[{\"role\":\"user\",\"content\":\"What is the weather like in Seoul?\"}]}"
+```
+
+端點從Agent傳回完整的 JSON 回應。
+
+## 後續步驟 {/* #next-steps */}
+
+
+
+* 了解更多關於[agents](/docs/agents/overview)
+* 給你的Agent自己的[tools](/docs/agents/tools)
+* 添加擬人化[memory](/docs/memory/overview) to your agent
+* 了解更多關於[Server Adapters](/docs/server/server-adapters)

@@ -1,0 +1,388 @@
+---
+title: "Migrate from Mastra Cloud | Migration Guide"
+description: "The Mastra platform replaces Mastra Cloud with separate Studio and Server products, CLI-driven deploys, and a new observability system."
+---
+
+import Steps from "@site/src/components/Steps";
+import StepItem from "@site/src/components/StepItem";
+
+# 从 Mastra 云迁移到 Mastra 平台
+
+Mastra 平台用单独的 Studio 和 Server 产品、CLI 驱动的部署以及新的可观察性系统取代了 Mastra Cloud。本指南将引导您完成每个步骤。
+
+## 发生了什么变化 {/* #what-changed */}
+
+|面积 |马斯特拉云| Mastra平台|
+| - | - | - |
+|**Products** | Single project | Separate Studio and Server |
+| **Deploys**|推送时自动部署 | CLI 驱动（`mastra studio deploy`, `mastra server deploy`) |
+| **项目创建**| GitHub 导入 | CLI 在首次部署时创建项目 |
+|**贮存**|托管 LibSQL（云存储）或自带 |自带托管数据库 |
+|**可观察性**|基于记录器 |`Observability`出口商课程|
+|**环境变量**|在项目设置期间设置 |种子来自`.env`首次部署时，之后在仪表板中进行管理
+|**网址**|单一网址 |单独的工作室和服务器 URL |
+
+## 开始之前 {/* #before-you-start */}
+
+<Steps>
+  <StepItem>
+    安装或更新 CLI：
+
+    ```bash npm2yarn
+    npm install -g mastra@latest
+    ```
+  </StepItem>
+
+  <StepItem>
+    认证：
+
+    ```bash
+    mastra auth login
+    ```
+  </StepItem>
+
+  <StepItem>
+    验证您的项目在本地构建：
+
+    ```bash
+    mastra build
+    ```
+  </StepItem>
+</Steps>
+
+## 使用托管数据库替换 Mastra Cloud Store {/* #replace-mastra-cloud-store-with-a-hosted-database */}
+
+与 Mastra Cloud 不同，Mastra Cloud 提供了由[Turso](https://turso.tech), the Mastra platform doesn't host a database for you. Point your storage at an externally hosted instance.
+
+如果您已经在使用托管数据库（“自带”），请保留现有的数据库配置。确保连接字符串设置为仪表板中的环境变量而不是硬编码。
+
+如果您使用的是 Cloud Store，请按照以下步骤导出数据并将其加载到您控制的新 libSQL 数据库中。
+
+### 导出您的云存储数据 {/* #export-your-cloud-store-data */}
+
+您可以通过两种方式导出云存储数据：从仪表板下载，或使用 Turso CLI 创建手动转储。
+
+#### 选项 A：从仪表板导出（推荐） {/* #option-a-export-from-the-dashboard-recommended */}
+
+在中打开您的项目[Mastra dashboard](https://projects.mastra.ai) and navigate to **Runtime → Settings → Storage**. Click the **Export Database** button. The dashboard generates a full `.sql` dump of your Cloud Store and downloads it directly to your Downloads folder.
+
+下载完成后，将转储转换为 SQLite 数据库文件：
+
+```bash
+sqlite3 mydb.db < ~/Downloads/mastra-cloud-dump.sql
+```
+
+您现在拥有一个便携式`mydb.db` file that you can inspect locally or back up before using it as the source for the new database in the following steps.
+
+#### 选项 B：通过 Turso CLI 导出 {/* #option-b-export-via-the-turso-cli */}
+
+如果您更喜欢从命令行工作，或者需要编写导出脚本，则可以使用以下命令直接转储数据库[Turso CLI](https://docs.turso.tech/cli). This approach requires the database URL and an auth token, both surfaced in the dashboard.
+
+<Steps>
+  <StepItem>
+    从仪表板检索您的 Cloud Store 凭据。
+
+    在中打开您的项目[Mastra dashboard](https://projects.mastra.ai) and navigate to **Runtime → Settings → Env Variables**. For projects backed by Cloud Store, two variables are injected alongside your own:
+
+    * `MASTRA_STORAGE_URL`：libSQL 连接字符串（例如`libsql://<db-name>-<org>.turso.io`).
+    * `MASTRA_STORAGE_AUTH_TOKEN`：范围为该数据库的可读身份验证令牌。
+
+    每行都支持标准环境变量操作：通过眼睛切换显示或隐藏、编辑、删除和复制值。使用**Copy Value** to grab both values for the dump command below.
+
+    :::注意
+    这些变量仅出现在使用 Cloud Store 预配的项目中。如果您将自己的数据库带到 Mastra Cloud，则您已经拥有这些凭据并且可以跳到[Point your Mastra app at the new database](#point-your-mastra-app-at-the-new-database).
+    :::
+
+    :::注意
+    如果变量丢失，值不会解密，或者 Turso CLI 拒绝令牌、电子邮件[support@mastra.ai](mailto:support@mastra.ai) from the address associated with your Mastra Cloud account and ask for the libSQL URL and auth token for the project you want to export. Include the project name/ID. Support can also run the dump on your behalf if CLI access is blocked on your network.
+    :::
+  </StepItem>
+
+  <StepItem>
+    安装 Turso CLI。
+
+    ```bash title="macOS"
+    brew install tursodatabase/tap/turso
+    ```
+
+    ```bash title="Linux / WSL"
+    curl -sSfL https://get.tur.so/install.sh | bash
+    ```
+
+    请参阅[Turso CLI introduction](https://docs.turso.tech/cli/introduction) for Windows and headless-install options.
+  </StepItem>
+
+  <StepItem>
+    将数据库导出到 SQL 转储。
+
+    将支持人员提供的凭据（或使用仪表板值，如果您之前已复制它们）设置为环境变量，然后将数据库转储到本地文件。如果您从仪表板复制了 URL，请交换`libsql://` scheme for `https://` because the Turso CLI expects the HTTPS form when passing the URL with an auth token.
+
+    ```bash
+    export MASTRA_STORAGE_URL="https://<db-name>-<org>.turso.io"
+    export MASTRA_STORAGE_AUTH_TOKEN="<token-from-dashboard-or-support>"
+
+    turso db shell "$MASTRA_STORAGE_URL?authToken=$MASTRA_STORAGE_AUTH_TOKEN" ".dump" > mastra-cloud-dump.sql
+    ```
+
+    :::警告
+    在连接字符串中嵌入身份验证令牌的安全性不如 Turso 推荐的模式，因为包括令牌在内的完整 URL 可能会出现在命令历史记录以及进程或终端输出中。图尔索建议跑步`turso auth login` and dumping by database name only: `turso db shell <database-name> ".dump" > mastra-cloud-dump.sql`. That flow requires the database to belong to a Turso account you own, which isn't true for Cloud Store, so the environment-variable example above provides an alternative for this one-time export. To avoid token interpolation entirely, ask support to run the dump and send you the resulting SQL file.
+    :::
+
+    由此产生的`mastra-cloud-dump.sql` contains the full schema and data: thread and message history, workflow snapshots, traces, and eval scores. Store it somewhere safe before continuing.
+  </StepItem>
+</Steps>
+
+### 将转储加载到新的 libSQL 数据库中 {/* #load-the-dump-into-a-new-libsql-database */}
+
+转储是标准 SQL 文件，可以加载到任何与 libSQL 兼容的数据库中。下面的示例使用新的 Turso 托管数据库，它可以保持迁移的相似性并避免架构转换。
+
+<Steps>
+  <StepItem>
+    根据您自己的 Turso 帐户对 Turso CLI 进行身份验证。
+
+    ```bash
+    turso auth login
+    ```
+
+    如果您没有 Turso 帐户，CLI 将提示您创建一个帐户。看[Turso pricing](https://turso.tech/pricing) for plan details.
+  </StepItem>
+
+  <StepItem>
+    创建一个新数据库并一步加载转储。
+
+    ```bash
+    turso db create mastra-migrated --from-dump ./mastra-cloud-dump.sql
+    ```
+
+    `--from-dump`在创建时恢复本地 SQLite/libSQL 转储，这比通过管道传递语句更快、更安全`turso db shell` after the fact. Pick a region close to where your Mastra Server runs to minimize latency. List available regions with `turso db locations` and pass `--group <group-name>` if you manage multiple groups.
+
+    对于多 GB 转储，添加`--wait` so the CLI blocks until the database is fully available.
+  </StepItem>
+
+  <StepItem>
+    生成新数据库的连接凭据。
+
+    ```bash
+    turso db show mastra-migrated --url
+    turso db tokens create mastra-migrated
+    ```
+
+    第一个命令打印 libSQL URL。第二个打印一个身份验证令牌。两者都需要`LibSQLStore`.
+  </StepItem>
+</Steps>
+
+### 将您的 Mastra 应用程序指向新数据库 {/* #point-your-mastra-app-at-the-new-database */}
+
+将新凭据设置为环境变量，可以在本地`.env` or in the Mastra platform dashboard:
+
+```bash title=".env"
+TURSO_DATABASE_URL="libsql://mastra-migrated-<org>.turso.io"
+TURSO_AUTH_TOKEN="<token-from-turso-db-tokens-create>"
+```
+
+配置`LibSQLStore` to read from those variables:
+
+```ts title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core/mastra'
+import { LibSQLStore } from '@mastra/libsql'
+
+export const mastra = new Mastra({
+  storage: new LibSQLStore({
+    id: 'libsql-storage',
+    url: process.env.TURSO_DATABASE_URL!,
+    authToken: process.env.TURSO_AUTH_TOKEN,
+  }),
+})
+```
+
+请参阅[libSQL storage reference](/integrations/databases/libsql) for the full set of options.
+
+### 验证迁移 {/* #verify-the-migration */}
+
+在停用您的云项目之前，请确认新数据库提供您的应用程序所需的数据。
+
+* 跑步`turso db shell mastra-migrated "SELECT name FROM sqlite_master WHERE type='table';"` to list tables. The output should include the Mastra-managed tables (e.g. `mastra_threads`, `mastra_messages`, `mastra_workflow_snapshot`, `mastra_traces`).
+* 例如，对已知填充的表运行行计数`turso db shell mastra-migrated "SELECT COUNT(*) FROM mastra_messages;"`, and compare it to the same query against the Cloud Store URL.
+* 根据新凭据启动 Mastra 应用程序，并确认现有线程或Workflow程运行按预期加载[Studio](/docs/studio/observability).
+
+## 更新Observability配置 {/* #update-observability-configuration */}
+
+Mastra Cloud 使用基于记录器的跟踪。 Mastra 平台使用`Observability` class with explicit exporters.
+
+安装可观察性包：
+
+```bash npm2yarn
+npm install @mastra/observability
+```
+
+**之前（Mastra 云）：**
+
+```ts title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core/mastra'
+import { PinoLogger } from '@mastra/loggers'
+
+export const mastra = new Mastra({
+  logger: new PinoLogger({ name: 'my-app', level: 'info' }),
+  // traces appear in Cloud dashboard automatically
+})
+```
+
+**之后（Mastra 平台）：**
+
+```ts title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core/mastra'
+import {
+  Observability,
+  MastraStorageExporter,
+  MastraPlatformExporter,
+  SensitiveDataFilter,
+} from '@mastra/observability'
+
+export const mastra = new Mastra({
+  observability: new Observability({
+    configs: {
+      default: {
+        serviceName: 'my-app',
+        exporters: [new MastraStorageExporter(), new MastraPlatformExporter()],
+        spanOutputProcessors: [new SensitiveDataFilter()],
+      },
+    },
+  }),
+})
+```
+
+* `MastraStorageExporter`将Observability事件持久保存到 Mastra Storage[Studio](/docs/studio/observability).
+* `MastraPlatformExporter`发送Observability事件到 Mastra 平台`MASTRA_PLATFORM_ACCESS_TOKEN` is set.
+* `SensitiveDataFilter`在导出之前编辑跨度数据中的密码、令牌和密钥。
+
+请参阅[observability overview](/docs/observability/overview) for the full configuration, including composite storage with DuckDB for metrics.
+
+## 部署工作室 {/* #deploy-studio */}
+
+部署您托管的 Studio 实例：
+
+```bash
+mastra studio deploy
+```
+
+CLI 会构建您的项目并在部署之前上传工件。首次部署时，`.mastra-project.json` file is created to link your local project to the platform. Commit this file to your repository.
+
+本地环境文件是可选的。当一个`.env` or `.env.*` file is present in the project directory, the deploy bundles its environment variables.
+
+通过一个非交互式步骤创建一个新的平台项目（而不是运行`mastra studio projects create` separately), pass a name with `--project` and accept defaults with `--yes`:
+
+```bash
+mastra studio deploy --project "my-new-project" --yes
+```
+
+看[Studio deployment](/docs/studio/deployment#mastra-platform) for details.
+
+### 多种环境 {/* #multiple-environments */}
+
+单个 Mastra 平台项目在多个平台上运行相同的代码库[environments](/docs/mastra-platform/environments), such as `production` and `staging`. Deploy to each with the unified [`mastra deploy`](/docs/mastra-platform/deploy) command:
+
+```bash
+mastra deploy --env production --yes
+mastra deploy --env staging --env-file .env.staging --yes
+```
+
+每个环境都有一个专用的 URL 和环境变量，以及单独的部署历史记录。
+
+## 部署服务器（可选） {/* #deploy-server-optional */}
+
+如果您需要生产 API 端点，请部署服务器：
+
+```bash
+mastra server deploy
+```
+
+这将创建一个具有稳定 API URL、环境变量管理和自定义域支持的单独部署。请参阅[Server deployment guide](/docs/mastra-platform/server) for the full walkthrough.
+
+:::注意
+环境变量来自`.env`, `.env.local`, and `.env.production` are included automatically on first deploy. After that, manage env vars through the [web dashboard](https://projects.mastra.ai).
+Review and sanitize these files before first deploy to avoid uploading development-only or personal secrets.
+:::
+
+## 设置 CI（可选） {/* #set-up-ci-optional */}
+
+Mastra Cloud 在推送时自动部署。 Mastra 平台使用 CLI 驱动的部署，您可以从任何 CI Provider运行它。
+
+### 先决条件 {/* #prerequisites */}
+
+1. 创建 API 令牌：
+
+   ```bash
+   mastra auth tokens create ci-deploy
+   ```
+
+2. 将令牌存储为 GitHub Actions 密钥（例如`MASTRA_API_TOKEN`).
+
+3. 犯罪`.mastra-project.json` to your repo (generated on your first manual deploy).
+
+什么时候`MASTRA_API_TOKEN` is set, the CLI runs in headless mode and skips all interactive prompts.
+
+### 在推送到主服务器时部署服务器 {/* #deploy-server-on-push-to-main */}
+
+服务器部署接受来自的组织和项目`.mastra-project.json`, so no extra env vars are needed beyond the token:
+
+```yaml title=".github/workflows/deploy-server.yml"
+name: Deploy to Mastra Server
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: pnpm install
+      - run: pnpm mastra server deploy --yes --config .mastra-project.json
+        env:
+          MASTRA_API_TOKEN: ${{ secrets.MASTRA_API_TOKEN }}
+```
+
+### 在推送到主目录时部署 Studio {/* #deploy-studio-on-push-to-main */}
+
+Studio部署需要`MASTRA_ORG_ID` and `MASTRA_PROJECT_ID` as env vars in headless mode, even when `--config` is provided:
+
+```yaml title=".github/workflows/deploy-studio.yml"
+name: Deploy to Mastra Studio
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: pnpm install
+      - run: pnpm mastra studio deploy --yes --config .mastra-project.json
+        env:
+          MASTRA_API_TOKEN: ${{ secrets.MASTRA_API_TOKEN }}
+          MASTRA_ORG_ID: ${{ secrets.MASTRA_ORG_ID }}
+          MASTRA_PROJECT_ID: ${{ secrets.MASTRA_PROJECT_ID }}
+```
+
+## 退役旧的云项目 {/* #decommission-old-cloud-project */}
+
+将指向旧 Mastra Cloud URL 的所有客户端更新为新的服务器或 Studio URL。通过检查来验证新平台中是否出现痕迹[Studio observability dashboard](/docs/studio/observability). Delete your old Mastra Cloud project once everything is confirmed working.
+
+## 有关的 {/* #related */}
+
+* [Mastra 平台概述](/docs/mastra-platform/overview)
+* [Observability概述](/docs/mastra-platform/observability)
+* [工作室部署](/docs/mastra-platform/studio)
+* [服务器部署](/docs/mastra-platform/server)
+* [CLI 参考](/reference/cli/mastra)

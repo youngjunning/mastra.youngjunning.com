@@ -1,0 +1,189 @@
+---
+title: "Elasticsearch | Database"
+description: "Store Mastra agent memory, workflow snapshots, and scores in Elasticsearch with URL, authentication, or shared client connection configuration."
+packages:
+  - "@mastra/memory"
+  - "@mastra/elasticsearch"
+---
+
+# 弹性搜索
+
+Elasticsearch 存储实现使用官方提供的 Elasticsearch 集群之上提供Agent内存、Workflow快照和分数存储。[`@elastic/elasticsearch`](https://github.com/elastic/elasticsearch-js)客户。它与以下设备共享相同的连接配置`ElasticSearchVector`，因此单个集群（甚至单个客户端实例）可以同时服务于Agent记忆和语义回忆。
+
+`ElasticSearchStore`目前实施的是`memory`, `workflows`, and `scores`存储域。
+
+## 安装 {/* #installation */}
+
+```bash
+npm install @mastra/elasticsearch
+```
+
+## 用法 {/* #usage */}
+
+### 使用 URL {/* #using-a-url */}
+
+```typescript
+import { ElasticSearchStore } from '@mastra/elasticsearch'
+
+const storage = new ElasticSearchStore({
+  id: 'elasticsearch-storage',
+  url: 'http://localhost:9200',
+})
+
+await storage.init()
+```
+
+### 使用身份验证 {/* #using-authentication */}
+
+```typescript
+import { ElasticSearchStore } from '@mastra/elasticsearch'
+
+const storage = new ElasticSearchStore({
+  id: 'elasticsearch-storage',
+  url: 'https://my-cluster.example.com:9200',
+  auth: { apiKey: process.env.ELASTICSEARCH_API_KEY! },
+})
+```
+
+`auth`也接受`{ username, password }` or `{ bearer }`.
+
+### 使用预先配置的客户端 {/* #using-a-pre-configured-client */}
+
+对于高级配置（云 ID、TLS 选项、自定义传输），请传递预配置的客户端。可以与同一个客户端共享`ElasticSearchVector`:
+
+```typescript
+import { Client } from '@elastic/elasticsearch'
+import { ElasticSearchStore, ElasticSearchVector } from '@mastra/elasticsearch'
+
+const client = new Client({
+  node: 'https://my-cluster.example.com:9200',
+  auth: { apiKey: process.env.ELASTICSEARCH_API_KEY! },
+})
+
+const storage = new ElasticSearchStore({ id: 'elasticsearch-storage', client })
+const vector = new ElasticSearchVector({ id: 'elasticsearch-vector', client })
+```
+
+当您提供自己的客户时，`storage.close()` does not close it — you remain responsible for its lifecycle.
+
+## 参数 {/* #parameters */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'id',
+  type: 'string',
+  description: 'Unique identifier for the storage instance',
+  isOptional: false,
+},
+{
+  name: 'url',
+  type: 'string',
+  description: 'Elasticsearch node URL (e.g., `http://localhost:9200`)',
+  isOptional: true,
+},
+{
+  name: 'auth',
+  type: 'ElasticSearchAuth',
+  description: 'Authentication options: `{ apiKey }`, `{ username, password }`, or `{ bearer }`',
+  isOptional: true,
+},
+{
+  name: 'client',
+  type: 'Client',
+  description: 'Pre-configured Elasticsearch client (from `@elastic/elasticsearch`) for advanced setups',
+  isOptional: true,
+},
+{
+  name: 'disableInit',
+  type: 'boolean',
+  description: 'Disable automatic initialization; call `storage.init()` explicitly before use',
+  isOptional: true,
+},
+]}
+/>
+
+:::注意
+您必须提供`url` or `client`. These options are mutually exclusive.
+:::
+
+## 附加说明 {/* #additional-notes */}
+
+### 指数结构 {/* #index-structure */}
+
+每个 Mastra 存储表映射到一个同名的 Elasticsearch 索引（例如`mastra_threads`, `mastra_messages`, `mastra_workflow_snapshot`, `mastra_scorers`). Records are stored as opaque JSON documents with a keyword `key` field, so no index mappings need to be managed manually — indexes are created on first use.
+
+### 一致性 {/* #consistency */}
+
+Elasticsearch 搜索几乎是实时的。所有写入都会立即刷新，以便后续读取和搜索观察它们，而点读取则使用实时获取 ID 查找。
+
+### 关闭连接 {/* #closing-connections */}
+
+关闭应用程序时，请关闭连接：
+
+```typescript
+await storage.close()
+```
+
+这只会关闭由以下创建的客户端`ElasticSearchStore` from a `url`; user-provided clients are left open.
+
+## 使用示例 {/* #usage-example */}
+
+### 为Agent添加内存 {/* #adding-memory-to-an-agent */}
+
+```typescript title="src/mastra/agents/elasticsearch-agent.ts"
+import { Memory } from '@mastra/memory'
+import { Agent } from '@mastra/core/agent'
+import { ElasticSearchStore } from '@mastra/elasticsearch'
+
+export const elasticsearchAgent = new Agent({
+  id: 'elasticsearch-agent',
+  name: 'Elasticsearch Agent',
+  instructions:
+    'You are an AI agent with the ability to automatically recall memories from previous interactions.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  memory: new Memory({
+    storage: new ElasticSearchStore({
+      id: 'elasticsearch-agent-storage',
+      url: process.env.ELASTICSEARCH_URL!,
+      auth: { apiKey: process.env.ELASTICSEARCH_API_KEY! },
+    }),
+    options: {
+      lastMessages: 10,
+    },
+  }),
+})
+```
+
+### 与 Mastra 实例一起使用 {/* #using-with-mastra-instance */}
+
+```typescript
+import { Mastra } from '@mastra/core'
+import { ElasticSearchStore } from '@mastra/elasticsearch'
+
+const storage = new ElasticSearchStore({
+  id: 'mastra-storage',
+  url: 'http://localhost:9200',
+})
+
+const mastra = new Mastra({
+  storage, // init() called automatically
+})
+```
+
+如果不使用 Mastra 直接使用存储，请致电`init()` explicitly:
+
+```typescript
+import { ElasticSearchStore } from '@mastra/elasticsearch'
+
+const storage = new ElasticSearchStore({
+  id: 'elasticsearch-storage',
+  url: 'http://localhost:9200',
+})
+
+await storage.init()
+
+// Access domain-specific stores via getStore()
+const memoryStore = await storage.getStore('memory')
+const thread = await memoryStore?.getThreadById({ threadId: '...' })
+```

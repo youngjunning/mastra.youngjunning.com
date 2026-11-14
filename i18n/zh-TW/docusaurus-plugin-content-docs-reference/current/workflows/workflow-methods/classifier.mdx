@@ -1,0 +1,126 @@
+---
+title: "Reference: Workflow.classifier() | Workflows"
+description: "Use Workflow.classifier() to evaluate workflow data with a configured classifier and return typed answers and token usage."
+packages:
+  - "@mastra/core"
+---
+
+# Workflow.分類器()
+
+這`.classifier()`方法新增一個配置的[`Classifier`](/reference/classifier/classifier)作為聲明性Workflow步驟並返回連結的Workflow。此步驟輸出 JSON 安全的`{ answers, usage }`可由後續步驟和現有控制流方法使用的對象，例如[`.branch()`](/reference/workflows/workflow-methods/branch).
+
+## 使用範例 {/* #usage-example */}
+
+```typescript filename="src/mastra/workflows/ticket-triage.ts"
+import { createWorkflow } from '@mastra/core/workflows'
+import { z } from 'zod'
+
+const workflow = createWorkflow({
+  id: 'ticket-triage',
+  inputSchema: z.object({ message: z.string() }),
+  outputSchema: z.any(),
+})
+  .map({ message: { initData: true, path: 'message' } })
+  .classifier(router)
+  .branch([
+    [async ({ inputData }) => inputData.answers.route.choice === 'billing', billingStep],
+    [async ({ inputData }) => inputData.answers.route.choice === 'support', supportStep],
+    [async () => true, fallbackStep],
+  ])
+  .commit()
+```
+
+當傳遞分類器實例時，會在下游步驟中推斷問題鍵和選擇文字。分類器必須包含建構函數配置的問題。
+
+## 參數 {/* #parameters */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'classifierOrId',
+  type: 'Classifier<QUESTIONS> | string',
+  description:
+    'A configured classifier instance, or the ID of a classifier registered on the Mastra instance. String references are resolved at execution time.',
+  isOptional: false,
+},
+{
+  name: 'options',
+  type: 'ClassifierStepOptions',
+  description:
+    'Classifier and step options, including model-call maxRetries, providerOptions, workflow retries, metadata, and an optional id.',
+  isOptional: true,
+},
+{
+  name: 'stepOptions',
+  type: '{ id?: string }',
+  description:
+    "The step's call-site ID within the workflow. Defaults to the classifier ID. This value takes precedence over options.id.",
+  isOptional: true,
+},
+]}
+/>
+
+## 退貨 {/* #returns */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'workflow',
+  type: 'Workflow',
+  description: 'The workflow instance for method chaining',
+},
+]}
+/>
+
+## 輸入映射 {/* #input-mapping */}
+
+分類器評估完整的上一步輸出。插入[`.map()`](/reference/workflows/workflow-methods/map) before `.classifier()` to select or reshape its input.
+
+```typescript
+workflow
+  .map({
+    message: { initData: true, path: 'message' },
+    locale: { initData: true, path: 'locale' },
+  })
+  .classifier(router)
+```
+
+映射使用與其他Workflow步驟相同的經過驗證的路徑語法，並保留在序列化Workflow圖中。
+
+## 輸出 {/* #output */}
+
+* 選擇答案暴露`answers.<question>.choice` and may include `probabilities`.
+* 分數答案揭曉`answers.<question>.score` and may include `probabilities`.
+* 布爾答案揭示了原始的`P(true)` value as `answers.<question>.probability`. Apply an explicit threshold when routing.
+* 被拒絕的問題有`{ type: 'refusal' }` and have no `choice`, `score`, or `probability`.
+* `usage`包含規範化的令牌使用情況。
+
+## 重試和錯誤 {/* #retries-and-errors */}
+
+`maxRetries`控制分類器模型呼叫的重試。`retries` controls retries of the workflow step. The workflow abort signal is forwarded to the classifier. Classifier errors fail the step. `.classifier()` doesn't apply fail-open behavior.
+
+## 透過 ID 引用分類器 {/* #referencing-a-classifier-by-id */}
+
+在同一個上註冊分類器`Mastra` instance that runs the workflow:
+
+```typescript filename="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+
+export const mastra = new Mastra({
+  classifiers: { router },
+  workflows: { workflow },
+})
+```
+
+對於類型化字串引用，請明確提供配置的問題類型：
+
+```typescript
+workflow.classifier<typeof router.questions>('router')
+```
+
+## 有關的 {/* #related */}
+
+* [分類器](/reference/classifier/classifier)
+* [階梯班](/reference/workflows/step)
+* [Workflow.branch()](/reference/workflows/workflow-methods/branch)
+* [動態Workflow定義](/reference/workflows/dynamic-workflow-definition)

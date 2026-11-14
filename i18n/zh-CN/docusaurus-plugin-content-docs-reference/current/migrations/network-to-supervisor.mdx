@@ -1,0 +1,270 @@
+---
+title: "Migration: .network() to supervisor agents | Migration Guide"
+description: "Supervisor agents using Agent.stream() and Agent.generate() are the recommended approach for coordinating multiple agents, replacing the older .network() API."
+---
+
+# 迁移自`.network()`给主管Agent
+
+主管Agent使用`Agent.stream()` and `Agent.generate()`是协调多个Agent的推荐方法，取代旧的`.network()`API。本指南将引导您完成迁移的每个步骤。
+
+:::警告\[.network() 弃用]
+
+`.network()`已弃用并将在未来版本中删除。在此之前，现有代码将继续有效，但现在的开发重点是主管Agent。尽快迁移到主管Agent。
+
+:::
+
+## 代替`.network()` with `.stream()` or `.generate()` {/* #replace-network-with-stream-or-generate */}
+
+核心变化是替换`.network()` calls with `.stream()` (for streaming) or `.generate()` (for non-streaming). The agent configuration stays the same. You still define `agents`, `workflows`, `tools`， 和`memory`关于Agent。不同之处在于您如何称呼它以及如何处理结果。
+
+和`.network()`, you iterated over custom event types like `network-execution-event-step-finish`. With `.stream()`, you use the standard `textStream` or `fullStream` iterators.
+
+**前：**
+
+```typescript
+const result = await routingAgent.network('Research AI in education')
+
+for await (const chunk of result) {
+  if (chunk.type === 'network-execution-event-step-finish') {
+    console.log(chunk.payload.result)
+  }
+}
+```
+
+**后：**
+
+```typescript
+const stream = await supervisorAgent.stream('Research AI in education', {
+  maxSteps: 10,
+})
+
+for await (const chunk of stream.textStream) {
+  process.stdout.write(chunk)
+}
+```
+
+这`maxSteps` option limits how many iterations the supervisor can take. This replaces the implicit iteration limit in `.network()`.
+
+对于非流媒体用例，请使用`generate()` with the same options:
+
+```typescript
+const result = await supervisorAgent.generate('Research AI in education', {
+  maxSteps: 10,
+})
+
+console.log(result.text)
+```
+
+## 写下清晰的主管指示 {/* #write-clear-supervisor-instructions */}
+
+和`.network()`, the routing agent relied on generic instructions and primitive descriptions to decide what to call. Supervisor agents work the same way, but clear and specific instructions improve delegation accuracy.
+
+你的主管的`instructions` should identify the available resources and when to use each one. They should also explain how to coordinate those resources and recognize when the task is complete.
+
+**前：**
+
+```typescript
+const routingAgent = new Agent({
+  id: 'routing-agent',
+  instructions: 'You are a network of researchers and writers...',
+  agents: { researchAgent, writingAgent },
+  memory: new Memory(),
+})
+```
+
+**后：**
+
+```typescript
+const supervisorAgent = new Agent({
+  id: 'supervisor-agent',
+  instructions: `You coordinate research and writing tasks using specialized agents.
+
+Available resources:
+- researchAgent: Gathers factual data and sources (returns bullet points)
+- writingAgent: Transforms research into narrative content (returns full paragraphs)
+
+Delegation strategy:
+1. For research requests: Delegate to researchAgent first
+2. For writing requests: Delegate to writingAgent (provide research if available)
+3. For complex requests: Delegate to researchAgent first, then writingAgent
+
+Success criteria:
+- All user questions are fully answered
+- Response is well-formatted and complete
+- If information is incomplete, continue iterating`,
+  agents: { researchAgent, writingAgent },
+  memory: new Memory(),
+})
+```
+
+## 为子Agent添加描述 {/* #add-descriptions-to-subagents */}
+
+每个子Agent应该有一个`description` field that explains its purpose and return format. The description should also state when to use the subagent. The supervisor uses these descriptions to decide which agent to delegate to.
+
+```typescript
+const researchAgent = new Agent({
+  id: 'research-agent',
+  description: `Specializes in gathering factual information and data on any topic.
+    Returns concise bullet-point summaries with key facts and sources.
+    Does not write full articles or narrative content.`,
+})
+
+const writingAgent = new Agent({
+  id: 'writing-agent',
+  description: `Transforms research material into well-structured written content.
+    Produces full paragraphs and complete articles.
+    Best used after research has been gathered.`,
+})
+```
+
+## 更新事件处理 {/* #update-event-handling */}
+
+如果您正在处理特定的`.network()` events, update them to use the standard stream chunk types:
+
+| `.network()` event | Supervisor agent chunk |
+| - | - |
+| `routing-agent-start` | `step-start` |
+| `routing-agent-end` | `step-finish` |
+| `agent-execution-start` | `step-start` (when delegating) |
+| `agent-execution-event-text-delta` | `text-delta` |
+| `agent-execution-event-finish` | `step-finish` |
+| `network-execution-event-step-finish` | `step-finish` + `finishReason: 'stop'` |
+| `network-object` | `object-delta`（使用结构化输出）|
+|`network-object-result` | `object`（使用结构化输出）|
+
+## 添加委托挂钩 {/* #add-delegation-hooks */}
+
+主管Agent允许您连接到委派生命周期以监视、修改或拒绝委派。这些钩子可以在Agent中配置`defaultOptions` or passed per-call.
+
+`onDelegationStart`在主管委托给子Agent之前调用。您可以修改提示或限制子Agent的步骤。该钩子还可以完全拒绝委托：
+
+```typescript
+const stream = await supervisorAgent.stream('Research AI in education', {
+  maxSteps: 10,
+  delegation: {
+    onDelegationStart: async context => {
+      console.log(`Delegating to: ${context.primitiveId}`)
+
+      if (context.primitiveId === 'research-agent') {
+        return {
+          proceed: true,
+          modifiedPrompt: `${context.prompt}\n\nFocus on 2024-2025 data.`,
+          modifiedMaxSteps: 5,
+        }
+      }
+
+      if (context.iteration > 8) {
+        return {
+          proceed: false,
+          rejectionReason: 'Max iterations reached. Synthesize current findings.',
+        }
+      }
+
+      return { proceed: true }
+    },
+  },
+})
+```
+
+`onDelegationComplete`委托完成后调用。检查结果并调用`context.bail()` when the supervisor loop should stop. You can also return feedback that gets saved to the supervisor's memory:
+
+```typescript
+const stream = await supervisorAgent.stream('Research AI in education', {
+  maxSteps: 10,
+  delegation: {
+    onDelegationComplete: async context => {
+      if (context.error) {
+        context.bail() // Stop further delegations
+        return {
+          feedback: `Delegation to ${context.primitiveId} failed: ${context.error}. Try a different approach.`,
+        }
+      }
+    },
+  },
+})
+```
+
+## 添加消息过滤 {/* #add-message-filtering */}
+
+默认情况下，子Agent从主管接收完整的对话上下文。使用`messageFilter` to control what messages are shared. For example, remove sensitive data or limit the number of messages:
+
+```typescript
+const stream = await supervisorAgent.stream('Research AI in education', {
+  maxSteps: 10,
+  delegation: {
+    messageFilter: ({ messages, primitiveId, prompt }) => {
+      return messages
+        .filter(msg => {
+          const content =
+            typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
+          return !content.includes('confidential')
+        })
+        .slice(-10)
+    },
+  },
+})
+```
+
+## 添加迭代监控 {/* #add-iteration-monitoring */}
+
+`onIterationComplete`在主管循环的每次迭代之后调用。使用它来记录进度或提供指导Agent的反馈。钩子也可以提前停止执行：
+
+```typescript
+const stream = await supervisorAgent.stream('Research AI in education', {
+  maxSteps: 10,
+  onIterationComplete: async context => {
+    console.log(`Iteration ${context.iteration}/${context.maxIterations}`)
+
+    if (!context.text.includes('recommendations')) {
+      return {
+        continue: true,
+        feedback: 'Please include specific recommendations in your analysis.',
+      }
+    }
+
+    if (context.text.length > 1000 && context.finishReason === 'stop') {
+      return { continue: false }
+    }
+
+    return { continue: true }
+  },
+})
+```
+
+## 添加任务完成评分 {/* #add-task-completion-scoring */}
+
+任务完成评分器自动验证任务是否完成。如果验证失败，主管将继续迭代。失败记分员的反馈包含在对话上下文中，以便子Agent可以看到缺少的内容：
+
+```typescript
+import { createScorer } from '@mastra/core/evals'
+
+const taskCompleteScorer = createScorer({
+  id: 'task-complete',
+  name: 'Task Completeness',
+}).generateScore(async context => {
+  const text = (context.run.output || '').toString()
+  const hasAnalysis = text.includes('analysis')
+  const hasRecommendations = text.includes('recommendation')
+  return hasAnalysis && hasRecommendations ? 1 : 0
+})
+
+const stream = await supervisorAgent.stream('Research AI in education', {
+  maxSteps: 10,
+  isTaskComplete: {
+    scorers: [taskCompleteScorer],
+    strategy: 'all',
+    onComplete: async result => {
+      console.log('Task complete:', result.complete)
+    },
+  },
+})
+```
+
+## 参见 {/* #see-also */}
+
+* [主管Agent](/docs/subagents)
+* [Agent网络](/docs/agents/networks)
+* [Agent.stream() 参考](/reference/streaming/agents/stream)
+* [Agent.generate() 参考](/reference/agents/generate)
+* [Agent批准](/docs/agents/human-in-the-loop)
+* [指导：研究协调员](https://mastra.ai/blog/build-a-research-coordinator-with-supervisor-agents)

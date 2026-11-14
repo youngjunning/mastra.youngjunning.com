@@ -1,0 +1,316 @@
+---
+title: 'Ring | Channels'
+description: 'Send Ring doorbell and camera events to Mastra agents as notification signals with @mastra/ring-signals, and fetch snapshots and video clips with agent tools.'
+packages:
+  - '@mastra/core'
+  - '@mastra/libsql'
+  - '@mastra/memory'
+  - '@mastra/ring-signals'
+---
+
+# 戒指
+
+響鈴訊號讓 Mastra 客服人員可以接收門鈴按下、動作以及其他來自響鈴門鈴和攝影機的事件。每個事件作為一個Agent線程到達[notification signal](/docs/signals/notifications)，客服人員可以抓取快照或影片剪輯來查看誰在門口。
+
+活動和媒體來自[Ring Partner API](https://developer.amazon.com/docs/ring/api-documentation.html). The API doesn't expose lights, sirens, locks, or two-way talk.
+
+## 安裝 {/* #installation */}
+
+安裝所需的軟體包：
+
+```bash npm2yarn
+npm install @mastra/ring-signals @mastra/libsql @mastra/memory
+```
+
+## 先決條件 {/* #prerequisites */}
+
+響鈴訊號需要：
+
+* 付費 Ring 套餐中的 Ring 設備，其中包括**Person, Package & Vehicle Alerts**, so motion events report what was detected.
+* 開發者應用程式[Ring Developer Console](https://developer.amazon.com/ring/console/apps), created as a **Private App** with the **Cameras and Doorbells** scope. Save the **Client ID**, **Client Secret**， 和**HMAC 簽章金鑰**.
+* 具有通道和通知支援的 Mastra 儲存適配器。連結的環帳戶保存在通道儲存中，通知訊號使用通知儲存。
+* Mastra 伺服器的公共 HTTPS URL。 Ring 呼叫您的伺服器以連結帳戶並傳遞活動。對於本機開發，請使用隧道，例如`npx cloudflared tunnel --url http://localhost:4111`.
+
+
+
+```bash title=".env"
+RING_CLIENT_ID=your-client-id
+RING_CLIENT_SECRET=your-client-secret
+RING_HMAC_KEY=your-hmac-signature-key
+MASTRA_ENCRYPTION_KEY=a-long-random-string
+RING_BASE_URL=http://localhost:4111
+```
+
+`MASTRA_ENCRYPTION_KEY`加密儲存的環令牌。如果沒有它，令牌將以未加密的方式儲存並記錄警告。`RING_BASE_URL` is optional. It's your Mastra server address for snapshot and clip links, explained in [Media links](#media-links).
+
+## Agent配置 {/* #agent-configuration */}
+
+添加`new RingSignals()` to the agent's `signals` array:
+
+```typescript title="src/mastra/agents/home-agent.ts"
+import { Agent } from '@mastra/core/agent'
+import { Memory } from '@mastra/memory'
+import { RingSignals } from '@mastra/ring-signals'
+
+export const homeAgent = new Agent({
+  id: 'home-agent',
+  name: 'Home Agent',
+  instructions: 'Watch the front door and say briefly whether each event needs attention.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  memory: new Memory(),
+  signals: [new RingSignals()],
+})
+```
+
+`RING_CLIENT_ID`, `RING_CLIENT_SECRET`, `RING_HMAC_KEY`, and `RING_BASE_URL` are read from the environment by default. To override them, pass `clientId`, `clientSecret`, `hmacKey`, and `baseUrl` in the config. See the [RingSignals reference](/reference/signals/ring-signals) for every option and its default.
+
+在 Mastra 實例上註冊Agent程式和儲存適配器：
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { LibSQLStore } from '@mastra/libsql'
+import { homeAgent } from './agents/home-agent'
+
+export const mastra = new Mastra({
+  agents: { homeAgent },
+  storage: new LibSQLStore({
+    id: 'mastra-storage',
+    url: 'file:./mastra.db',
+  }),
+})
+```
+
+## 帳戶關聯 {/* #account-linking */}
+
+連結將 Ring 帳戶連結到您的Agent商。按以下順序在兩個地方設定：
+
+1. 這[Ring Developer Console](https://developer.amazon.com/ring/console/apps) on Amazon's developer site, where you configure your developer app.
+2. [環網](https://ring.com)，您可以在其中將開發者應用程式連結到擁有該裝置的 Ring 帳戶。
+
+### Ring 開發者控制台 {/* #ring-developer-console */}
+
+Ring 需要的路由會自動加入到您的 Mastra 伺服器下`/ring`:
+
+|戒指設定|路線 | Ring 有什麼用途 |
+| - | - | - |
+|帳戶連結網址 |`GET <server URL>/ring/link` | Finishes linking and shows the result |
+| Token Exchange URL | `POST <server URL>/ring/token` | Exchanges an authorization code for tokens |
+| Webhook URL | `POST <server URL>/ring/webhook` | Sends doorbell, motion, and other events |
+| App Homepage URL | `GET <server URL>/ring/home` | Links to your app from its Ring Appstore page |
+
+環路呼叫這些路由，無需 Mastra 身份驗證。 Webhook 使用 Ring 的簽章進行驗證，帳號連結則使用 Ring 的連結隨機數進行驗證。
+
+令牌路由沒有自己的檢查。它將每個代碼發送到 Ring，而 Ring 會拒絕它未發出的代碼。要阻止任何人淹沒它，請添加速率限制`/ring/token` in your server's middleware.
+
+每個`RingSignals` instance adds its own routes. If you add `RingSignals` to more than one agent, give each instance its own `routePrefix` and its own Ring developer app. When two instances use the same prefix, Mastra only registers the first instance's routes, and the second agent gets no Ring events.
+
+1. 打開您的開發者應用程式**Account linking** settings and enter the four URLs from the table.
+2. 在下面**Connect**, select **Connect Ring account** and sign in with the Ring account that owns the device. Private developer apps are only available to accounts you connect here.
+
+### 環網 {/* #ringcom */}
+
+1. 在網路上登入您的 Ring 帳號。
+2. 在 Ring Appstore 中開啟您的開發者應用程式頁面，網址為`https://ring.com/appstore/<your-app>`.
+3. 連結應用程式。頁面顯示`Ring account linked` when it's done.
+
+連結的應用程式列在下面[Integrations](https://account.ring.com/account/integrations) in the Ring account, where you can pause or remove them.
+
+### 連結後 {/* #after-linking */}
+
+帳戶的令牌保存在通道儲存中，並在過期前刷新。從中刪除開發者應用程式**Integrations** in the Ring account sends an `app_integration_removed` event, which deletes that account's tokens.
+
+您可以將多個 Ring 帳戶連結到一名Agent程式。 Ring 允許私人開發者應用程式上最多有 10 個帳戶。每個設備都與擁有該設備的帳戶相符。
+
+### 測試集成 {/* #test-the-integration */}
+
+按門鈴按鈕。一個`button_press` notification arrives in the device's thread, and the agent responds to it. Open the agent in Studio to see the thread. Its thread ID is the device ID.
+
+## 事件和優先事項 {/* #events-and-priorities */}
+
+響鈴事件作為通知訊號到達。`button_press` (`high` priority) and `motion_detected` (`medium` priority) are enabled by default. See the [RingSignals reference](/reference/signals/ring-signals#events) for every event type and its defaults.
+
+使用`events` option to change a default, enable an event, or set an event to `false` to disable it:
+
+```typescript
+new RingSignals({
+  events: {
+    motion_detected: {
+      priority: 'medium',
+      summary: 'Motion was detected at the front door.',
+      attributes: event => ({ ...event.data.attributes, location: 'front door' }),
+    },
+    device_offline: { priority: 'low', summary: 'Device went offline.', coalesce: true },
+  },
+})
+```
+
+Agent會看到每個通知的`deviceId`, `timestamp`, and `motionType` attributes. Use `attributes` to add your own, for example the device's location.
+
+`coalesce`將重複的事件合併到一個待處理的通知中，因此[delivery policy](/docs/signals/notifications) can act on how many arrived. By default, low-priority notifications are batched into a summary.
+
+## 執行緒路由 {/* #thread-routing */}
+
+預設情況下，每個環設備都有自己的執行緒。這`threadId` is the device ID, and the `resourceId` is the agent ID.
+
+您可以透過設定為兩者提供自訂值`target.resourceId` and `target.threadId` manually:
+
+```typescript
+new RingSignals({
+  target: { resourceId: 'home', threadId: 'ring-alerts' },
+})
+```
+
+若要為每個事件選擇線程，請設定`target` to a function. The function receives the webhook payload Ring sent for the event and returns the target for that event. The payload includes:
+
+* `event.data.type`：事件類型，來自[Events and priorities](#events-and-priorities).
+* `event.data.attributes.source`：對於設備事件，發送事件的設備的 ID。對於應用程式整合事件，帳戶 ID。對於訂閱活動，`subscriptions`.
+* `event.data.attributes.timestamp`：對於設備事件，事件發生的時間，以紀元毫秒為單位。訂閱活動沒有它。
+* `event.data.attributes.sub_type`：對於運動事件，導致運動的原因：`human`, `vehicle`, `package_delivery`, `other_motion`, or `motion` when Smart Alerts are off. For subscription events, `paid` or `trial`.
+* `event.meta.account_id`：設備所屬Ring帳號的ID。
+
+此範例為每種活動提供了自己的線程。一個人引起的運動`ring-human`, vehicles go to `ring-vehicle`, etc. Doorbell presses have no `sub_type`, so they go to `ring-doorbell`:
+
+```typescript
+new RingSignals({
+  target: event => {
+    const activity = event.data.attributes.sub_type ?? 'doorbell'
+    return { resourceId: 'home', threadId: `ring-${activity}` }
+  },
+})
+```
+
+返回`undefined` to drop the event. The function can be `async`. The [RingSignals reference](/reference/signals/ring-signals#ringwebhookevent) documents the full payload type, `RingWebhookEvent`.
+
+## 快照和剪輯Tool {/* #snapshot-and-clip-tools */}
+
+Agent商獲得兩個Tool：
+
+* `ring_snapshot`：獲取事件的靜態圖像並將其傳遞給模型，以便Agent可以描述它所看到的內容。如果 Ring 在事件發生後沒有圖像，它將使用事件之前的最新圖像。
+* `ring_clip`：取得從事件開始的影片剪輯。 Ring 需要時間來處理錄音，因此Tool會重試，直到剪輯準備就緒。預設情況下，模型不接收視訊。看[Let the model see media](#let-the-model-see-media).
+
+### 讓模特兒看到媒體 {/* #let-the-model-see-media */}
+
+`visibleToModel`控制Tool是否將媒體本身傳遞給模型。它預設為`true` for `ring_snapshot` and `false` for `ring_clip`, because most models accept images but few accept video. Turn it on for clips when the agent uses a model that accepts video, for example `__GATEWAY_GOOGLE_MODEL_FLASH__`:
+
+```typescript
+new RingSignals({
+  tools: {
+    clip: { visibleToModel: true },
+  },
+})
+```
+
+什麼時候`visibleToModel` is `false`, the model gets only the tool's text result and link, and can't describe what the media shows.
+
+：：：筆記
+
+開機前檢查您的型號是否支援視訊輸入`visibleToModel` for clips. Gemini models accept video input. Anthropic and OpenAI models don't. Anthropic drops the video with a warning, and other model APIs may reject the request.
+
+視訊輸入計入每秒鏡頭的模型上下文視窗。預設 15 秒的剪輯使用數千個令牌。最大剪輯`durationMs` of 15 minutes can use hundreds of thousands, so keep `durationMs` short when the model watches clips. The video isn't saved in memory, so it only uses context on the step that fetched it.
+
+:::
+
+### 媒體連結 {/* #media-links */}
+
+Ring 不提供其媒體的可分享連結。下載快照或剪輯需要 Ring 帳戶的令牌，因此瀏覽器或聊天應用程式無法直接從 Ring 取得它。當你設定`baseUrl`, the tools return a signed link to your own server instead, under `<baseUrl>/ring/media/`. Opening the link makes your server fetch the media from Ring and pass it on. Nothing is stored; recent media is cached in memory for a few minutes.
+
+放`RING_BASE_URL` to your Mastra server's URL. Use `http://localhost:4111` or a tunnel URL in development, and your deployed URL in production.
+
+沒有`RING_BASE_URL` or `baseUrl`, the tools return no links. The agent still sees each snapshot, and chat channels still receive attachments, but apps have no link to display.
+
+### 在聊天頻道中附加媒體 {/* #attach-media-in-chat-channels */}
+
+當Agent也使用[channel](/docs/channels), for example iMessage or Slack, users can't see tool results in the chat. The tools send the snapshot and clip as file attachments on channel threads instead, so they arrive in the conversation. Studio, web, and API threads don't get attachments, because they read the media from the tool result.
+
+預設情況下，附件適用於每個頻道，無需配置。若要變更此設置，請在每個Tool上設定以下選項：
+
+* `attachment`: `false` turns attachments off. A list of platform names, for example `['imessage', 'slack']`, attaches only on those platforms.
+* `maxAttachmentBytes`：要附加的最大文件。不附加較大的文件。
+
+此範例僅在 iMessage 和 Slack 中附加快照，並為 Discord 中的剪輯設定 10 MB 限制：
+
+```typescript
+new RingSignals({
+  tools: {
+    snapshot: { attachment: ['imessage', 'slack'] },
+    clip: { maxAttachmentBytes: { discord: 10_000_000 } },
+  },
+})
+```
+
+平台名稱是您在Agent程式的適配器中為適配器提供的密鑰`channels.adapters` configuration. In this agent, the platform names are `imessage` and `slack`:
+
+```typescript oxfmt:false
+channels: {
+  adapters: {
+    imessage: { adapter: createiMessageAdapter() },
+    slack: { adapter: createSlackAdapter() },
+  },
+},
+```
+
+當媒體未附加到頻道線程時，由於平台未列出或文件超出限制，該Tool會要求Agent在其回復中共享連結。這需要`baseUrl`, because without it there's no link. Attached files aren't saved in memory.
+
+### 向聊天發送響鈴提醒 {/* #send-ring-alerts-to-a-chat */}
+
+要在聊天中取得 Ring 警報，頻道和 Ring 需要使用相同的線程。為您的頻道線程指定一個固定 ID`resolveResourceId` and `resolveThreadId`, and set `target` to the same values. Before you send the first message, set `HOME_OWNER_USER_ID` in `.env` to your user ID on the channel platform (`message.author.userId`). Only your direct messages get the Ring thread. Group conversations and other senders keep their own threads and don't get Ring alerts. They can still ask the agent for Ring media, as the warning below explains:
+
+```typescript title="src/mastra/agents/home-agent.ts"
+import { Agent } from '@mastra/core/agent'
+import { Memory } from '@mastra/memory'
+import { RingSignals } from '@mastra/ring-signals'
+import { createiMessageAdapter } from '@photon-ai/chat-adapter-imessage'
+
+const resourceId = 'home'
+const threadId = 'ring-alerts'
+// Your user ID on the channel platform
+const ownerUserId = process.env.HOME_OWNER_USER_ID
+if (!ownerUserId) {
+  throw new Error('Set HOME_OWNER_USER_ID to your user ID on the channel platform')
+}
+
+export const homeAgent = new Agent({
+  id: 'home-agent',
+  name: 'Home Agent',
+  instructions: 'Watch the front door and say briefly whether each event needs attention.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  memory: new Memory(),
+  channels: {
+    resolveResourceId: ({ thread, message, defaultResourceId }) =>
+      thread.isDM && message.author.userId === ownerUserId ? resourceId : defaultResourceId,
+    resolveThreadId: ctx => (ctx.resourceId === resourceId ? threadId : ctx.defaultThreadId),
+    adapters: {
+      imessage: { adapter: createiMessageAdapter() },
+    },
+  },
+  signals: [
+    new RingSignals({
+      target: { resourceId, threadId },
+    }),
+  ],
+})
+```
+
+該頻道創建了`ring-alerts` thread on the first message, and Ring events then go to that same thread. If a Ring event arrives first, Ring creates the thread instead, and the channel can't take over a thread that already exists, so it starts a new one.
+
+：：：警告
+
+在第一個振鈴事件到達之前，從通道向Agent程式發送訊息。使用新對話：解析器僅在建立執行緒時執行，因此您在新增它們之前啟動的對話將保留其現有執行緒。
+
+任何可以在頻道上向Agent商發送訊息的人都可以要求其使用環Tool。限制誰可以聯繫該平台上的Agent商。
+
+:::
+
+## 限制 {/* #limitations */}
+
+* Ring 期望在五秒內收到 Webhook 回應。在休眠空閒伺服器的平台上，休眠後的第一個事件可能會延遲到達。
+* 具有端對端加密的裝置不可用於 Ring Partner API。
+* Ring 為每個快照和剪輯添加浮水印。
+* 快照和剪輯僅適用於帳戶關聯後的活動。
+* Studio 顯示Tool結果的快照，但不播放剪輯。請改為從Tool結果開啟剪輯 URL。
+
+## 有關的 {/* #related */}
+
+* [環訊號參考](/reference/signals/ring-signals)
+* [訊號](/docs/signals/overview)
+* [通知](/reference/signals/notifications)

@@ -1,16 +1,16 @@
 ---
-title: '參考：Observational Memory | Memory'
-description: 'Mastra Observational Memory 的 API 參考：這是一套三層記憶系統，透過 Observer 和 Reflector Agent 維持跨對話的長期記憶。'
+title: 'Reference: Observational Memory | Memory'
+description: "Observational Memory (OM) is Mastra's memory system for long-context agentic memory. An Observer watches conversations and creates observations."
 packages:
   - '@mastra/core'
   - '@mastra/memory'
 ---
 
-# Observational Memory
+# 觀察記憶
 
-**新增於：** `@mastra/memory@1.1.0`
+**添加於：** `@mastra/memory@1.1.0`
 
-Observational Memory（OM）是 Mastra 用於長上下文 Agent 記憶的記憶系統。**Observer** 會監察對話並建立觀察結果；**Reflector** 則透過合併相關項目及濃縮整體模式，重新整理這些觀察結果。兩者共同維護一份觀察記錄，並在記錄增長時取代原始訊息歷史。
+觀察記憶 (OM) 是 Mastra 的長上下文Agent記憶記憶系統。一個**Observer** watches conversations and creates observations, which a **Reflector**透過組合相關項目並壓縮整體模式來進行重組。他們共同維護一個觀察日誌，隨著原始訊息歷史記錄的增長而取代它。
 
 ## 用法 {/* #usage */}
 
@@ -22,7 +22,7 @@ export const agent = new Agent({
   id: 'my-agent',
   name: 'my-agent',
   instructions: 'You are a helpful assistant.',
-  model: '__GATEWAY_OPENAI_MODEL_MINI__',
+  model: '__GATEWAY_OPENAI_MODEL_LUNA__',
   memory: new Memory({
     options: {
       observationalMemory: true,
@@ -31,377 +31,450 @@ export const agent = new Agent({
 })
 ```
 
-## 設定 {/* #configuration */}
+## 配置 {/* #configuration */}
 
-`observationalMemory` 選項接受 `true`、設定物件或 `false`。設為 `true` 會啟用 OM，並以 `__GATEWAY_GOOGLE_MODEL_FLASH__` 作為預設模型。傳入設定物件時，請在頂層設定 `model`，或在 `observation.model` 及／或 `reflection.model` 設定；如省略所有模型欄位，OM 會回退至 `__GATEWAY_GOOGLE_MODEL_FLASH__`。
+這`observationalMemory` option accepts `true`, a configuration object, or `false`. Setting `true`使 OM 具有自動模型選擇功能。傳遞配置物件時，設定`model`在頂層或之上`observation.model`和/或`reflection.model`。當省略所有模型欄位時，每個角色預設為`'auto'`.
 
-Observer 輸入支援多模態。OM 會在為 Observer 建立的文字記錄中保留 `[Image #1: screenshot.png]` 一類文字佔位符，並在可行情況下同時傳送底層圖片部分。這同時適用於單一 thread 觀察及批次多 thread 觀察。非圖片檔案只會顯示為佔位符。
+觀察者輸入是多模式感知的。 OM 保留文字佔位符，例如`[Image #1: screenshot.png]` in the transcript it builds for the Observer, and also sends the underlying image parts when possible. This applies to both single-thread observation and batched multi-thread observation. Non-image files appear as placeholders only.
 
-OM 會使用快速的本機 token 估算來判斷閾值。文字使用 `tokenx`；類圖片輸入則使用能識別 Provider 的啟發式方法，並在 metadata 不完整時採用確定性的回退方式。
+OM 透過快速本地標記估計執行閾值處理。文字用途`tokenx`, and image-like inputs use provider-aware heuristics plus deterministic fallbacks when metadata is incomplete.
 
 <PropertiesTable
   content={[
-  {
-    name: 'enabled',
-    type: 'boolean',
-    description:
-      '啟用或停用 Observational Memory。如設定物件省略此項，預設為 `true`。只有 `enabled: false` 會明確停用此功能。',
-    isOptional: true,
-    defaultValue: 'true',
-  },
-  {
-    name: 'model',
-    type: 'string | LanguageModel | DynamicModel | ModelByInputTokens | ModelWithRetries[]',
-    description:
-      'Observer 及 Reflector Agent 共用的模型，可一次過為兩者設定模型。不可與 `observation.model` 或 `reflection.model` 同時使用；如兩者皆有設定，系統會擲回錯誤。如這個欄位及 `observation.model`/`reflection.model` 均省略，OM 會回退至 `google/gemini-2.5-flash`。使用 `"default"` 可明確指定預設模型（`google/gemini-2.5-flash`）。',
-    isOptional: true,
-    defaultValue: "'google/gemini-2.5-flash'",
-  },
-  {
-    name: 'scope',
-    type: "'resource' | 'thread'",
-    description:
-      "觀察結果的記憶範圍。`'thread'` 按 thread 分別保存觀察結果。`'resource'`（實驗功能）會在某項資源的所有 thread 之間共享觀察結果，從而啟用跨對話記憶。",
-    isOptional: true,
-    defaultValue: "'thread'",
-  },
-  {
-    name: 'activateAfterIdle',
-    type: 'number | string | false | "auto"',
-    description:
-      '在閒置後強制啟用已緩衝觀察結果前的等待時間，即使尚未達到 `observation.messageTokens` 亦會啟用。接受如 `300_000` 的毫秒數值、如 `"5m"` 或 `"1hr"` 的時長字串、代表可感知 Provider 的 prompt 快取 TTL 的 `"auto"`，或以 `false` 停用繼承的觀察閒置啟用。反思不會繼承此設定；使用 `reflection.activateAfterIdle` 可選擇讓反思採用閒置啟用。',
-    isOptional: true,
-  },
-  {
-    name: 'activateOnProviderChange',
-    type: 'boolean',
-    description:
-      '當執行者的 Provider 或模型變更時，強制啟用已緩衝的觀察結果。反思不會繼承此設定；使用 `reflection.activateOnProviderChange` 可選擇讓反思在 Provider 變更時啟用。',
-    isOptional: true,
-    defaultValue: 'false',
-  },
-  {
-    name: 'shareTokenBudget',
-    type: 'boolean',
-    description:
-      '讓訊息與觀察結果共享 token 預算。啟用後，總預算為 `observation.messageTokens + reflection.observationTokens`。觀察結果較少時，訊息可使用更多空間，反之亦然。這種彈性分配能盡量善用上下文。`shareTokenBudget` 尚未支援非同步緩衝。使用此選項時，必須設定 `observation: { bufferTokens: false }`（此為暫時限制）。',
-    isOptional: true,
-    defaultValue: 'false',
-  },
-  {
-    name: 'temporalMarkers',
-    type: 'boolean',
-    description:
-      '如 thread 中上一則訊息至少早 10 分鐘，便在新的使用者訊息前插入時間間隔提醒標記。標記會持久保存於記憶中，並以 inline 提醒事件發出，讓用戶端可採用特殊方式顯示；Observer 亦會看到標記，以便按事件發生時間定位觀察結果。',
-    isOptional: true,
-    defaultValue: 'false',
-  },
-  {
-    name: 'retrieval',
-    type: "boolean | { vector?: boolean; scope?: 'thread' | 'resource'; instructions?: string }",
-    description:
-      "讓 Agent 查閱觀察結果背後的原始訊息記錄。觀察群組會保留指向原始訊息的持久指標，並註冊 `recall` Tool，讓 Agent 可以瀏覽這些訊息。`true` 預設啟用跨 thread 瀏覽。`{ vector: true }` 亦會使用 Memory 的向量儲存及 embedder 啟用語意搜尋。`{ scope: 'thread' }` 將 recall Tool 限制於目前 thread。預設範圍為 `'resource'`。`{ instructions: '...' }` 會在 Mastra 內置的檢索指示後附加應用程式專用的 recall 指引。",
-    isOptional: true,
-    defaultValue: 'false',
-  },
-  {
-    name: 'hooks',
-    type: 'ObserveHooks',
-    description:
-      "每個觀察／反思週期都會觸發的生命週期 hook，包括手動 `observe()`/`reflect()` API、由 turn 驅動的同步觀察，以及發出後不等待結果的非同步緩衝。callback 會收到 `threadId`/`resourceId`/`trigger` 呼叫上下文（`'manual' | 'turn-sync' | 'async-buffer'`）；結束 hook（`onObservationEnd`/`onReflectionEnd`）亦會收到 OM 模型呼叫的 token `usage` 及 `providerMetadata`，讓應用程式毋須以 middleware 包裝 Observer／Reflector 模型，也可計算 OM 模型開支（AI Gateway 等 Provider 會在此報告每次呼叫的成本）。非同步緩衝週期即使失敗亦不會擲回錯誤，而會透過結束 hook 的 `error` 欄位報告。這些 hook 擲回的錯誤會被捕捉及記錄，絕不會令週期失敗。",
-    isOptional: true,
-  },
-  {
-    name: 'observation',
-    type: 'ObservationalMemoryObservationConfig',
-    description: '觀察步驟的設定，用於控制 Observer Agent 的執行時機及行為。',
-    isOptional: true,
-    properties: [
-      {
-        type: 'ObservationalMemoryObservationConfig',
-        parameters: [
-          {
-            name: 'model',
-            type: 'string | LanguageModel | DynamicModel | ModelByInputTokens | ModelWithRetries[]',
-            description:
-              'Observer Agent 使用的模型。如亦提供頂層 `model`，則不可設定此項。如這個欄位及頂層 `model` 均未設定，便回退至 `reflection.model`。',
-            isOptional: true,
-          },
-          {
-            name: 'instruction',
-            type: 'string',
-            description:
-              '附加至 Observer system prompt 的自訂指示。可用於自訂 Observer 的關注重點，例如特定領域的偏好或優先次序。',
-            isOptional: true,
-          },
-          {
-            name: 'threadTitle',
-            type: 'boolean',
-            description:
-              '設為 `true` 時，Observer 會建議簡短的 thread 標題，並在對話主題出現實質變化時更新標題。此功能須選擇啟用，預設為停用。',
-            isOptional: true,
-            defaultValue: 'false',
-          },
-          {
-            name: 'extract',
-            type: 'Extractor[]',
-            description:
-              '觀察後要擷取的自訂值。系統會要求 Observer 在輸出內 inline 提供無 schema extractor；有 schema 的 extractor 則會執行後續結構化輸出呼叫，並儲存於 thread OM metadata。',
-            isOptional: true,
-          },
-          {
-            name: 'manageWorkingMemory',
-            type: 'boolean',
-            description:
-              '讓 Observer 透過 OM 擷取管理工作記憶。此設定會加入 `WorkingMemoryExtractor`、將 `workingMemory.agentManaged` 預設為 `false`，並將 `workingMemory.useStateSignals` 預設為 `true`。請參閱[更新工作記憶](#working-memory-updates)。',
-            isOptional: true,
-            defaultValue: 'false',
-          },
-          {
-            name: 'observeAttachments',
-            type: "'auto' | boolean | string[]",
-            description:
-              "控制哪些圖片／檔案附件會連同其佔位符文字行轉送至 Observer 模型。`true`（預設）會轉送所有附件；`false` 會捨棄所有附件，但仍顯示佔位符。`'auto'` 使用 Provider 功能登記資料來決定：Observer 模型支援多模態輸入時轉送附件，否則捨棄；如沒有該模型的功能資料，亦會轉送。陣列是不區分大小寫的 mimeType 允許清單，支援完全匹配（`'application/pdf'`）、萬用字元子類型（`'image/*'`），以及代表所有類型的 `'*'`。當 Observer 模型只支援文字（例如部分 DeepSeek endpoint），而主要 Agent 使用多模態模型時，此選項相當實用。Tool 結果附件亦按相同規則篩選。",
-            isOptional: true,
-            defaultValue: 'true',
-          },
-          {
-            name: 'messageTokens',
-            type: 'number',
-            description:
-              '觸發觀察的未觀察訊息 token 數量。未觀察訊息的 token 超過此閾值時，系統會呼叫 Observer Agent。文字會在本機使用 `tokenx` 估算；可行情況下，圖片部分會使用可感知模型的啟發式方法計算，圖片 metadata 不完整時則採用確定性的回退方式。如上載內容已正規化為檔案，類圖片的 `file` 部分亦以相同方式計算。',
-            isOptional: true,
-            defaultValue: '30000',
-          },
-          {
-            name: 'maxTokensPerBatch',
-            type: 'number',
-            description:
-              '在 resource 範圍觀察多個 thread 時，每個批次的 token 上限。thread 會按此大小分批並行處理。數值愈低，並行程度愈高，但 API 呼叫亦愈多。',
-            isOptional: true,
-            defaultValue: '10000',
-          },
-          {
-            name: 'modelSettings',
-            type: 'ObservationalMemoryModelSettings',
-            description:
-              'Observer Agent 的模型設定。`maxOutputTokens: 100_000` 預設值只會在選用預設模型時套用（未設定模型、使用 `"default"`，或使用 `ModelByInputTokens` 選擇器）。自訂模型沒有 `maxOutputTokens` 預設值。',
-            isOptional: true,
-            defaultValue: '{ temperature: 0.3, maxOutputTokens: 100_000（只適用於預設模型選擇） }',
-            properties: [
-              {
-                type: 'ObservationalMemoryModelSettings',
-                parameters: [
-                  {
-                    name: 'temperature',
-                    type: 'number',
-                    description: '生成時的 temperature。數值愈低，輸出愈一致。',
-                    isOptional: true,
-                    defaultValue: '0.3',
-                  },
-                  {
-                    name: 'maxOutputTokens',
-                    type: 'number',
-                    description:
-                      '輸出 token 上限。設定較高的數值可避免觀察結果被截斷。`100000` 預設值只會在選用預設模型時套用；自訂模型沒有預設值。',
-                    isOptional: true,
-                    defaultValue: '100000（只適用於預設模型選擇）',
-                  },
-                ],
-              },
-            ],
-          },
-          {
-            name: 'providerOptions',
-            type: 'ProviderOptions',
-            description: '傳送至 Observer Agent 的 Provider 專用選項，例如 Google thinking 設定。',
-            isOptional: true,
-            defaultValue: '{ google: { thinkingConfig: { thinkingBudget: 215 } } }',
-          },
-          {
-            name: 'bufferTokens',
-            type: 'number | false',
-            description:
-              '背景觀察緩衝的執行頻率。`0` 至 `1` 之間的值是 `messageTokens` 的比例：`0.25` 表示每達閾值的 25% 便緩衝一次（預設 30k 時為 7.5k token）。`1` 或以上的值是絕對 token 數量：`5000` 表示每 5k token 緩衝一次。緩衝的觀察結果會一直儲存，直至達到 `messageTokens` 閾值，屆時無需阻塞式 LLM 呼叫即可立即啟用。計算結果必須小於 `messageTokens`。設為 `false` 可停用所有非同步緩衝（包括觀察及反思）。',
-            isOptional: true,
-            defaultValue: '0.2',
-          },
-          {
-            name: 'bufferOnIdle',
-            type: 'boolean',
-            description:
-              'Agent turn 結束並進入閒置狀態時，在背景執行觀察緩衝。這與控制步驟執行期間非同步緩衝的 `bufferTokens` 不同。設為 `true`，即可緩衝短暫閒置的 turn，而毋須等待下一個 turn 或達到 `messageTokens` 閾值。',
-            isOptional: true,
-            defaultValue: 'false',
-          },
-          {
-            name: 'bufferActivation',
-            type: 'number',
-            description:
-              '啟用已緩衝觀察結果時，要清除多少訊息視窗。`0` 至 `1` 之間的值是要移除的 `messageTokens` 比例：`0.8` 會移除約 80% 的訊息記錄並保留約 20%（預設 30k 時為 6k token）。`1000` 或以上的值是要保留的 token 數量：`4000` 會在啟用後保留約 4k 訊息 token。請留意方向相反：比例愈高，移除的記錄愈多；token 數量愈高，保留的內容愈多。',
-            isOptional: true,
-            defaultValue: '0.8',
-          },
-          {
-            name: 'activateAfterIdle',
-            type: 'number | string | false | "auto"',
-            description:
-              '閒置後強制啟用已緩衝觀察結果前的等待時間。接受毫秒值、時長字串、代表可感知 Provider 的 prompt 快取 TTL 的 `"auto"`，或 `false`。如未設定，觀察會使用頂層 `activateAfterIdle` 值。設為 `false` 可停用觀察的頂層閒置設定。目前只在使用獨立 `ObservationalMemory` 類別時套用；`new Memory(...)` 只會套用頂層 `activateAfterIdle`。',
-            isOptional: true,
-          },
-          {
-            name: 'activateOnProviderChange',
-            type: 'boolean',
-            description:
-              '當執行者的 Provider 或模型變更時，強制啟用已緩衝的觀察結果。如未設定，觀察會使用頂層 `activateOnProviderChange` 值。目前只在使用獨立 `ObservationalMemory` 類別時套用；`new Memory(...)` 只會套用頂層 `activateOnProviderChange`。',
-            isOptional: true,
-          },
-          {
-            name: 'blockAfter',
-            type: 'number',
-            description:
-              '當背景緩衝未能趕上時，強制執行同步（阻塞式）觀察的安全機制。`1` 至小於 `100` 的值是 `messageTokens` 的倍數：`1.2` 會在閾值的 120% 強制執行阻塞式觀察（預設 30k 時為 36k token）。`100` 或以上的值是絕對 token 數量，而且必須大於 `messageTokens`。在 `messageTokens` 與 `blockAfter` 之間，只會執行非同步緩衝及啟用；緩衝啟用仍會保留最少的剩餘上下文（1000 token 或保留下限，取較小者）。只在設定了 `bufferTokens` 時適用。啟用非同步緩衝時，預設為 `1.2`。',
-            isOptional: true,
-            defaultValue: '1.2（已設定 bufferTokens 時）',
-          },
-          {
-            name: 'previousObserverTokens',
-            type: 'number | false',
-            description:
-              'Observer 先前觀察結果上下文的可選 token 預算。設為數值時，傳送至 Observer Agent 的觀察結果會從尾端截取以符合預算，同時保留最新觀察結果，並盡可能保留已標示的 🔴 項目。如有已緩衝的反思等候處理，截斷前會自動以反思摘要取代已反思的觀察行。設為 `0` 可完全省略先前觀察結果，設為 `false` 則明確停用截斷。',
-            isOptional: true,
-            defaultValue: '2000',
-          },
-        ],
-      },
-    ],
-  },
-  {
-    name: 'reflection',
-    type: 'ObservationalMemoryReflectionConfig',
-    description: '反思步驟的設定，用於控制 Reflector Agent 的執行時機及行為。',
-    isOptional: true,
-    properties: [
-      {
-        type: 'ObservationalMemoryReflectionConfig',
-        parameters: [
-          {
-            name: 'model',
-            type: 'string | LanguageModel | DynamicModel | ModelByInputTokens | ModelWithRetries[]',
-            description:
-              'Reflector Agent 使用的模型。如亦提供頂層 `model`，則不可設定此項。如這個欄位及頂層 `model` 均未設定，便回退至 `observation.model`。',
-            isOptional: true,
-          },
-          {
-            name: 'instruction',
-            type: 'string',
-            description:
-              '附加至 Reflector system prompt 的自訂指示。可用於自訂 Reflector 整合觀察結果的方式，例如優先處理某些類型的資料。',
-            isOptional: true,
-          },
-          {
-            name: 'extract',
-            type: 'Extractor[]',
-            description:
-              '反思後要擷取的自訂值。系統會要求 Reflector 在輸出內 inline 提供無 schema extractor；有 schema 的 extractor 則會執行後續結構化輸出呼叫，並儲存於 thread OM metadata。',
-            isOptional: true,
-          },
-          {
-            name: 'observationTokens',
-            type: 'number',
-            description:
-              '觸發反思的觀察結果 token 數量。觀察結果的 token 超過此閾值時，系統會呼叫 Reflector Agent 加以濃縮。',
-            isOptional: true,
-            defaultValue: '40000',
-          },
-          {
-            name: 'modelSettings',
-            type: 'ObservationalMemoryModelSettings',
-            description:
-              'Reflector Agent 的模型設定。`maxOutputTokens: 100_000` 預設值只會在選用預設模型時套用（未設定模型、使用 `"default"`，或使用 `ModelByInputTokens` 選擇器）。自訂模型沒有 `maxOutputTokens` 預設值。',
-            isOptional: true,
-            defaultValue: '{ temperature: 0, maxOutputTokens: 100_000（只適用於預設模型選擇） }',
-            properties: [
-              {
-                type: 'ObservationalMemoryModelSettings',
-                parameters: [
-                  {
-                    name: 'temperature',
-                    type: 'number',
-                    description: '生成時的 temperature。數值愈低，輸出愈一致。',
-                    isOptional: true,
-                    defaultValue: '0',
-                  },
-                  {
-                    name: 'maxOutputTokens',
-                    type: 'number',
-                    description:
-                      '輸出 token 上限。設定較高的數值可避免觀察結果被截斷。`100000` 預設值只會在選用預設模型時套用；自訂模型沒有預設值。',
-                    isOptional: true,
-                    defaultValue: '100000 (default model selection only)',
-                  },
-                ],
-              },
-            ],
-          },
-          {
-            name: 'providerOptions',
-            type: 'ProviderOptions',
-            description: '傳送至 Reflector Agent 的 Provider 專用選項，例如 Google thinking 設定。',
-            isOptional: true,
-            defaultValue: '{ google: { thinkingConfig: { thinkingBudget: 1024 } } }',
-          },
-          {
-            name: 'bufferActivation',
-            type: 'number',
-            description:
-              '以 `observationTokens` 的比例（0 至 1）指定何時開始背景反思：`0.5` 表示觀察結果達到閾值的 50% 時開始背景反思（預設 40k 時為 20k token）。達到完整閾值後，已緩衝的反思會取代其涵蓋的觀察結果，同時保留該範圍後新增的任何觀察結果。',
-            isOptional: true,
-            defaultValue: '0.5',
-          },
-          {
-            name: 'activateAfterIdle',
-            type: 'number | string | false | "auto"',
-            description:
-              '閒置後強制啟用已緩衝反思前的等待時間。接受毫秒值、時長字串、代表可感知 Provider 的 prompt 快取 TTL 的 `"auto"`，或 `false`。反思不會繼承頂層 `activateAfterIdle`；請明確設定此項，選擇讓反思採用閒置啟用。目前只在使用獨立 `ObservationalMemory` 類別時套用；透過 `new Memory(...)` 使用時，此設定沒有效果。',
-            isOptional: true,
-          },
-          {
-            name: 'activateOnProviderChange',
-            type: 'boolean',
-            description:
-              '當執行者的 Provider 或模型變更時，強制啟用已緩衝的反思。反思不會繼承頂層 `activateOnProviderChange`；請明確設定此項，選擇讓反思在 Provider 變更時啟用。目前只在使用獨立 `ObservationalMemory` 類別時套用；透過 `new Memory(...)` 使用時，此設定沒有效果。',
-            isOptional: true,
-            defaultValue: 'false',
-          },
-          {
-            name: 'blockAfter',
-            type: 'number',
-            description:
-              '當背景反思未能趕上時，強制執行同步（阻塞式）反思的安全機制。`1` 至小於 `100` 的值是 `observationTokens` 的倍數：`1.2` 會在閾值的 120% 強制執行阻塞式反思（預設 40k 時為 48k token）。`100` 或以上的值是絕對 token 數量，而且必須大於 `observationTokens`。在 `observationTokens` 與 `blockAfter` 之間，只會執行非同步緩衝及啟用。只在設定了 `bufferActivation` 時適用。啟用非同步反思時，預設為 `1.2`。',
-            isOptional: true,
-            defaultValue: '1.2（已設定 bufferActivation 時）',
-          },
-        ],
-      },
-    ],
-  },
+{
+  name: 'enabled',
+  type: 'boolean',
+  description:
+    'Enable or disable Observational Memory. When omitted from a config object, defaults to `true`. Only `enabled: false` explicitly disables it.',
+  isOptional: true,
+  defaultValue: 'true',
+},
+{
+  name: 'model',
+  type: "'auto' | string | LanguageModel | DynamicModel | ModelByInputTokens | ModelWithRetries[]",
+  description:
+    'Model for both the Observer and Reflector agents. Cannot be used together with `observation.model` or `reflection.model`. When all model fields are omitted, each role defaults to `"auto"`. Automatic selection prefers `google/gemini-2.5-flash` when `GOOGLE_GENERATIVE_AI_API_KEY` is configured, then a low-cost model for the active provider, then the active main model. Use `"default"` for the legacy fixed default.',
+  isOptional: true,
+  defaultValue: "'auto'",
+},
+{
+  name: 'autoModels',
+  type: 'Record<string, string>',
+  description:
+    'Overrides the model automatic selection picks for a provider, keyed by provider ID. For example, `{ openai: "__GATEWAY_OPENAI_MODEL_LUNA__" }`. Providers not listed use the built-in pick.',
+  isOptional: true,
+},
+{
+  name: 'canUseProvider',
+  type: '(providerId: string, context: { requestContext?: RequestContext }) => boolean',
+  description:
+    "Tells automatic selection whether the current request can use a provider. `'auto'` prefers Gemini only when this returns `true` for `'google'`. Use it when credentials are scoped per request, such as per tenant. When omitted, automatic selection checks `GOOGLE_GENERATIVE_AI_API_KEY`.",
+  isOptional: true,
+},
+{
+  name: 'resolveModel',
+  type: '(modelId: string, context: { requestContext?: RequestContext }) => MastraModelConfig | Promise<MastraModelConfig>',
+  description:
+    'Creates the model automatic selection picked, so it can use your credentials and routing. Receives only concrete model IDs, never `"auto"`. When omitted, the picked ID goes through Mastra model routing.',
+  isOptional: true,
+},
+{
+  name: 'scope',
+  type: "'resource' | 'thread'",
+  description:
+    "Memory scope for observations. `'thread'` keeps observations per-thread. `'resource'` is deprecated and will be removed in a future release. It shares observations across all threads for a resource and works much worse than thread scope for prompt caching and agent understanding. For cross-thread continuity, use thread scope with `retrieval`. See [resource scope (deprecated)](/docs/memory/observational-memory#resource-scope-deprecated).",
+  isOptional: true,
+  defaultValue: "'thread'",
+},
+{
+  name: 'activateAfterIdle',
+  type: 'number | string | false | "auto" | Record<string, number | string | false | "auto">',
+  description:
+    'Time before buffered observations are forced to activate after inactivity, even before `observation.messageTokens` is reached. Accepts a numeric millisecond value such as `300_000`, duration strings like `"5m"` or `"1hr"`, `"auto"` for a provider-aware prompt cache TTL, `false` to disable inherited observation idle activation, or an object of per-provider TTLs such as `{ default: "auto", anthropic: "1h" }`. Object keys match the actor model provider before the first `.`, case-insensitively, so `anthropic` covers the direct Anthropic provider but not Claude through another provider such as `amazon-bedrock`; `default` covers every other provider. Reflections do not inherit this setting. Use `reflection.activateAfterIdle` to opt reflections into idle activation.',
+  isOptional: true,
+},
+{
+  name: 'activateOnProviderChange',
+  type: 'boolean',
+  description:
+    'Force buffered observations to activate when the actor provider or model changes. Reflections do not inherit this setting. Use `reflection.activateOnProviderChange` to opt reflections into provider-change activation.',
+  isOptional: true,
+  defaultValue: 'false',
+},
+{
+  name: 'shareTokenBudget',
+  type: 'boolean',
+  description:
+    'Share the token budget between messages and observations. When enabled, the total budget is `observation.messageTokens + reflection.observationTokens`. Messages can use more space when observations are small, and vice versa. This maximizes context usage through flexible allocation. `shareTokenBudget` is not yet compatible with async buffering. You must set `observation: { bufferTokens: false }` when using this option (this is a temporary limitation).',
+  isOptional: true,
+  defaultValue: 'false',
+},
+{
+  name: 'temporalMarkers',
+  type: 'boolean',
+  description:
+    'Insert temporal-gap reminder markers before new user messages when the previous message in the thread is at least 10 minutes older. The marker is persisted in memory, emitted as an inline reminder event so clients can render it specially, and shown to the observer so it can anchor observations to when events occurred.',
+  isOptional: true,
+  defaultValue: 'false',
+},
+{
+  name: 'retrieval',
+  type: "boolean | { vector?: boolean; scope?: 'thread' | 'resource'; instructions?: string }",
+  description:
+    "Let the agent look up the raw message history behind its observations. Observation groups keep durable pointers to the original messages, and a `recall` tool is registered so the agent can browse them. `true` enables cross-thread browsing by default. `{ vector: true }` also enables semantic search using Memory's vector store and embedder. A vector store that generates embeddings itself needs no `embedder`. `{ scope: 'thread' }` restricts the recall tool to the current thread only. Default scope is `'resource'`. `{ instructions: '...' }` appends application-specific recall guidance after Mastra's built-in retrieval instructions.",
+  isOptional: true,
+  defaultValue: 'false',
+},
+{
+  name: 'hooks',
+  type: 'ObserveHooks',
+  description:
+    "Lifecycle hooks fired for every observation/reflection cycle — the manual `observe()`/`reflect()` APIs, turn-driven synchronous observation, and fire-and-forget async buffering. Callbacks receive `threadId`/`resourceId`/`trigger` call context (`'manual' | 'turn-sync' | 'async-buffer'`), and the end hooks (`onObservationEnd`/`onReflectionEnd`) additionally receive the OM model call's token `usage` and `providerMetadata` (where providers such as the AI Gateway report per-call cost), so apps can account for OM model spend without wrapping the observer/reflector models in middleware. Config-level lifecycle hooks are non-blocking by default: their errors are logged without failing the cycle. With `hookExecution: 'await'`, config-level lifecycle errors can reject `observe()` or `reflect()`. Per-call `observe({ hooks })` lifecycle hooks are also awaited and can reject `observe()`. A failing awaited start hook skips the model call; an end-hook failure can reject the call after its work has completed. Async-buffered cycles always use non-blocking config-level lifecycle hooks, regardless of `hookExecution`. Their cycle failures are reported through `onObservationEnd.error` or `onReflectionEnd.error`, rather than thrown to the caller. `ObserveHooks` also accepts transform hooks that intercept and can replace cycle data: `beforeObservation({ messages, ...context })` runs on the messages about to be observed (return `{ messages }` to filter/redact; an empty array skips the Observer call), `afterObservation({ observations, ...context })` runs on the Observer's output before it is persisted, `beforeReflection({ observations, ...context })` runs on the text sent to the Reflector, and `afterReflection({ observations, ...context })` runs on the Reflector's output before it is persisted. Transform hooks return `void` to pass data through unchanged and are always awaited on every path. A thrown error fails the cycle before committing its transformed observation or reflection text, but doesn't roll back extractor callbacks or other side effects that already ran. The after hooks replace only text, not the separate structured extractor results stored in thread metadata. Reflection extraction and its callbacks run before `afterReflection`; this hook neither recomputes extracted values nor reruns callbacks. After hooks aren't a redaction boundary for all cycle data.",
+  isOptional: true,
+},
+{
+  name: 'observation',
+  type: 'ObservationalMemoryObservationConfig',
+  description: 'Configuration for the observation step. Controls when the Observer agent runs and how it behaves.',
+  isOptional: true,
+  properties: [
+    {
+      type: 'ObservationalMemoryObservationConfig',
+      parameters: [
+        {
+          name: 'model',
+          type: "'auto' | string | LanguageModel | DynamicModel | ModelByInputTokens | ModelWithRetries[]",
+          description:
+            "Model for the Observer agent. With `'auto'`, each observation uses the Gemini default when `GOOGLE_GENERATIVE_AI_API_KEY` is set, otherwise a low-cost model for the calling agent's effective provider, then the calling model or configured model instance. Cannot be set if a top-level `model` is also provided. If neither this nor the top-level `model` is set, falls back to `reflection.model`.",
+          isOptional: true,
+        },
+        {
+          name: 'instruction',
+          type: 'string',
+          description:
+            "Custom instruction appended to the Observer's system prompt. Use this to customize what the Observer focuses on, such as domain-specific preferences or priorities.",
+          isOptional: true,
+        },
+        {
+          name: 'continuationHints',
+          type: 'boolean | { currentTask?: boolean; suggestedResponse?: boolean }',
+          description:
+            'Which continuation-hint sections the Observer emits during synchronous observation. Async buffered Observer calls do not generate continuation hints. Pass `false` to disable both, or an object to disable them individually. Agents that drive their own control flow generally want `{ suggestedResponse: false }` so memory does not compete for what the agent says next. A previously stored hint stops being injected into context once both observation and reflection disable its section.',
+          isOptional: true,
+          defaultValue: 'true',
+        },
+        {
+          name: 'threadTitle',
+          type: 'boolean',
+          description:
+            'When `true`, the Observer suggests short thread titles and updates the thread title when the conversation topic meaningfully changes. This is opt-in and defaults to disabled.',
+          isOptional: true,
+          defaultValue: 'false',
+        },
+        {
+          name: 'extract',
+          type: 'Extractor[]',
+          description:
+            'Custom values to extract after observation. Schema-less extractors are requested inline in the Observer output. Schema-backed extractors run as a follow-up structured output call and are stored in thread OM metadata.',
+          isOptional: true,
+        },
+        {
+          name: 'manageWorkingMemory',
+          type: 'boolean',
+          description:
+            'Let the Observer manage working memory through OM extraction. Adds `WorkingMemoryExtractor`, defaults `workingMemory.agentManaged` to `false`, and defaults `workingMemory.useStateSignals` to `true`. See [Let the Observer manage working memory](#let-the-observer-manage-working-memory).',
+          isOptional: true,
+          defaultValue: 'false',
+        },
+        {
+          name: 'observeAttachments',
+          type: "'auto' | boolean | string[]",
+          description:
+            "Controls which image/file attachments are forwarded to the Observer model alongside their placeholder text lines. The default allowlist is `['image/*', 'application/pdf']`. `true` forwards all attachments. `false` drops all attachments while keeping placeholders visible. `'auto'` uses the provider capabilities registry to decide: attachments are forwarded when the Observer model supports multimodal input, dropped otherwise, and forwarded when no capability data is available for the model. An array is a case-insensitive mimeType allowlist supporting exact matches (`'application/pdf'`), wildcard subtypes (`'image/*'`), and bare `'*'` for everything. Useful when the Observer model is text-only (e.g. some DeepSeek endpoints) while the main agent uses a multimodal model, or when you only want specific file types forwarded. Tool-result attachments are filtered using the same rule.",
+          isOptional: true,
+          defaultValue: "['image/*', 'application/pdf']",
+        },
+        {
+          name: 'maxRetries',
+          type: 'number',
+          description:
+            "Retries after the initial Observer model call on transient provider errors. Governs OM's own retry ladder; the Observer model call itself is configured with no provider-level retries.",
+          isOptional: true,
+          defaultValue: '8',
+        },
+        {
+          name: 'failurePolicy',
+          type: "'abort' | 'continue'",
+          description:
+            "Terminal policy once Observer retries are exhausted in a synchronous observation. Background buffered observation failures are reported as `om_buffering_failed` and never stop the turn. `'abort'` aborts the agent turn. `'continue'` emits the existing failure diagnostic, keeps the failed input pending for a later cycle, and allows the main agent turn to continue. Persistence, indexing, transform, locking, invariant, and explicit abort failures remain fatal. This setting doesn't prevent the underlying provider error or change `blockAfter` or attachment handling, and it has no backstop for a sustained outage: pending messages keep accruing in the main agent's context until they reach the model's context limit.",
+          isOptional: true,
+          defaultValue: "'abort'",
+        },
+        {
+          name: 'messageTokens',
+          type: 'number',
+          description:
+            'Token count of unobserved messages that triggers observation. When unobserved message tokens exceed this threshold, the Observer agent is called. Text is estimated locally with `tokenx`. Image parts are included with model-aware heuristics when possible, with deterministic fallbacks when image metadata is incomplete. Image-like `file` parts are counted the same way when uploads are normalized as files.',
+          isOptional: true,
+          defaultValue: '30000',
+        },
+        {
+          name: 'maxTokensPerBatch',
+          type: 'number',
+          description:
+            'Maximum tokens per batch when observing multiple threads in resource scope (deprecated). Threads are chunked into batches of this size and processed in parallel. Lower values mean more parallelism but more API calls.',
+          isOptional: true,
+          defaultValue: '10000',
+        },
+        {
+          name: 'modelSettings',
+          type: 'ObservationalMemoryModelSettings',
+          description:
+            'Model settings for the Observer agent. The `temperature: 0.3` default is only applied when the resolved model is known to support temperature. The `maxOutputTokens: 100_000` default is only applied with default model selection (no model set, `"default"`, or a `ModelByInputTokens` selector). Custom models get no `maxOutputTokens` default.',
+          isOptional: true,
+          defaultValue:
+            '{ temperature: 0.3 (temperature-capable models), maxOutputTokens: 100_000 (default model selection only) }',
+          properties: [
+            {
+              type: 'ObservationalMemoryModelSettings',
+              parameters: [
+                {
+                  name: 'temperature',
+                  type: 'number',
+                  description:
+                    'Temperature for generation. Lower values produce more consistent output. The `0.3` default is only applied when the resolved model is known to support temperature.',
+                  isOptional: true,
+                  defaultValue: '0.3 (models that support temperature only)',
+                },
+                {
+                  name: 'maxOutputTokens',
+                  type: 'number',
+                  description:
+                    'Maximum output tokens. Set high to prevent truncation of observations. The `100000` default is only applied with default model selection; custom models get no default.',
+                  isOptional: true,
+                  defaultValue: '100000 (default model selection only)',
+                },
+              ],
+            },
+          ],
+        },
+        {
+          name: 'providerOptions',
+          type: 'ProviderOptions',
+          description:
+            'Provider-specific options passed to the Observer agent, such as Google thinking configuration.',
+          isOptional: true,
+          defaultValue: '{ google: { thinkingConfig: { thinkingBudget: 215 } } }',
+        },
+        {
+          name: 'bufferTokens',
+          type: 'number | false',
+          description:
+            'How often background observation buffering runs. Values between `0` and `1` are fractions of `messageTokens`: `0.25` buffers every 25% of the threshold (7.5k tokens with the default 30k). Values of `1` or more are absolute token counts: `5000` buffers every 5k tokens. Buffered observations are stored until the `messageTokens` threshold is reached, then activate instantly without a blocking LLM call. Must resolve to less than `messageTokens`. Set to `false` to disable all async buffering (both observation and reflection).',
+          isOptional: true,
+          defaultValue: '0.2',
+        },
+        {
+          name: 'bufferOnIdle',
+          type: 'boolean',
+          description:
+            'Run background observation buffering when an agent turn ends and the agent becomes idle. This is separate from `bufferTokens`, which controls step-time async buffering. Set this to `true` to buffer short idle turns without waiting for the next turn or the `messageTokens` threshold.',
+          isOptional: true,
+          defaultValue: 'false',
+        },
+        {
+          name: 'observeOnContextOverflow',
+          type: 'boolean',
+          description:
+            "Recover when the model provider rejects a request for exceeding its context window. Provider token counts can be higher than Observational Memory's local estimate, for example with attachments or after switching to a model with a smaller window, so a request can overflow before the `messageTokens` threshold is reached. When this happens, Observational Memory activates buffered observations, observes every pending message regardless of the threshold, and retries the request once with the smaller context. Set to `false` to let the error reach the caller instead.",
+          isOptional: true,
+          defaultValue: 'true',
+        },
+        {
+          name: 'bufferActivation',
+          type: 'number',
+          description:
+            'How much of the message window to clear when buffered observations activate. Values between `0` and `1` are the fraction of `messageTokens` to remove: `0.8` removes ~80% of the message history and keeps ~20% (6k tokens with the default 30k). Values of `1000` or more are the token count to keep: `4000` keeps ~4k message tokens after activation. Note the direction flips: a higher ratio removes more history, while a higher token count keeps more.',
+          isOptional: true,
+          defaultValue: '0.8',
+        },
+        {
+          name: 'activateAfterIdle',
+          type: 'number | string | false | "auto" | Record<string, number | string | false | "auto">',
+          description:
+            'Time before buffered observations are forced to activate after inactivity. Accepts milliseconds, a duration string, `"auto"` for a provider-aware prompt cache TTL, `false`, or an object of per-provider TTLs. An object replaces the top-level value and is not merged with it. If unset, the top-level `activateAfterIdle` value is used for observations. Set `false` to disable the top-level idle setting for observations. Currently only applied when using the standalone `ObservationalMemory` class; `new Memory(...)` applies the top-level `activateAfterIdle` only.',
+          isOptional: true,
+        },
+        {
+          name: 'activateOnProviderChange',
+          type: 'boolean',
+          description:
+            'Force buffered observations to activate when the actor provider or model changes. If unset, the top-level `activateOnProviderChange` value is used for observations. Currently only applied when using the standalone `ObservationalMemory` class; `new Memory(...)` applies the top-level `activateOnProviderChange` only.',
+          isOptional: true,
+        },
+        {
+          name: 'blockAfter',
+          type: 'number',
+          description:
+            "Safety net for when background buffering can't keep up. Values from `1` up to (but not including) `100` are multipliers of `messageTokens`: `1.2` resolves to 120% of the threshold (36k tokens with the default 30k). Multipliers apply to a per-thread `messageTokens` override when one is set. Values of `100` or more are absolute token counts and must be greater than `messageTokens`. Between `messageTokens` and `blockAfter`, only async buffering and activation run: reaching the threshold without a buffered chunk to activate starts background buffering, and the chunk activates on a later step. A synchronous (blocking) observation runs if pending tokens still reach `blockAfter` after buffered activation. All remaining buffered chunks are activated first, so the synchronous observation only covers messages no chunk has observed. Set `blockAfter: 1` to observe synchronously at `messageTokens`. Above this point, activation also uses the smallest set of buffered chunks that reaches the retention target, even when that overshoots the target by more than the usual safeguard allows. It never activates more chunks than are needed to reach the retention target, so it removes only slightly more history than a normal activation. It changes the result only when the retention floor is above roughly 20,000 tokens; with the default `bufferActivation` (a 6k floor) it has no observable effect. Activation usually keeps a minimum remaining context (the smaller of 1000 tokens or the retention floor), but a single buffered chunk that covers the whole pending window still activates and can leave less. Only relevant when `bufferTokens` is set. Defaults to `1.2` when async buffering is enabled.",
+          isOptional: true,
+          defaultValue: '1.2 (when bufferTokens is set)',
+        },
+        {
+          name: 'previousObserverTokens',
+          type: 'number | false',
+          description:
+            "Optional token budget for the observer's previous-observations context. When set to a number, the observations passed to the Observer agent are tail-truncated to fit within this budget while keeping the newest observations and preserving highlighted 🔴 items when possible. When a buffered reflection is pending, the already-reflected observation lines are automatically replaced with the reflection summary before truncation. Set to `0` to omit previous observations entirely, or `false` to disable truncation explicitly.",
+          isOptional: true,
+          defaultValue: 'false',
+        },
+      ],
+    },
+  ],
+},
+{
+  name: 'reflection',
+  type: 'ObservationalMemoryReflectionConfig',
+  description: 'Configuration for the reflection step. Controls when the Reflector agent runs and how it behaves.',
+  isOptional: true,
+  properties: [
+    {
+      type: 'ObservationalMemoryReflectionConfig',
+      parameters: [
+        {
+          name: 'model',
+          type: "'auto' | string | LanguageModel | DynamicModel | ModelByInputTokens | ModelWithRetries[]",
+          description:
+            "Model for the Reflector agent. With `'auto'`, each reflection uses the Gemini default when `GOOGLE_GENERATIVE_AI_API_KEY` is set, otherwise a low-cost model for the calling agent's effective provider, then the calling model or configured model instance. Cannot be set if a top-level `model` is also provided. If neither this nor the top-level `model` is set, falls back to `observation.model`.",
+          isOptional: true,
+        },
+        {
+          name: 'maxRetries',
+          type: 'number',
+          description:
+            "Retries after the initial Reflector model call on transient provider errors. Governs OM's own retry ladder; the Reflector model call itself is configured with no provider-level retries.",
+          isOptional: true,
+          defaultValue: '8',
+        },
+        {
+          name: 'failurePolicy',
+          type: "'abort' | 'continue'",
+          description:
+            "Terminal policy once Reflector retries are exhausted in a synchronous reflection. Background buffered reflection failures are reported as `om_buffering_failed` and never stop the turn. `'abort'` aborts the agent turn. `'continue'` emits the failure diagnostic and allows the turn to continue, leaving already-persisted observations committed and deferring reflection to the next threshold crossing. A provider outage usually takes out both stages, so set the policy on `observation` too if the turn should survive one.",
+          isOptional: true,
+          defaultValue: "'abort'",
+        },
+        {
+          name: 'instruction',
+          type: 'string',
+          description:
+            "Custom instruction appended to the Reflector's system prompt. Use this to customize how the Reflector consolidates observations, such as prioritizing certain types of information.",
+          isOptional: true,
+        },
+        {
+          name: 'continuationHints',
+          type: 'boolean | { currentTask?: boolean; suggestedResponse?: boolean }',
+          description:
+            'Which continuation-hint sections the Reflector emits. Pass `false` to disable both, or an object to disable them individually. A previously stored hint stops being injected into context once both observation and reflection disable its section.',
+          isOptional: true,
+          defaultValue: 'true',
+        },
+        {
+          name: 'extract',
+          type: 'Extractor[]',
+          description:
+            'Custom values to extract after reflection. Schema-less extractors are requested inline in the Reflector output. Schema-backed extractors run as a follow-up structured output call and are stored in thread OM metadata.',
+          isOptional: true,
+        },
+        {
+          name: 'observationTokens',
+          type: 'number',
+          description:
+            'Token count of observations that triggers reflection. When observation tokens exceed this threshold, the Reflector agent is called to condense them.',
+          isOptional: true,
+          defaultValue: '40000',
+        },
+        {
+          name: 'modelSettings',
+          type: 'ObservationalMemoryModelSettings',
+          description:
+            'Model settings for the Reflector agent. The `temperature: 0` default is only applied when the resolved model is known to support temperature. The `maxOutputTokens: 100_000` default is only applied with default model selection (no model set, `"default"`, or a `ModelByInputTokens` selector). Custom models get no `maxOutputTokens` default.',
+          isOptional: true,
+          defaultValue:
+            '{ temperature: 0 (temperature-capable models), maxOutputTokens: 100_000 (default model selection only) }',
+          properties: [
+            {
+              type: 'ObservationalMemoryModelSettings',
+              parameters: [
+                {
+                  name: 'temperature',
+                  type: 'number',
+                  description:
+                    'Temperature for generation. Lower values produce more consistent output. The `0` default is only applied when the resolved model is known to support temperature.',
+                  isOptional: true,
+                  defaultValue: '0 (models that support temperature only)',
+                },
+                {
+                  name: 'maxOutputTokens',
+                  type: 'number',
+                  description:
+                    'Maximum output tokens. Set high to prevent truncation of observations. The `100000` default is only applied with default model selection; custom models get no default.',
+                  isOptional: true,
+                  defaultValue: '100000 (default model selection only)',
+                },
+              ],
+            },
+          ],
+        },
+        {
+          name: 'providerOptions',
+          type: 'ProviderOptions',
+          description:
+            'Provider-specific options passed to the Reflector agent, such as Google thinking configuration.',
+          isOptional: true,
+          defaultValue: '{ google: { thinkingConfig: { thinkingBudget: 1024 } } }',
+        },
+        {
+          name: 'bufferActivation',
+          type: 'number',
+          description:
+            'When background reflection starts, as a ratio (0-1) of `observationTokens`: `0.5` starts reflecting in the background once observations reach 50% of the threshold (20k tokens with the default 40k). When the full threshold is reached, the buffered reflection replaces the observations it covers, preserving any new observations appended after that range.',
+          isOptional: true,
+          defaultValue: '0.5',
+        },
+        {
+          name: 'activateAfterIdle',
+          type: 'number | string | false | "auto" | Record<string, number | string | false | "auto">',
+          description:
+            'Time before buffered reflections are forced to activate after inactivity. Accepts milliseconds, a duration string, `"auto"` for a provider-aware prompt cache TTL, `false`, or an object of per-provider TTLs. Reflections do not inherit top-level `activateAfterIdle`; set this explicitly to opt reflections into idle activation. Currently only applied when using the standalone `ObservationalMemory` class; this setting has no effect through `new Memory(...)`.',
+          isOptional: true,
+        },
+        {
+          name: 'activateOnProviderChange',
+          type: 'boolean',
+          description:
+            'Force buffered reflections to activate when the actor provider or model changes. Reflections do not inherit top-level `activateOnProviderChange`; set this explicitly to opt reflections into provider-change activation. Currently only applied when using the standalone `ObservationalMemory` class; this setting has no effect through `new Memory(...)`.',
+          isOptional: true,
+          defaultValue: 'false',
+        },
+        {
+          name: 'blockAfter',
+          type: 'number',
+          description:
+            "Safety net that forces a synchronous (blocking) reflection when background reflection can't keep up. Values from `1` up to (but not including) `100` are multipliers of `observationTokens`: `1.2` forces a blocking reflection at 120% of the threshold (48k tokens with the default 40k). Values of `100` or more are absolute token counts and must be greater than `observationTokens`. Between `observationTokens` and `blockAfter`, only async buffering and activation run. Only relevant when `bufferActivation` is set. Defaults to `1.2` when async reflection is enabled.",
+          isOptional: true,
+          defaultValue: '1.2 (when bufferActivation is set)',
+        },
+      ],
+    },
+  ],
+},
 ]}
 />
 
-### Token 估算 metadata 快取 {/* #token-estimate-metadata-cache */}
+## 提取器API {/* #extractor-api */}
 
-OM 會持久保存 token payload 估算，讓重複計算可重用先前的 token 估算結果。
-
-- 部分層級快取：`part.providerMetadata.mastra`。
-- 字串內容回退快取：沒有任何部分時使用訊息層級 metadata。
-- 如快取版本或 tokenizer 來源不相符，系統會忽略快取項目並重新計算。
-- 每則訊息及每段對話的額外開銷一律在執行階段重新計算，不會快取。
-- 系統會略過 `data-*` 及 `reasoning` 部分，亦不會為它們建立快取項目。
-
-## Extractor API {/* #extractor-api */}
-
-`Extractor` 定義 OM 應在觀察或反思期間擷取的值。`current-task`、`suggested-response` 及 `thread-title` 等內置 OM 值，會使用與自訂值相同的 extractor pipeline。
+`Extractor`定義 OM 在觀察或反射期間應提取的值。內建 OM 值，例如`current-task`, `suggested-response`, and `thread-title` use the same extractor pipeline as custom values.
 
 ```typescript title="src/mastra/agents/agent.ts"
 import { Memory, Extractor } from '@mastra/memory'
@@ -410,7 +483,7 @@ import { z } from 'zod'
 const memory = new Memory({
   options: {
     observationalMemory: {
-      model: '__GATEWAY_OPENAI_MODEL_MINI__',
+      model: '__GATEWAY_OPENAI_MODEL_LUNA__',
       observation: {
         extract: [
           new Extractor({
@@ -430,176 +503,112 @@ const memory = new Memory({
 
 <PropertiesTable
   content={[
-  {
-    name: 'name',
-    type: 'string',
-    description: '方便閱讀的 extractor 名稱。OM 會將此值轉換為 extractor slug。產生 slug 後，各名稱必須保持獨一無二。',
-  },
-  {
-    name: 'slug',
-    type: 'string',
-    description:
-      '由 `name` 衍生的唯讀屬性，並非 constructor 選項。這是為持久保存值及 XML tag 產生的穩定識別碼。slug 使用小寫英文字母、數字及連字號。自訂 extractor 不可使用內置 slug 及保留的 XML tag。',
-  },
-  {
-    name: 'instructions',
-    type: 'string | (context) => string',
-    description: '指定要擷取甚麼以及何時更新值的指示。可使用函式從 runtime 上下文衍生指示。',
-  },
-  {
-    name: 'schema',
-    type: 'ZodType<T> | (context) => ZodType<T> | undefined',
-    description:
-      '用於結構化擷取的可選 Zod schema。提供後，OM 會在主要 OM 操作後執行後續結構化輸出呼叫。省略時，extractor 是在 Observer 或 Reflector 回應中發出的 inline 字串 extractor。可使用函式從 runtime 上下文衍生 schema。',
-    isOptional: true,
-  },
-  {
-    name: 'includePreviousExtraction',
-    type: 'boolean',
-    description:
-      '控制日後執行 OM 時，是否向 extractor 顯示先前的擷取結果。如值只應來自目前的 OM 執行，請設為 `false`。',
-    isOptional: true,
-    defaultValue: 'true',
-  },
-  {
-    name: 'metadataKeyPath',
-    type: 'string | false',
-    description: '以句點分隔的 OM metadata 路徑，用於持久保存擷取值。設為 `false` 可完全略過 OM metadata 持久保存。',
-    isOptional: true,
-    defaultValue: "'extracted.<slug>'",
-  },
-  {
-    name: 'onExtracted',
-    type: '(context) => T | void | Promise<T | void>',
-    description:
-      '在自訂 extractor 傳回值後、持久保存 metadata 前呼叫的可選 hook。傳回值會取代擷取值；擲回錯誤則會記錄擷取失敗。',
-    isOptional: true,
-  },
+{
+  name: 'name',
+  type: 'string',
+  description:
+    'Human-readable extractor name. OM slugifies this value into the extractor slug. Names must be unique after slug generation.',
+},
+{
+  name: 'slug',
+  type: 'string',
+  description:
+    'Read-only property derived from `name` — not a constructor option. Generated stable identifier for persisted values and XML tags. Slugs use lowercase letters, numbers, and hyphens. Built-in slugs and reserved XML tags cannot be used by custom extractors.',
+},
+{
+  name: 'instructions',
+  type: 'string | (context) => string',
+  description:
+    'Instructions for what to extract and when to update the value. Use a function to derive instructions from runtime context.',
+},
+{
+  name: 'schema',
+  type: 'ZodType<T> | (context) => ZodType<T> | undefined',
+  description:
+    'Optional Zod schema for structured extraction. When provided, OM runs a follow-up structured output call after the main OM operation. When omitted, the extractor is an inline string extractor emitted in the Observer or Reflector response. Use a function to derive the schema from runtime context.',
+  isOptional: true,
+},
+{
+  name: 'includePreviousExtraction',
+  type: 'boolean',
+  description:
+    'Controls whether the previous extraction is shown to the extractor on future OM runs. Set to `false` for values that should only come from the current OM run.',
+  isOptional: true,
+  defaultValue: 'true',
+},
+{
+  name: 'metadataKeyPath',
+  type: 'string | false',
+  description:
+    'Dot-separated OM metadata path used to persist the extracted value. Set to `false` to skip OM metadata persistence entirely.',
+  isOptional: true,
+  defaultValue: "'extracted.<slug>'",
+},
+{
+  name: 'onExtracted',
+  type: '(context) => T | void | Promise<T | void>',
+  description:
+    'Optional hook called after a custom extractor returns a value and before metadata is persisted. Returning a value replaces the extracted value. Throwing records an extraction failure.',
+  isOptional: true,
+},
 ]}
 />
 
-### 擷取行為 {/* #extraction-behavior */}
+### 萃取行為 {/* #extraction-behavior */}
 
-- 擷取值會儲存在 thread OM metadata 的 `om.extracted` 下。
-- 內置 extractor 值亦會鏡像至相容性 metadata 欄位 `currentTask`、`suggestedResponse` 及 `threadTitle`。
-- 只有啟用 `observation.threadTitle` 時，`thread-title` 才會更新 thread 標題。
-- `observation.extract` 在觀察期間執行；`reflection.extract` 在反思期間執行。
-- 有 schema 的 extractor 會加入後續結構化輸出請求。
-- 無 schema 的 extractor 是直接在 Observer 或 Reflector 輸出中發出的 inline 字串 extractor。
-- 動態 extractor 函式會收到 runtime 上下文，包括可用的 `source`、`threadId`、`resourceId`、`mainAgent`、`memory` 及 `requestContext`。
-- `WorkingMemoryExtractor` 使用一般 extractor pipeline，透過使用中的 `Memory` instance 更新工作記憶。工作記憶有 JSON schema 時，它會使用結構化擷取，並略過 OM metadata 持久保存，避免工作記憶 payload 在 OM 擷取 metadata 下重複出現。
-- `observationalMemory.observation.manageWorkingMemory` 會加入 `WorkingMemoryExtractor`，並將 `workingMemory.agentManaged` 預設為 `false`。啟用工作記憶時，它會將 `workingMemory.useStateSignals` 預設為 `true`。
-- 擷取失敗會在 OM marker data 中報告，而且不會捨棄其他成功擷取的值。
+* 提取的值儲存在線程 OM 元資料中`om.extracted`.
+* 內建提取器值也鏡像到相容性元資料字段`currentTask`, `suggestedResponse`, and `threadTitle`.
+* `thread-title`僅在以下情況下更新線程標題`observation.threadTitle` is enabled.
+* `observation.extract`觀察期間運行。`reflection.extract` runs during reflection.
+* 模式支援的提取器添加後續結構化輸出請求。
+* 無模式提取器是直接在觀察者或反射器輸出中發出的內聯字串提取器。
+* 動態提取器函數接收運行時上下文，包括`source`, `threadId`, `resourceId`, `mainAgent`, `memory`, and `requestContext` when available.
+* `WorkingMemoryExtractor`使用正常的提取器管道透過活動更新工作內存`Memory` instance. It uses structured extraction when working memory has a JSON schema and skips OM metadata persistence, so the working memory payload isn't duplicated under OM extracted metadata.
+* 什麼時候`workingMemory.schema` is set, `WorkingMemoryExtractor` validates each update against that schema before saving it. If an update doesn't match, it's skipped and reported as an extraction failure while the previous working memory stays in place. Because the schema isn't sent to the model as a structured output constraint, one invalid working memory update can't fail other extractors. A `null` in an optional field is treated as not provided.
+* `observationalMemory.observation.manageWorkingMemory`添加`WorkingMemoryExtractor` and defaults `workingMemory.agentManaged` to `false`. It defaults `workingMemory.useStateSignals` to `true` when working memory is enabled.
+* 提取失敗會在 OM 標記資料中報告，並且不會丟棄其他成功提取的值。
 
 ## 範例 {/* #examples */}
 
-### 更新工作記憶 {/* #working-memory-updates */}
+### 閾值、指令和緩衝 {/* #thresholds-instructions-and-buffering */}
 
-如 OM 應更新工作記憶，請使用 `observationalMemory.observation.manageWorkingMemory`。
-
-```typescript title="src/mastra/agents/agent.ts"
-import { Memory } from '@mastra/memory'
-
-const memory = new Memory({
-  options: {
-    workingMemory: {
-      enabled: true,
-    },
-    observationalMemory: {
-      enabled: true,
-      observation: {
-        manageWorkingMemory: true,
-      },
-    },
-  },
-})
-```
-
-如主要 Agent 仍應接收工作記憶 Tool 及指令注入，請設定 `workingMemory.agentManaged: true`。
-
-### 使用自訂閾值的 resource scope（實驗性） {/* #resource-scope-with-custom-thresholds-experimental */}
+將主要調整選項設定在一起的一個配置。每個字段都是可選的。
 
 ```typescript title="src/mastra/agents/agent.ts"
 import { Memory } from '@mastra/memory'
 import { Agent } from '@mastra/core/agent'
 
 export const agent = new Agent({
-  id: 'my-agent',
-  name: 'my-agent',
-  instructions: 'You are a helpful assistant.',
-  model: '__GATEWAY_OPENAI_MODEL_MINI__',
-  memory: new Memory({
-    options: {
-      observationalMemory: {
-        model: 'google/gemini-2.5-flash',
-        scope: 'resource',
-        observation: {
-          messageTokens: 20_000,
-        },
-        reflection: {
-          observationTokens: 60_000,
-        },
-      },
-    },
-  }),
-})
-```
-
-### 共用 token 預算 {/* #shared-token-budget */}
-
-啟用 `shareTokenBudget` 後，總預算為 `observation.messageTokens + reflection.observationTokens`（本例為 100k）。如觀察結果只使用 30k tokens，訊息最多可擴展至使用 70k。如訊息較短，觀察結果在觸發反思前會有更多空間。
-
-```typescript title="src/mastra/agents/agent.ts"
-import { Memory } from '@mastra/memory'
-import { Agent } from '@mastra/core/agent'
-
-export const agent = new Agent({
-  id: 'my-agent',
-  name: 'my-agent',
-  instructions: 'You are a helpful assistant.',
-  model: '__GATEWAY_OPENAI_MODEL_MINI__',
-  memory: new Memory({
-    options: {
-      observationalMemory: {
-        shareTokenBudget: true,
-        observation: {
-          messageTokens: 20_000,
-          bufferTokens: false, // required when using shareTokenBudget (temporary limitation)
-        },
-        reflection: {
-          observationTokens: 80_000,
-        },
-      },
-    },
-  }),
-})
-```
-
-### 自訂模型 {/* #custom-model */}
-
-在設定中傳入 `model`，即可使用 Mastra model router 中的任何模型。
-
-```typescript title="src/mastra/agents/agent.ts"
-import { Memory } from '@mastra/memory'
-import { Agent } from '@mastra/core/agent'
-
-export const agent = new Agent({
-  id: 'my-agent',
-  name: 'my-agent',
-  instructions: 'You are a helpful assistant.',
+  id: 'health-assistant',
+  name: 'health-assistant',
+  instructions: 'You are a health and wellness assistant.',
   model: '__GATEWAY_OPENAI_MODEL__',
   memory: new Memory({
     options: {
       observationalMemory: {
-        // highlight-next-line
-        model: '__GATEWAY_OPENAI_MODEL_MINI__',
+        model: 'auto',
+        observation: {
+          messageTokens: 20_000,
+          bufferTokens: 5_000,
+          bufferActivation: 0.7,
+          blockAfter: 1.5,
+          instruction:
+            'Prioritize health goals, dietary restrictions and exercise preferences. Skip general chit-chat.',
+        },
+        reflection: {
+          observationTokens: 60_000,
+          instruction:
+            'Group related health information together. Keep specific metrics and dates.',
+        },
       },
     },
   }),
 })
 ```
 
-### 為每個 Agent 使用不同模型 {/* #different-models-per-agent */}
+### 每個Agent有不同的模型 {/* #different-models-per-agent */}
+
+放`observation.model` and `reflection.model` and leave the top-level `model` out. Setting the top-level `model` together with either one throws.
 
 ```typescript title="src/mastra/agents/agent.ts"
 import { Memory } from '@mastra/memory'
@@ -615,10 +624,10 @@ export const agent = new Agent({
       observationalMemory: {
         // highlight-start
         observation: {
-          model: 'google/gemini-2.5-flash',
+          model: 'auto',
         },
         reflection: {
-          model: '__GATEWAY_OPENAI_MODEL_MINI__',
+          model: '__GATEWAY_OPENAI_MODEL_LUNA__',
         },
         // highlight-end
       },
@@ -627,53 +636,9 @@ export const agent = new Agent({
 })
 ```
 
-### 自訂指令 {/* #custom-instructions */}
+### 共享代幣預算 {/* #shared-token-budget */}
 
-提供自訂指令，以自訂 Observer 及 Reflector 的關注重點：
-
-```typescript title="src/mastra/agents/agent.ts"
-import { Memory } from '@mastra/memory'
-import { Agent } from '@mastra/core/agent'
-
-export const agent = new Agent({
-  id: 'health-assistant',
-  name: 'health-assistant',
-  instructions: 'You are a health and wellness assistant.',
-  model: '__GATEWAY_OPENAI_MODEL__',
-  memory: new Memory({
-    options: {
-      observationalMemory: {
-        model: 'google/gemini-2.5-flash',
-        observation: {
-          // Focus observations on health-related preferences and goals
-          instruction:
-            'Prioritize capturing user health goals, dietary restrictions, exercise preferences, and medical considerations. Avoid capturing general chit-chat.',
-        },
-        reflection: {
-          // Guide reflection to consolidate health patterns
-          instruction:
-            'When consolidating, group related health information together. Preserve specific metrics, dates, and medical details.',
-        },
-      },
-    },
-  }),
-})
-```
-
-### 非同步緩衝處理 {/* #async-buffering */}
-
-非同步緩衝處理**預設為啟用**。隨着對話內容增加，它會在背景預先計算觀察結果：達到 `messageTokens` 閾值時，已緩衝的觀察結果會立即啟用，毋須等待會造成阻塞的 LLM 呼叫。
-
-其生命週期依循**緩衝 → 啟用 → 移除訊息 → 重複**。背景 Observer 呼叫會按 `bufferTokens` 間距執行，每次產生一組觀察結果。達到閾值時，這些內容便會啟用：觀察結果移至日誌，而原始訊息則從上下文移除。如果緩衝處理未能跟上，`blockAfter` 閾值會強制改用同步後備處理。
-
-預設設定：
-
-- `observation.bufferTokens: 0.2`：每累積相當於 `messageTokens` 20% 的內容便進行緩衝（例如閾值為 30k 時，每約 \~6k tokens 一次）
-- `observation.bufferActivation: 0.8`：啟用時移除足夠的訊息，使餘下內容只佔閾值的 20%
-- 已緩衝的觀察結果包含延續提示（`suggestedResponse`、`currentTask`），這些提示會在啟用後保留，以維持對話連貫性
-- `reflection.bufferActivation: 0.5`：觀察結果達到閾值的 50% 時，在背景開始反思
-
-如要自訂：
+什麼時候`shareTokenBudget` is enabled, the total budget is `observation.messageTokens + reflection.observationTokens`, which is 100k in this example. Observations that use only 30k tokens leave up to 70k for messages, while short messages give observations more room before reflection starts. Shared budgets need async buffering turned off.
 
 ```typescript title="src/mastra/agents/agent.ts"
 import { Memory } from '@mastra/memory'
@@ -683,26 +648,17 @@ export const agent = new Agent({
   id: 'my-agent',
   name: 'my-agent',
   instructions: 'You are a helpful assistant.',
-  model: '__GATEWAY_OPENAI_MODEL_MINI__',
+  model: '__GATEWAY_OPENAI_MODEL_LUNA__',
   memory: new Memory({
     options: {
       observationalMemory: {
-        model: 'google/gemini-2.5-flash',
+        shareTokenBudget: true,
         observation: {
-          messageTokens: 30_000,
-          // Buffer every 5k tokens (runs in background)
-          bufferTokens: 5_000,
-          // Activate to retain 30% of threshold
-          bufferActivation: 0.7,
-          // Force synchronous observation at 1.5x threshold
-          blockAfter: 1.5,
+          messageTokens: 20_000,
+          bufferTokens: false,
         },
         reflection: {
-          observationTokens: 60_000,
-          // Start background reflection at 50% of threshold
-          bufferActivation: 0.5,
-          // Force synchronous reflection at 1.2x threshold
-          blockAfter: 1.2,
+          observationTokens: 80_000,
         },
       },
     },
@@ -710,32 +666,348 @@ export const agent = new Agent({
 })
 ```
 
-如要完全停用非同步緩衝處理：
+### 非同步緩衝 {/* #async-buffering */}
 
-```typescript prettier:false
+預設情況下，非同步緩衝處於啟用狀態，設定如下：
+
+* `observation.bufferTokens: 0.2`每 20% 緩衝一次`messageTokens`.
+* `observation.bufferActivation: 0.8`激活後保持閾值的20%。
+* `reflection.bufferActivation: 0.5`在反射閾值的一半處開始背景反射。
+
+緩衝觀察者呼叫不會產生繼續提示，並且啟動會清除儲存的提示。看[When buffering falls behind](#when-buffering-falls-behind) for what happens between the threshold and `blockAfter`.
+
+放`observation.bufferTokens: false` to turn off buffering for both observation and reflection. Each then runs synchronously at its threshold.
+
+```typescript oxfmt:false
 observationalMemory: {
-  model: "google/gemini-2.5-flash",
   observation: {
     bufferTokens: false,
   },
 }
 ```
 
-設定 `bufferTokens: false` 會同時停用觀察與反思的非同步緩衝處理。達到各自的閾值時，觀察與反思會同步執行。
+非同步緩衝在已棄用的版本中已關閉`scope: 'resource'`.
 
-:::note
+## 早期激活 {/* #early-activation */}
 
-`scope: 'resource'` 不支援非同步緩衝處理，因此在 resource scope 下會自動停用。
+預設情況下，當訊息歷史記錄達到時，緩衝觀察將激活`observation.messageTokens`. OM can activate them sooner, which helps when a prompt cache is about to expire or when the agent switches model providers. In both cases the next request can't reuse the cached prompt anyway, so sending a smaller, compressed context costs nothing extra.
+
+* `activateAfterIdle`：線程空閒這麼長時間後啟動。接受毫秒 (`300_000`), a duration string (`'5m'`, `'1hr'`), `'auto'` for a provider-aware prompt cache TTL, or a per-provider object (see [per-provider idle TTLs](#per-provider-idle-ttls)).
+* `activateOnProviderChange`：下一步使用不同的時激活`provider/model` than the one that produced the latest assistant step. Default `false`.
+
+```typescript title="src/mastra/memory.ts"
+import { Memory } from '@mastra/memory'
+
+const memory = new Memory({
+  options: {
+    observationalMemory: {
+      activateAfterIdle: 'auto',
+      activateOnProviderChange: true,
+    },
+  },
+})
+```
+
+頂級設定僅適用於觀察。反射透過嵌套選擇自行加入`reflection` settings:
+
+```typescript title="src/mastra/memory.ts"
+import { Memory } from '@mastra/memory'
+
+const memory = new Memory({
+  options: {
+    observationalMemory: {
+      activateAfterIdle: '5m',
+      observation: {
+        activateAfterIdle: false,
+      },
+      reflection: {
+        activateAfterIdle: '10m',
+        activateOnProviderChange: true,
+      },
+    },
+  },
+})
+```
+
+這裡的觀察忽略了頂級空閒設置，而反射則選擇空閒和提供者更改激活。
+
+### 自動空閒 TTL {/* #automatic-idle-ttls */}
+
+和`activateAfterIdle: 'auto'`, Mastra picks the idle TTL from the active model provider:
+
+|Provider|自動TTL |
+| - | - |
+| Anthropic、OpenRouter、未知提供者、xAI | 5 分鐘 |
+|深度搜尋| 1小時|
+|Google雙子座 | 24小時|
+|格羅克 | 2小時|
+| OpenAI 與`providerOptions.openai.promptCacheRetention: "24h"` | 1 hour |
+| OpenAI with `providerOptions.openai.promptCacheRetention: "in_memory"` | 5 minutes |
+| OpenAI `gpt-4*`, `gpt-5`, `gpt-5-*`, and `gpt-5.1` through `gpt-5.4` (including `-` suffixed variants) | 5 minutes |
+| Other OpenAI models | 1 hour |
+
+對於固定 TTL，請使用`'5m'` or `300_000`.
+
+### 每個提供者的空閒 TTL {/* #per-provider-idle-ttls */}
+
+`'auto'`無法看到您在單一訊息上設定的快取 TTL，例如 Anthropic 的`cacheControl: { type: 'ephemeral', ttl: '1h' }`. It keeps using the provider's 5-minute default, so buffered observations activate while the 1-hour cache is still warm. Pass an object to set the TTL per provider:
+
+```typescript title="src/mastra/memory.ts"
+import { Memory } from '@mastra/memory'
+
+const memory = new Memory({
+  options: {
+    observationalMemory: {
+      activateAfterIdle: { default: 'auto', anthropic: '1h' },
+    },
+  },
+})
+```
+
+設定`anthropic` entry to the same TTL as your `cacheControl.ttl`. Mastra doesn't read the per-message cache setting, so keep the two in sync by hand.
+
+物件如何解析：
+
+* 鍵是提供者名稱。 Mastra 將它們與第一個先前的模型提供者的部分進行比較，不區分大小寫`.`, so `anthropic` matches both `anthropic` and `anthropic.messages`. Claude served through another provider uses that provider's key, for example `amazon-bedrock`. Keys must not contain `.` or `/`.
+* 每個值接受與單一 TTL 相同的形式：毫秒、持續時間字串、`'auto'`, or `false` to turn off idle activation for that provider.
+* `default`適用於每個沒有自己密鑰的提供者。沒有`default`, those providers don't idle-activate.
+* `observation.activateAfterIdle`和`reflection.activateAfterIdle` accept the same object. An `observation.activateAfterIdle` object replaces the top-level value and isn't merged with it.
+
+## 空閒時的緩衝區 {/* #buffer-on-idle */}
+
+放`observation.bufferOnIdle: true` to run background observation buffering when an agent turn ends and the agent becomes idle. Short turns then get observed without waiting for the next turn or the `messageTokens` threshold.
+
+```typescript title="src/mastra/memory.ts"
+import { Memory } from '@mastra/memory'
+
+const memory = new Memory({
+  options: {
+    observationalMemory: {
+      observation: {
+        bufferOnIdle: true,
+      },
+    },
+  },
+})
+```
+
+`bufferOnIdle`預設關閉。它是獨立於`bufferTokens`: `bufferTokens` controls buffering during steps, `bufferOnIdle` controls buffering at the end of an idle turn.
+
+## 當緩衝落後時 {/* #when-buffering-falls-behind */}
+
+當訊息到達的速度超過觀察者緩衝它們的速度時，歷史記錄就可以過去`messageTokens` before a buffered chunk is ready. Between `messageTokens` and `observation.blockAfter` (default `1.2`, so 36,000 tokens with the default threshold), Mastra keeps buffering in the background and activates the chunk on a later step, so the agent doesn't wait.
+
+如果待處理的代幣仍然達到`blockAfter` after buffered activation, for example when a large tool result leaves an uncovered tail, a synchronous observation runs. At `blockAfter`, activation first waits a bounded time for a buffered observation that's still being produced. If that takes longer, Mastra observes the remaining messages synchronously and drops the late observation if its messages are already observed. Activations triggered by the idle TTL or a provider change don't wait.
+
+多於`blockAfter`, activation may overshoot the retention target instead of using fewer chunks. Buffered activation usually keeps a minimum remaining context (the smaller of about 1,000 tokens or the configured retention floor), but a single chunk that covers the whole pending window still activates and can leave less.
+
+非同步緩衝觀察者呼叫不會產生連續提示，因為延遲提示在啟動時可能已經過時。當緩衝區塊啟動時，任何儲存的建議回應和目前任務都會被清除。
+
+反射緩衝以同樣的方式。當觀察達到時，它會在後台啟動`reflection.bufferActivation` (default `0.5`) of `reflection.observationTokens`, and runs synchronously above `reflection.blockAfter` (default `1.2`) when no buffered reflection is ready.
+
+## 重試與失敗策略 {/* #retries-and-failure-policy */}
+
+觀察者和反射器模型呼叫會在出現暫時性提供者錯誤時重試。每個階段有兩個設定：
+
+* `maxRetries`：第一次模型呼叫後重試。預設`8`. This is the only retry setting for the stage: the underlying model call runs with no provider-level retries.
+* `failurePolicy`：重試次數用完後會發生什麼事。`'abort'` (default) fails the turn, and `'continue'` lets it go on.
+
+```typescript title="src/mastra/memory.ts"
+import { Memory } from '@mastra/memory'
+
+const memory = new Memory({
+  options: {
+    observationalMemory: {
+      observation: {
+        maxRetries: 8,
+        failurePolicy: 'continue',
+      },
+      reflection: {
+        maxRetries: 8,
+        failurePolicy: 'continue',
+      },
+    },
+  },
+})
+```
+
+提供者中斷通常會導致兩個階段都中斷，因此如果您希望這一輪能夠倖存下來，請在兩個階段都設定策略。
+
+和`'continue'`, Mastra reports the failure through OM diagnostics, keeps the failed input pending for a later cycle, and lets the turn continue. It doesn't advance observation boundaries or discard unobserved messages. A Reflector failure leaves already-persisted observations committed and retries reflection at the next threshold crossing.
+
+此策略僅涵蓋同步運行中的觀察者和反射器模型以及提供者故障：`blockAfter`, when async buffering is off, and in resource-scoped observation. Persistence, indexing, transform, locking, invariant and explicit abort failures stay fatal.
+
+無論政策如何，後台緩衝失敗永遠不會停止轉變。他們被報道為`om_buffering_failed`, and the failed input stays pending. If it keeps growing, it reaches `blockAfter`, where synchronous observation applies `failurePolicy`.
+
+：：：警告
+
+`'continue'`沒有長時間停電的後備裝置。未觀察到的訊息保持待處理狀態，並在主Agent的上下文中不斷增長，直到達到模型的上下文限制。
 
 :::
 
-## 串流 data parts {/* #streaming-data-parts */}
+## 顳間隙標記 {/* #temporal-gap-markers */}
 
-Agent 執行期間，Observational Memory 會發出具類型的 data parts，讓 client 用於即時 UI 回饋。這些資料會連同 Agent 的回應以串流方式傳送。
+當自線程中的上一條訊息過去至少 10 分鐘後，時間間隙標記會在新用戶訊息之前插入簡短的提醒。它們預設為關閉狀態。
 
-### 讀取 extractor 結果 {/* #read-extractor-results */}
+```typescript title="src/mastra/memory.ts"
+import { Memory } from '@mastra/memory'
 
-兩種完成事件的 `data` payload 均包含 extractor 輸出。extractor 欄位如下：
+const memory = new Memory({
+  options: {
+    observationalMemory: {
+      temporalMarkers: true,
+    },
+  },
+})
+```
+
+此標記儲存在記憶體中，並作為瞬態提醒事件發出，因此客戶端可以將其呈現為時間軸提示。觀察者也可以看到標記，因此觀察結果可以說明事件發生的時間，例如「使用者在 2 天的間隙後詢問部署情況」。
+
+## 代幣估算 {/* #token-estimates */}
+
+OM 根據本地代幣估計來決定何時觀察，而不是根據提供者的使用報告。文本估計為`tokenx`; images use provider-aware heuristics, which also apply to image-like `file` parts. Provider counts can run higher than the estimate, which is why [context-overflow recovery](/docs/memory/observational-memory#context-overflow-recovery) exists.
+
+### 令牌計數緩存 {/* #token-count-cache */}
+
+OM 快取訊息元資料中的估計，因此閾值檢查不會重新計數相同的內容：
+
+* 每個零件的估計值儲存在`part.providerMetadata.mastra` and reused while the cache version and tokenizer source match.
+* 僅包含字串內容（無部分）的訊息使用訊息層級快取。
+* 每次傳遞都會重新計算訊息和對話開銷。僅快取有效負載估計值。
+* `data-*`和`reasoning` parts are skipped and not cached.
+
+### 提供您自己對文件的估計 {/* #supplying-your-own-estimate-for-a-file */}
+
+您可以將令牌估算附加到`image` or `file` part with `providerMetadata.mastra.tokenEstimate`. The token counter uses it as is:
+
+```typescript
+const filePart = {
+  type: 'file',
+  data: 'storage://bucket/large-report.pdf',
+  mimeType: 'application/pdf',
+  filename: 'large-report.pdf',
+  providerMetadata: {
+    mastra: {
+      tokenEstimate: {
+        v: 0,
+        source: 'client',
+        key: 'client',
+        tokens: 100_000,
+      },
+    },
+  },
+}
+```
+
+* `v`：快取架構版本。將其設定為`0`. OM doesn't read it for caller entries.
+* `source`： 必須是`'client'`. This marks the entry as authoritative so it isn't recomputed or overwritten.
+* `key`：設定為`'client'`. Framework entries put a content hash here. `'client'` keeps your estimate stable across writes.
+* `tokens`：要使用的計數。必須是有限的非負數。
+
+該估價僅在`image` and `file` parts. `text` and `tool-invocation` parts are always counted.
+
+## 限制觀察者重讀的內容 {/* #limiting-what-the-observer-re-reads */}
+
+預設情況下，觀察者接收完整的觀察日誌作為每批新訊息的上下文，加上先前的訊息`current-task` and `suggested-response` values. When the log grows large, set `observation.previousObserverTokens` to cap it:
+
+```typescript title="src/mastra/memory.ts"
+import { Memory } from '@mastra/memory'
+
+const memory = new Memory({
+  options: {
+    observationalMemory: {
+      observation: {
+        previousObserverTokens: 10_000,
+      },
+    },
+  },
+})
+```
+
+* `false`（預設）：發送完整日誌。
+* 一些數字，例如`2000`: keep about that many tokens of the most recent observations.
+* `0`：未發送任何先前的觀察結果。
+
+當緩衝反射待處理時，它已經覆蓋的行將被截斷先前的反射取代。
+
+## 讓觀察者管理工作記憶 {/* #let-the-observer-manage-working-memory */}
+
+放`observation.manageWorkingMemory: true` to have the Observer keep [working memory](/docs/memory/working-memory) up to date, instead of relying on the main agent to call the working memory tool.
+
+```typescript title="src/mastra/memory.ts"
+import { Memory } from '@mastra/memory'
+
+const memory = new Memory({
+  options: {
+    workingMemory: {
+      enabled: true,
+    },
+    observationalMemory: {
+      observation: {
+        manageWorkingMemory: true,
+      },
+    },
+  },
+})
+```
+
+這增加了一個`WorkingMemoryExtractor` and changes two working memory defaults:
+
+* `workingMemory.agentManaged`預設為`false`, so the main agent no longer gets the working memory tool and instructions. Set it to `true` to keep them.
+* `workingMemory.useStateSignals`預設為`true`, which moves working memory out of the system prompt into state signals so updates don't invalidate the prompt cache.
+
+## 掛鉤 {/* #hooks */}
+
+`observationalMemory.hooks`採用兩種鉤子：
+
+* **生命週期掛鉤** (`onObservationStart`, `onObservationEnd`, `onReflectionStart`, `onReflectionEnd`) are for telemetry. They receive `threadId`, `resourceId` and `trigger`; the end hooks also receive the model call's `usage`, `providerMetadata` and any `error`. They never change what OM stores.
+* **變換掛鉤** (`beforeObservation`, `afterObservation`, `beforeReflection`, `afterReflection`) change the data flowing through a cycle. Return nothing to pass the input through, or return a replacement.
+
+```typescript
+const memory = new Memory({
+  options: {
+    observationalMemory: {
+      hooks: {
+        // Drop or redact messages before the Observer sees them.
+        beforeObservation: ({ messages }) => ({
+          messages: messages.filter(m => !isSensitive(m)),
+        }),
+        // Rewrite observations before they are persisted.
+        afterObservation: ({ observations }) => ({
+          observations: redact(observations),
+        }),
+        // Rewrite the text the Reflector condenses.
+        beforeReflection: ({ observations }) => ({
+          observations: stripInternalNotes(observations),
+        }),
+        afterReflection: async ({ observations, resourceId }) => {
+          await syncToExternalStore(resourceId, observations)
+        },
+      },
+    },
+  },
+})
+```
+
+在每條路徑上始終等待轉換掛鉤：手動`observe()` and `reflect()`, synchronous observation during a turn, and async buffering. If `beforeObservation` returns an empty `messages` array, the Observer call is skipped and those messages are still marked as observed. If a transform hook throws, the cycle fails before committing the transformed text. Extractor callbacks and other side effects that already ran aren't rolled back.
+
+`afterObservation`和`afterReflection` replace only the observation or reflection text. They don't touch the structured extractor values stored in thread metadata, and reflection extraction runs before `afterReflection`. Don't treat an after hook as a redaction boundary for everything in the cycle.
+
+鉤子接收`threadId` and `resourceId`, so they can also update working memory with `memory.updateWorkingMemory()`. Those updates aren't atomic with the OM commit.
+
+若要將技能指令排除在觀察者之外，請使用[`skillResultRedactor`](#skillresultredactor).
+
+## 遷移現有線程 {/* #migrating-existing-threads */}
+
+無需遷移。當執行緒首次超過時，OM 讀取現有訊息並觀察它們`observation.messageTokens`, processing the backlog then. Under the deprecated resource scope, all unobserved messages across a resource's threads are processed together, which can take a long time for users with many threads.
+
+## 串流資料部分 {/* #streaming-data-parts */}
+
+觀察內存在Agent執行期間發出類型化資料部分，客戶端可用於即時 UI 回饋。這些資訊與Agent的回應一起傳輸。
+
+### 讀取提取器結果 {/* #read-extractor-results */}
+
+兩個完成事件都在它們的中攜帶提取器輸出`data` payload. The extractor fields are:
 
 ```typescript
 interface DataOmObservationEndPart {
@@ -752,11 +1024,11 @@ interface DataOmObservationEndPart {
 }
 ```
 
-兩個 extractor 欄位均為選填。完成事件可包含值、失敗資料、兩者兼有，亦可兩者皆無。`data-om-observation-end` 報告同步完成；`data-om-buffering-end` 則報告已完成的背景工作，其緩衝內容仍有待啟用，但 extractor metadata 已經持久保存。`DataOmBufferingEndPart` 包含相同的 extractor 欄位，而兩種類型均由 `@mastra/memory/processors` 匯出。consumer 範例請參閱[從串流讀取擷取值](/docs/memory/observational-memory#read-extracted-values-from-a-stream)。
+兩個提取器欄位都是可選的。完成可以包括值、失敗、兩者或兩者都不包含。`data-om-observation-end` reports synchronous completion. `data-om-buffering-end` reports completed background work whose buffered content still awaits activation, although extractor metadata is already persisted. `DataOmBufferingEndPart` carries the same extractor fields, and both types are exported from `@mastra/memory/processors`. See [Read extracted values from a stream](/docs/memory/observational-memory#read-extracted-values-from-a-stream) for a consumer example.
 
 ### `data-om-status` {/* #data-om-status */}
 
-每個 Agent 迴圈步驟會在模型生成前發出一次。它提供目前記憶狀態的快照，包括兩個上下文視窗的 token 使用量，以及任何非同步緩衝內容的狀態。
+在模型生成之前，每個Agent循環步驟發出一次。提供目前記憶體狀態的快照，包括上下文視窗的令牌使用情況以及任何非同步緩衝內容的狀態。
 
 ```typescript
 interface DataOmStatusPart {
@@ -801,9 +1073,9 @@ interface DataOmStatusPart {
 }
 ```
 
-`buffered.reflection.inputObservationTokens` 是傳送至 Reflector 的觀察結果大小。`buffered.reflection.observationTokens` 是壓縮後的結果，即反思啟用時用來取代這些觀察結果的內容大小。client 可利用這兩個值顯示壓縮比例。
+`buffered.reflection.inputObservationTokens`是發送到 Reflector 的觀測值的大小。`buffered.reflection.observationTokens` is the compressed result: the size of what will replace those observations when the reflection activates. A client can use these two values to show a compression ratio.
 
-client 可從原始值計算百分比及啟用後的估算值：
+客戶可以從原始值中得出百分比和激活後估計：
 
 ```typescript
 // Message window usage %
@@ -828,260 +1100,268 @@ if (inputObservationTokens > 0) {
 
 ### `data-om-observation-start` {/* #data-om-observation-start */}
 
-Observer 或 Reflector Agent 開始處理時發出。
+當觀察者或反射器Agent開始處理時發出。
 
 <PropertiesTable
   content={[
-  {
-    name: 'cycleId',
-    type: 'string',
-    description: '此週期的唯一 ID，供 start/end/failed 標記共用。',
-  },
-  {
-    name: 'operationType',
-    type: "'observation' | 'reflection'",
-    description: '此操作是觀察還是反思。',
-  },
-  { name: 'startedAt', type: 'string', description: '開始處理時的 ISO 時間戳記。' },
-  { name: 'tokensToObserve', type: 'number', description: '此批次正在處理的訊息 tokens（輸入）。' },
-  { name: 'recordId', type: 'string', description: 'OM 記錄 ID。' },
-  { name: 'threadId', type: 'string', description: '此 thread 的 ID。' },
-  { name: 'threadIds', type: 'string[]', description: '此批次的所有 thread ID（用於 resource scope）。' },
-  {
-    name: 'config',
-    type: 'ObservationMarkerConfig',
-    description: '進行觀察時 `messageTokens`、`observationTokens` 及 `scope` 的設定快照。',
-  },
+{
+  name: 'cycleId',
+  type: 'string',
+  description: 'Unique ID for this cycle — shared between start/end/failed markers.',
+},
+{
+  name: 'operationType',
+  type: "'observation' | 'reflection'",
+  description: 'Whether this is an observation or reflection operation.',
+},
+{ name: 'startedAt', type: 'string', description: 'ISO timestamp when processing started.' },
+{ name: 'tokensToObserve', type: 'number', description: 'Message tokens (input) being processed in this batch.' },
+{ name: 'recordId', type: 'string', description: 'The OM record ID.' },
+{ name: 'threadId', type: 'string', description: "This thread's ID." },
+{ name: 'threadIds', type: 'string[]', description: 'All thread IDs in this batch (for resource-scoped).' },
+{
+  name: 'config',
+  type: 'ObservationMarkerConfig',
+  description: 'Snapshot of `messageTokens`, `observationTokens`, and `scope` at observation time.',
+},
 ]}
 />
 
 ### `data-om-observation-end` {/* #data-om-observation-end */}
 
-觀察或反思成功完成時發出。
+當觀察或反射成功完成時發出。
 
 <PropertiesTable
   content={[
-  { name: 'cycleId', type: 'string', description: '與對應的 `start` 標記相符。' },
-  { name: 'operationType', type: "'observation' | 'reflection'", description: '已完成的操作類型。' },
-  { name: 'completedAt', type: 'string', description: '處理完成時的 ISO 時間戳記。' },
-  { name: 'durationMs', type: 'number', description: '持續時間（毫秒）。' },
-  { name: 'tokensObserved', type: 'number', description: '已處理的訊息 tokens（輸入）。' },
-  {
-    name: 'observationTokens',
-    type: 'number',
-    description: '經 Observer 壓縮後所得的觀察結果 tokens（輸出）。',
-  },
-  { name: 'observations', type: 'string', description: '產生的觀察結果文字。', isOptional: true },
-  { name: 'currentTask', type: 'string', description: 'Observer 擷取的目前任務。', isOptional: true },
-  {
-    name: 'suggestedResponse',
-    type: 'string',
-    description: 'Observer 擷取的建議回應。',
-    isOptional: true,
-  },
-  {
-    name: 'extractedValues',
-    type: 'Record<string, unknown>',
-    description: '此 OM 操作期間擷取的值，以 extractor slug 為 key。',
-    isOptional: true,
-  },
-  {
-    name: 'extractionFailures',
-    type: 'Array<{ slug: string; error: string }>',
-    description: '此 OM 操作中的 extractor 失敗資料。成功擷取的 extractor 值仍會包含在內。',
-    isOptional: true,
-  },
-  { name: 'recordId', type: 'string', description: 'OM 記錄 ID。' },
-  { name: 'threadId', type: 'string', description: '此 thread 的 ID。' },
+{ name: 'cycleId', type: 'string', description: 'Matches the corresponding `start` marker.' },
+{ name: 'operationType', type: "'observation' | 'reflection'", description: 'Type of operation that completed.' },
+{ name: 'completedAt', type: 'string', description: 'ISO timestamp when processing completed.' },
+{ name: 'durationMs', type: 'number', description: 'Duration in milliseconds.' },
+{ name: 'tokensObserved', type: 'number', description: 'Message tokens (input) that were processed.' },
+{
+  name: 'observationTokens',
+  type: 'number',
+  description: 'Resulting observation tokens (output) after the Observer compressed them.',
+},
+{ name: 'observations', type: 'string', description: 'The generated observations text.', isOptional: true },
+{ name: 'currentTask', type: 'string', description: 'Current task extracted by the Observer.', isOptional: true },
+{
+  name: 'suggestedResponse',
+  type: 'string',
+  description: 'Suggested response extracted by the Observer.',
+  isOptional: true,
+},
+{
+  name: 'extractedValues',
+  type: 'Record<string, unknown>',
+  description: 'Values extracted during this OM operation, keyed by extractor slug.',
+  isOptional: true,
+},
+{
+  name: 'extractionFailures',
+  type: 'Array<{ slug: string; error: string }>',
+  description: 'Extractor failures from this OM operation. Successful extractor values are still included.',
+  isOptional: true,
+},
+{ name: 'recordId', type: 'string', description: 'The OM record ID.' },
+{ name: 'threadId', type: 'string', description: "This thread's ID." },
 ]}
 />
 
 ### `data-om-observation-failed` {/* #data-om-observation-failed */}
 
-觀察或反思失敗時發出。系統會改用同步處理作為後備方案。
+當觀察或反射失敗時發出。系統回退到同步處理。
 
 <PropertiesTable
   content={[
-  { name: 'cycleId', type: 'string', description: '與對應的 `start` 標記相符。' },
-  { name: 'operationType', type: "'observation' | 'reflection'", description: '失敗的操作類型。' },
-  { name: 'failedAt', type: 'string', description: '發生失敗時的 ISO 時間戳記。' },
-  { name: 'durationMs', type: 'number', description: '發生失敗前的持續時間（毫秒）。' },
-  { name: 'tokensAttempted', type: 'number', description: '曾嘗試處理的訊息 tokens（輸入）。' },
-  { name: 'error', type: 'string', description: '錯誤訊息。' },
-  {
-    name: 'observations',
-    type: 'string',
-    description: '任何可供顯示的部分內容。',
-    isOptional: true,
-  },
-  { name: 'recordId', type: 'string', description: 'OM 記錄 ID。' },
-  { name: 'threadId', type: 'string', description: '此 thread 的 ID。' },
+{ name: 'cycleId', type: 'string', description: 'Matches the corresponding `start` marker.' },
+{ name: 'operationType', type: "'observation' | 'reflection'", description: 'Type of operation that failed.' },
+{ name: 'failedAt', type: 'string', description: 'ISO timestamp when the failure occurred.' },
+{ name: 'durationMs', type: 'number', description: 'Duration until failure in milliseconds.' },
+{ name: 'tokensAttempted', type: 'number', description: 'Message tokens (input) that were attempted.' },
+{ name: 'error', type: 'string', description: 'Error message.' },
+{
+  name: 'retrying',
+  type: 'true',
+  description:
+    'Set when a reflection attempt did not compress below its target and OM is retrying at a higher compression level. A new `start` marker follows, so this failure is not final. Absent on final failures.',
+  isOptional: true,
+},
+{
+  name: 'observations',
+  type: 'string',
+  description: 'Any partial content available for display.',
+  isOptional: true,
+},
+{ name: 'recordId', type: 'string', description: 'The OM record ID.' },
+{ name: 'threadId', type: 'string', description: "This thread's ID." },
 ]}
 />
 
 ### `data-om-buffering-start` {/* #data-om-buffering-start */}
 
-非同步緩衝處理在背景開始時發出。緩衝處理會在達到主要閾值前預先計算觀察結果或反思。
+當非同步緩衝在後台開始時發出。緩衝在達到主閾值之前預先計算觀察結果或反射。
 
 <PropertiesTable
   content={[
-  { name: 'cycleId', type: 'string', description: '此緩衝週期的唯一 ID。' },
-  { name: 'operationType', type: "'observation' | 'reflection'", description: '正在緩衝的操作類型。' },
-  { name: 'startedAt', type: 'string', description: '開始緩衝時的 ISO 時間戳記。' },
-  { name: 'tokensToBuffer', type: 'number', description: '此週期正在緩衝的訊息 tokens（輸入）。' },
-  { name: 'recordId', type: 'string', description: 'OM 記錄 ID。' },
-  { name: 'threadId', type: 'string', description: '此 thread 的 ID。' },
-  { name: 'threadIds', type: 'string[]', description: '正在緩衝的所有 thread ID（用於 resource scope）。' },
-  { name: 'config', type: 'ObservationMarkerConfig', description: '進行緩衝時的設定快照。' },
+{ name: 'cycleId', type: 'string', description: 'Unique ID for this buffering cycle.' },
+{ name: 'operationType', type: "'observation' | 'reflection'", description: 'Type of operation being buffered.' },
+{ name: 'startedAt', type: 'string', description: 'ISO timestamp when buffering started.' },
+{ name: 'tokensToBuffer', type: 'number', description: 'Message tokens (input) being buffered in this cycle.' },
+{ name: 'recordId', type: 'string', description: 'The OM record ID.' },
+{ name: 'threadId', type: 'string', description: "This thread's ID." },
+{ name: 'threadIds', type: 'string[]', description: 'All thread IDs being buffered (for resource-scoped).' },
+{ name: 'config', type: 'ObservationMarkerConfig', description: 'Snapshot of config at buffering time.' },
 ]}
 />
 
 ### `data-om-buffering-end` {/* #data-om-buffering-end */}
 
-非同步緩衝處理完成時發出。內容已儲存，但尚未在主要上下文中啟用。
+異步緩衝完成時發出。內容已儲存但尚未在主上下文中啟動。
 
 <PropertiesTable
   content={[
-  { name: 'cycleId', type: 'string', description: '與對應的 `buffering-start` 標記相符。' },
-  {
-    name: 'operationType',
-    type: "'observation' | 'reflection'",
-    description: '已緩衝的操作類型。',
-  },
-  { name: 'completedAt', type: 'string', description: '緩衝完成時的 ISO 時間戳記。' },
-  { name: 'durationMs', type: 'number', description: '持續時間（毫秒）。' },
-  { name: 'tokensBuffered', type: 'number', description: '已緩衝的訊息 tokens（輸入）。' },
-  {
-    name: 'bufferedTokens',
-    type: 'number',
-    description: '經 Observer 壓縮後的觀察結果 tokens（輸出）。',
-  },
-  { name: 'observations', type: 'string', description: '已緩衝的內容。', isOptional: true },
-  {
-    name: 'extractedValues',
-    type: 'Record<string, unknown>',
-    description: '此已緩衝 OM 操作期間擷取的值，以 extractor slug 為 key。',
-    isOptional: true,
-  },
-  {
-    name: 'extractionFailures',
-    type: 'Array<{ slug: string; error: string }>',
-    description: '此已緩衝 OM 操作中的 extractor 失敗資料。成功擷取的 extractor 值仍會包含在內。',
-    isOptional: true,
-  },
-  { name: 'recordId', type: 'string', description: 'OM 記錄 ID。' },
-  { name: 'threadId', type: 'string', description: '此 thread 的 ID。' },
+{ name: 'cycleId', type: 'string', description: 'Matches the corresponding `buffering-start` marker.' },
+{
+  name: 'operationType',
+  type: "'observation' | 'reflection'",
+  description: 'Type of operation that was buffered.',
+},
+{ name: 'completedAt', type: 'string', description: 'ISO timestamp when buffering completed.' },
+{ name: 'durationMs', type: 'number', description: 'Duration in milliseconds.' },
+{ name: 'tokensBuffered', type: 'number', description: 'Message tokens (input) that were buffered.' },
+{
+  name: 'bufferedTokens',
+  type: 'number',
+  description: 'Observation tokens (output) after the Observer compressed them.',
+},
+{ name: 'observations', type: 'string', description: 'The buffered content.', isOptional: true },
+{
+  name: 'extractedValues',
+  type: 'Record<string, unknown>',
+  description: 'Values extracted during this buffered OM operation, keyed by extractor slug.',
+  isOptional: true,
+},
+{
+  name: 'extractionFailures',
+  type: 'Array<{ slug: string; error: string }>',
+  description: 'Extractor failures from this buffered OM operation. Successful extractor values are still included.',
+  isOptional: true,
+},
+{ name: 'recordId', type: 'string', description: 'The OM record ID.' },
+{ name: 'threadId', type: 'string', description: "This thread's ID." },
 ]}
 />
 
 ### `data-om-buffering-failed` {/* #data-om-buffering-failed */}
 
-非同步緩衝處理失敗時發出。達到閾值時，系統會改用同步處理作為後備方案。
+當非同步緩衝失敗時發出。當達到閾值時，系統回退到同步處理。
 
 <PropertiesTable
   content={[
-  { name: 'cycleId', type: 'string', description: '與對應的 `buffering-start` 標記相符。' },
-  { name: 'operationType', type: "'observation' | 'reflection'", description: '失敗的操作類型。' },
-  { name: 'failedAt', type: 'string', description: '發生失敗時的 ISO 時間戳記。' },
-  { name: 'durationMs', type: 'number', description: '發生失敗前的持續時間（毫秒）。' },
-  { name: 'tokensAttempted', type: 'number', description: '曾嘗試緩衝的訊息 tokens（輸入）。' },
-  { name: 'error', type: 'string', description: '錯誤訊息。' },
-  { name: 'observations', type: 'string', description: '任何部分內容。', isOptional: true },
-  { name: 'recordId', type: 'string', description: 'OM 記錄 ID。' },
-  { name: 'threadId', type: 'string', description: '此 thread 的 ID。' },
+{ name: 'cycleId', type: 'string', description: 'Matches the corresponding `buffering-start` marker.' },
+{ name: 'operationType', type: "'observation' | 'reflection'", description: 'Type of operation that failed.' },
+{ name: 'failedAt', type: 'string', description: 'ISO timestamp when the failure occurred.' },
+{ name: 'durationMs', type: 'number', description: 'Duration until failure in milliseconds.' },
+{ name: 'tokensAttempted', type: 'number', description: 'Message tokens (input) that were attempted to buffer.' },
+{ name: 'error', type: 'string', description: 'Error message.' },
+{ name: 'observations', type: 'string', description: 'Any partial content.', isOptional: true },
+{ name: 'recordId', type: 'string', description: 'The OM record ID.' },
+{ name: 'threadId', type: 'string', description: "This thread's ID." },
 ]}
 />
 
 ### `data-om-activation` {/* #data-om-activation */}
 
-已緩衝的觀察結果或反思啟用（移至作用中的上下文視窗）時發出。這項操作會即時完成，不涉及 LLM 呼叫。
+當緩衝觀察或反射被啟動（移動到活動上下文視窗）時發出。這是即時操作：不涉及 LLM 呼叫。
 
 <PropertiesTable
   content={[
-  { name: 'cycleId', type: 'string', description: '此啟用事件的唯一 ID。' },
-  { name: 'operationType', type: "'observation' | 'reflection'", description: '已啟用的內容類型。' },
-  { name: 'activatedAt', type: 'string', description: '啟用時的 ISO 時間戳記。' },
-  { name: 'chunksActivated', type: 'number', description: '已啟用的緩衝內容組數。' },
-  {
-    name: 'tokensActivated',
-    type: 'number',
-    description:
-      '來自已啟用內容組的訊息 tokens（輸入）。啟用觀察結果時，這些 tokens 會從訊息視窗移除；啟用反思時，則表示被壓縮的觀察結果 tokens。',
-  },
-  { name: 'observationTokens', type: 'number', description: '啟用後所得的觀察結果 tokens。' },
-  { name: 'messagesActivated', type: 'number', description: '透過啟用而被觀察的訊息數目。' },
-  { name: 'generationCount', type: 'number', description: '目前的反思世代計數。' },
-  { name: 'observations', type: 'string', description: '已啟用的觀察結果文字。', isOptional: true },
-  {
-    name: 'triggeredBy',
-    type: "'threshold' | 'ttl' | 'provider_change'",
-    description: '啟用是因超過閾值、`activateAfterIdle` 到期，還是模型/provider 變更而觸發。',
-    isOptional: true,
-  },
-  {
-    name: 'lastActivityAt',
-    type: 'number',
-    description: '用於 TTL 檢查的最後一個 assistant 訊息部分之 Unix 毫秒時間戳記。',
-    isOptional: true,
-  },
-  {
-    name: 'ttlExpiredMs',
-    type: 'number',
-    description: '觸發啟用時，超出 `activateAfterIdle` 的時長。',
-    isOptional: true,
-  },
-  {
-    name: 'previousModel',
-    type: 'string',
-    description: '觸發啟用的上一個 assistant 模型識別符（例如 `openai/gpt-4o`）。',
-    isOptional: true,
-  },
-  {
-    name: 'currentModel',
-    type: 'string',
-    description: '觸發啟用的目前 actor 模型識別符。',
-    isOptional: true,
-  },
-  { name: 'recordId', type: 'string', description: 'OM 記錄 ID。' },
-  { name: 'threadId', type: 'string', description: '此 thread 的 ID。' },
-  { name: 'config', type: 'ObservationMarkerConfig', description: '啟用時的設定快照。' },
+{ name: 'cycleId', type: 'string', description: 'Unique ID for this activation event.' },
+{ name: 'operationType', type: "'observation' | 'reflection'", description: 'Type of content activated.' },
+{ name: 'activatedAt', type: 'string', description: 'ISO timestamp when activation occurred.' },
+{ name: 'chunksActivated', type: 'number', description: 'Number of buffered chunks activated.' },
+{
+  name: 'tokensActivated',
+  type: 'number',
+  description:
+    'Message tokens (input) from activated chunks. For observation activation, these are removed from the message window. For reflection activation, this is the observation tokens that were compressed.',
+},
+{ name: 'observationTokens', type: 'number', description: 'Resulting observation tokens after activation.' },
+{ name: 'messagesActivated', type: 'number', description: 'Number of messages that were observed via activation.' },
+{ name: 'generationCount', type: 'number', description: 'Current reflection generation count.' },
+{ name: 'observations', type: 'string', description: 'The activated observations text.', isOptional: true },
+{
+  name: 'triggeredBy',
+  type: "'threshold' | 'ttl' | 'provider_change'",
+  description:
+    'Whether activation was triggered by threshold crossing, `activateAfterIdle` expiry, or a model/provider change.',
+  isOptional: true,
+},
+{
+  name: 'lastActivityAt',
+  type: 'number',
+  description: 'Unix-ms timestamp of the last assistant message part used for TTL checks.',
+  isOptional: true,
+},
+{
+  name: 'ttlExpiredMs',
+  type: 'number',
+  description: 'How long `activateAfterIdle` had been exceeded when activation fired.',
+  isOptional: true,
+},
+{
+  name: 'previousModel',
+  type: 'string',
+  description: 'Previous assistant model identifier that triggered activation (e.g. `openai/gpt-4o`).',
+  isOptional: true,
+},
+{
+  name: 'currentModel',
+  type: 'string',
+  description: 'Current actor model identifier that triggered activation.',
+  isOptional: true,
+},
+{ name: 'recordId', type: 'string', description: 'The OM record ID.' },
+{ name: 'threadId', type: 'string', description: "This thread's ID." },
+{ name: 'config', type: 'ObservationMarkerConfig', description: 'Snapshot of config at activation time.' },
 ]}
 />
 
 ### `data-om-thread-update` {/* #data-om-thread-update */}
 
-Observer 更新 thread 標題時發出。只會在啟用 `observation.threadTitle` 時發出。
+當觀察者更新線程標題時發出。僅在以下情況下發出`observation.threadTitle` is enabled.
 
 <PropertiesTable
   content={[
-  {
-    name: 'cycleId',
-    type: 'string',
-    description: '此觀察週期的唯一 ID，與觀察標記共用。',
-  },
-  { name: 'threadId', type: 'string', description: '已更新的 thread ID。' },
-  {
-    name: 'oldTitle',
-    type: 'string',
-    description: '先前的 thread 標題。如 thread 沒有標題，則為 undefined。',
-    isOptional: true,
-  },
-  { name: 'newTitle', type: 'string', description: '新的 thread 標題。' },
-  { name: 'timestamp', type: 'string', description: '此更新發生的時間。' },
+{
+  name: 'cycleId',
+  type: 'string',
+  description: 'Unique ID for this observation cycle — shared with observation markers.',
+},
+{ name: 'threadId', type: 'string', description: 'The thread ID that was updated.' },
+{
+  name: 'oldTitle',
+  type: 'string',
+  description: 'The previous thread title. Undefined if the thread had no title.',
+  isOptional: true,
+},
+{ name: 'newTitle', type: 'string', description: 'The new thread title.' },
+{ name: 'timestamp', type: 'string', description: 'When this update occurred.' },
 ]}
 />
 
 ## 獨立使用 {/* #standalone-usage */}
 
-大部分使用者都應使用上文的 `Memory` 類別。直接使用 `ObservationalMemory` 主要適用於效能基準測試、實驗，或需要控制它與其他 processor（例如 [guardrails](/docs/agents/guardrails)）之間的排序時。
+大多數應用程式應該使用`Memory` class. Use the `ObservationalMemory` engine directly for benchmarking, experiments, or when OM must run in a specific order with other processors such as [guardrails](/docs/agents/guardrails).
 
-`ObservationalMemory` 類別是核心引擎；如要將它附加至 Agent，請用 `ObservationalMemoryProcessor` 將它包裝起來，而該 processor 需要一個 `Memory` 實例來載入及持久保存訊息。請注意，storage adapter 將 `stores.memory` 的型別定義為可選，因此需要使用非空斷言（或在執行階段檢查）：
+將引擎包裹在`ObservationalMemoryProcessor`, which needs a `Memory` instance to load and persist messages. `stores.memory` is typed as optional on storage adapters, so assert or check it:
 
 ```typescript title="src/mastra/agents/agent.ts"
-import { ObservationalMemory, ObservationalMemoryProcessor } from '@mastra/memory/processors'
-import { Memory } from '@mastra/memory'
 import { Agent } from '@mastra/core/agent'
 import { LibSQLStore } from '@mastra/libsql'
+import { Memory } from '@mastra/memory'
+import { ObservationalMemory, ObservationalMemoryProcessor } from '@mastra/memory/processors'
 
 const storage = new LibSQLStore({
   id: 'my-storage',
@@ -1094,7 +1374,6 @@ const om = new ObservationalMemory({
   storage: storage.stores.memory!,
   memory,
   model: '__GATEWAY_GOOGLE_MODEL_FLASH__',
-  scope: 'resource',
   observation: {
     messageTokens: 20_000,
   },
@@ -1107,266 +1386,358 @@ const omProcessor = new ObservationalMemoryProcessor(om, memory)
 
 export const agent = new Agent({
   id: 'my-agent',
-  name: 'my-agent',
+  name: 'My Agent',
   instructions: 'You are a helpful assistant.',
-  model: '__GATEWAY_OPENAI_MODEL_MINI__',
+  model: '__GATEWAY_OPENAI_MODEL_LUNA__',
   inputProcessors: [omProcessor],
   outputProcessors: [omProcessor],
 })
 ```
 
-### 獨立設定 {/* #standalone-config */}
+該引擎採用與`observationalMemory` config, plus `storage`, `onDebugEvent` and `obscureThreadIds`. See [standalone config](#standalone-config).
 
-獨立的 `ObservationalMemory` 類別接受上文 `observationalMemory` 設定物件的所有相同選項，以及以下選項：
+`om.observe()`僅在待處理令牌達到閾值時進行觀察。經過`force: true` to observe pending messages now. The bypass applies to that call only.
+
+```typescript
+const result = await om.observe({ threadId, resourceId, force: true })
+// result.observed is true when pending messages were observed
+```
+
+Agent不需要它來從上下文視窗錯誤中恢復。[Context-overflow recovery](/docs/memory/observational-memory#context-overflow-recovery) handles that.
+
+### 獨立配置 {/* #standalone-config */}
+
+獨立式`ObservationalMemory` class accepts all the same options as the `observationalMemory` config object above, plus the following:
 
 <PropertiesTable
   content={[
-  {
-    name: 'storage',
-    type: 'MemoryStorage',
-    description:
-      '用於持久保存觀察結果的 storage adapter。必須是 MemoryStorage 實例（來自 `MastraStorage.stores.memory`）。',
-    isOptional: false,
-  },
-  {
-    name: 'onDebugEvent',
-    type: '(event: ObservationDebugEvent) => void',
-    description: '觀察事件的除錯回呼。每當發生觀察相關事件時便會呼叫，有助除錯及了解觀察流程。',
-    isOptional: true,
-  },
-  {
-    name: 'obscureThreadIds',
-    type: 'boolean',
-    description:
-      '啟用後，thread ID 會先經過雜湊處理，再加入觀察情境。這可防止 LLM 識別 thread 識別碼中的模式。透過 Memory 類別使用 resource scope 時會自動啟用。',
-    isOptional: true,
-    defaultValue: 'false',
-  },
+{
+  name: 'storage',
+  type: 'MemoryStorage',
+  description:
+    'Storage adapter for persisting observations. Must be a MemoryStorage instance (from `MastraStorage.stores.memory`).',
+  isOptional: false,
+},
+{
+  name: 'onDebugEvent',
+  type: '(event: ObservationDebugEvent) => void',
+  description:
+    'Debug callback for observation events. Called whenever observation-related events occur. Useful for debugging and understanding the observation flow.',
+  isOptional: true,
+},
+{
+  name: 'obscureThreadIds',
+  type: 'boolean',
+  description:
+    'When enabled, thread IDs are hashed before being included in observation context. This prevents the LLM from recognizing patterns in thread identifiers. Automatically enabled when using resource scope through the Memory class.',
+  isOptional: true,
+  defaultValue: 'false',
+},
 ]}
 />
 
-## Recall tool {/* #recall-tool */}
+## 召回Tool {/* #recall-tool */}
 
-設定 `retrieval`（任何 truthy 值）後，系統會註冊一個 `recall` tool，讓 Agent 可以逐頁瀏覽觀察群組範圍背後的原始訊息。預設情況下（scope 為 `'resource'`），此 tool 支援列出 thread（`mode: "threads"`）、瀏覽其他 thread（`threadId`），以及跨 thread 搜尋。使用 `retrieval: { vector: true }` 時，可進行語意搜尋（`mode: "search"`）。設定 `scope: 'thread'`，可將此 tool 限制為只存取目前的 thread。此 tool 會自動加入 Agent 的 tool 清單。
+什麼時候`retrieval` is truthy, Mastra registers a `recall` tool that pages through raw messages behind observation group ranges. With the default resource scope, the tool can list threads (`mode: "threads"`) and browse another thread through `threadId`. It also supports cross-thread search. Set `retrieval: { vector: true }` for semantic search (`mode: "search"`), or use `scope: 'thread'` to restrict the tool to the current thread. The tool is automatically added to the agent.
 
-Mastra 亦會將能感知 scope 的使用指示注入 Agent 的情境。對於使用 `vector: true` 的 resource scope，這些指示涵蓋如何在 `search`、`threads` 與 `messages` 之間選擇路徑，包括當搜尋結果不合適時，改為探索 thread。若沒有 `vector: true`，指示只會涵蓋瀏覽 `threads` 與 `messages`，因此不會引導 Agent 使用尚未設定的搜尋模式。即使尚未存在任何觀察群組，resource scope 的指示亦會注入，讓 Agent 從第一則訊息起便可瀏覽其他 thread。使用 `retrieval: { instructions: '...' }`，可在內置指示之後加入應用程式專用指引。
+啟用檢索後，OM 也會注入指令，告訴Agent程式如何使用召回：何時驗證詳細資訊、如何搜尋和尋呼以及何時讀取原始訊息。它們從第一輪就包含在內，包括唯讀運行，並且僅描述配置的模式。反射組被標記`_kind: reflection_` so the agent treats them as lossy summaries. Use `retrieval: { instructions: '...' }` to append your own guidance after the built-in instructions.
+
+### 觀察頁 {/* #observation-pages */}
+
+`mode: "observations"` reads the original observation groups around a search hit, including groups that reflection condensed away and buffered groups that haven't been activated yet. Copy the hit's `groupId` exactly as shown and, in resource scope, its `threadId`:
+
+```json
+{
+  "mode": "observations",
+  "threadId": "source-thread-id",
+  "groupId": "group-id-from-search",
+  "direction": "after",
+  "limit": 5
+}
+```
+
+使用`direction: "before"` to page backward, or omit `direction` to include the anchor group itself. Pages return `{ results, count, hasMore }` with continuation calls, and say when newer messages haven't been observed yet.
+
+### 搜尋結果 {/* #search-results */}
+
+搜尋結果按日期列出，並共享 2,000 個標記的文字限額，因此長組會被縮短，從最匹配查詢的行開始。已經在Agent上下文中的結果作為短參考返回，排名較低的命中填充釋放的空間。`limit` counts excerpts, not references, so `count` can exceed `limit`.
+
+### 儲存要求 {/* #storage-requirements */}
+
+搜尋結果中的群組 ID 包括保存它們的記錄 (`groupId@recordId`), so paging reads a single record. Groups indexed before this change still work, but page by scanning the thread's observation history. Paging needs a storage adapter that supports observation history filters, so upgrade it together with `@mastra/memory`. Convex users need to redeploy their Mastra server functions.
 
 ### 參數 {/* #parameters */}
 
 <PropertiesTable
   content={[
-  {
-    name: 'mode',
-    type: "'messages' | 'threads' | 'search'",
-    isOptional: true,
-    defaultValue: "'messages'",
-    description:
-      '要擷取的內容。`"messages"`（預設）逐頁瀏覽訊息記錄。`"threads"` 列出目前使用者的所有 thread。`"search"` 按語意相似度在所有 thread 中尋找訊息（需要 vector store 及 embedder）。',
-  },
-  {
-    name: 'query',
-    type: 'string',
-    isOptional: true,
-    description: '`mode: "search"` 的搜尋查詢。在目前使用者的所有 thread 中尋找與此文字語意相似的訊息。',
-  },
-  {
-    name: 'cursor',
-    type: 'string',
-    isOptional: true,
-    description:
-      '用作 recall 查詢定位點的訊息 ID。從觀察群組範圍擷取起始或結束 ID（例如從 `_range: \\`startId:endId\\`_` 使用 `startId` 或 `endId`）。如果直接傳入範圍字串，此 tool 會傳回提示，說明如何擷取正確的 ID。當同時省略 `cursor` 與 `threadId`，並使用 `mode: "messages"` 時，此 tool 會從 `anchor` 所設定的位置開始瀏覽目前的 thread。',
-  },
-  {
-    name: 'threadId',
-    type: 'string',
-    isOptional: true,
-    description:
-      '按 ID 瀏覽另一個 thread，或傳入 `"current"` 以使用使用中的 thread。請先使用 `mode: "threads"` 尋找 thread ID。如果提供此參數但沒有提供 `cursor`，便會從 thread 開頭開始讀取。',
-  },
-  {
-    name: 'anchor',
-    type: "'start' | 'end'",
-    isOptional: true,
-    defaultValue: "'start'",
-    description: '對於 `mode: "messages"`，如沒有 `cursor`，便從 thread 開頭（最舊優先）或結尾（最新優先）開始分頁。',
-  },
-  {
-    name: 'page',
-    type: 'number',
-    isOptional: true,
-    defaultValue: '1',
-    description:
-      '分頁偏移量。對於訊息：正值從 cursor 向前分頁，負值向後分頁。對於 thread：頁碼（從 0 開始）。訊息模式會將 `0` 視為 `1`。',
-  },
-  {
-    name: 'limit',
-    type: 'number',
-    isOptional: true,
-    defaultValue: '20',
-    description: '每頁傳回的項目數目上限。',
-  },
-  {
-    name: 'detail',
-    type: "'low' | 'high'",
-    isOptional: true,
-    defaultValue: "'low'",
-    description:
-      "控制每個訊息部分顯示多少內容。`'low'` 顯示截短的文字及附有位置索引（`[p0]`、`[p1]`）的 tool 名稱。`'high'` 顯示包括 tool 引數及結果在內的完整內容，每次呼叫最多顯示一個部分，並附有繼續提示。",
-  },
-  {
-    name: 'partType',
-    type: "'text' | 'tool-call' | 'tool-result' | 'reasoning' | 'image' | 'file'",
-    isOptional: true,
-    description: '篩選結果，只包括此類型的訊息部分。只適用於 `mode: "messages"`。',
-  },
-  {
-    name: 'toolName',
-    type: 'string',
-    isOptional: true,
-    description: '篩選結果，只包括符合此 tool 名稱的 tool-call 及 tool-result 部分。只適用於 `mode: "messages"`。',
-  },
-  {
-    name: 'partIndex',
-    type: 'number',
-    isOptional: true,
-    description:
-      '按位置索引擷取單一訊息部分的完整詳情。當低詳情 recall 在 `[p1]` 顯示值得留意的部分時使用此參數——以 `partIndex: 1` 再次呼叫，即可查看完整內容，而毋須載入每個部分。',
-  },
-  {
-    name: 'before',
-    type: 'string',
-    isOptional: true,
-    description:
-      '只適用於 `mode: "threads"`。篩選在此日期之前建立的 thread。接受 ISO 8601 格式（例如 `"2026-03-15"`、`"2026-03-10T00:00:00Z"`）。',
-  },
-  {
-    name: 'after',
-    type: 'string',
-    isOptional: true,
-    description:
-      '只適用於 `mode: "threads"`。篩選在此日期之後建立的 thread。接受 ISO 8601 格式（例如 `"2026-03-01"`、`"2026-03-10T00:00:00Z"`）。',
-  },
+{
+  name: 'mode',
+  type: "'messages' | 'threads' | 'search' | 'observations'",
+  isOptional: true,
+  defaultValue: "'messages'",
+  description:
+    'What to retrieve. `"messages"` (default) pages through message history. `"threads"` lists threads for the current user. `"search"` finds messages by semantic similarity (requires a vector store, plus an embedder unless the store generates embeddings itself). `"observations"` pages original observation groups around a search hit.',
+},
+{
+  name: 'groupId',
+  type: 'string',
+  isOptional: true,
+  description:
+    'Required for observations mode. Copy the observation group ID exactly from a search result or continuation call. IDs shown as `groupId@recordId` let paging read the record directly; a plain group ID also works.',
+},
+{
+  name: 'direction',
+  type: "'before' | 'after'",
+  isOptional: true,
+  description:
+    'For observations mode: return groups strictly before or after the anchor group. Omit to include the anchor and following groups.',
+},
+{
+  name: 'query',
+  type: 'string',
+  isOptional: true,
+  description:
+    'Search query for `mode: "search"`. Finds messages semantically similar to this text across all threads for the current user.',
+},
+{
+  name: 'cursor',
+  type: 'string',
+  isOptional: true,
+  description:
+    'A message ID to anchor the recall query. Extract the start or end ID from an observation group range (e.g. from `_range: \\`startId:endId\\`_`, use either `startId` or `endId`). If a range string is passed directly, the tool returns a hint explaining how to extract the correct ID. When both `cursor` and `threadId` are omitted for `mode: "messages"`, the tool browses the current thread from the position set by `anchor`.',
+},
+{
+  name: 'threadId',
+  type: 'string',
+  isOptional: true,
+  description:
+    'Browse a different thread by its ID, or pass `"current"` for the active thread. Use `mode: "threads"` first to discover thread IDs. When provided without a `cursor`, reading starts from the beginning of the thread.',
+},
+{
+  name: 'anchor',
+  type: "'start' | 'end'",
+  isOptional: true,
+  defaultValue: "'start'",
+  description:
+    'For `mode: "messages"` without a `cursor`, page from the start (oldest-first) or end (newest-first) of the thread.',
+},
+{
+  name: 'page',
+  type: 'number',
+  isOptional: true,
+  defaultValue: '1',
+  description:
+    'Pagination offset. For messages: positive values page forward from cursor, negative values page backward. For threads: page number (0-indexed). `0` is treated as `1` for messages.',
+},
+{
+  name: 'limit',
+  type: 'number',
+  isOptional: true,
+  defaultValue: '20',
+  description:
+    'Page size, from 1 to 20. Defaults to 20 for messages and 5 groups for observations. Search defaults to 10 excerpts, plus compact references for evidence already in context. Bounded backfill can return fewer excerpts.',
+},
+{
+  name: 'detail',
+  type: "'low' | 'high'",
+  isOptional: true,
+  defaultValue: "'low'",
+  description:
+    "Controls how much content is shown per message part. `'low'` shows truncated text and tool names with positional indices (`[p0]`, `[p1]`). `'high'` shows full content including tool arguments and results, clamped to one part per call with continuation hints. Image and file parts show their filename, media type, and stored URL or provider file ID so the agent can reuse the attachment. Inline file data such as base64 or data URIs is omitted. Pass `viewAttachment` with `cursor` and `partIndex` to send inline attachment data to the model.",
+},
+{
+  name: 'partType',
+  type: "'text' | 'tool-call' | 'tool-result' | 'reasoning' | 'image' | 'file'",
+  isOptional: true,
+  description: 'Filter results to only include message parts of this type. Only applies to `mode: "messages"`.',
+},
+{
+  name: 'toolName',
+  type: 'string',
+  isOptional: true,
+  description:
+    'Filter results to only include tool-call and tool-result parts matching this tool name. Only applies to `mode: "messages"`.',
+},
+{
+  name: 'partIndex',
+  type: 'number',
+  isOptional: true,
+  description:
+    'Fetch a single message part at full detail by its positional index. Use this when a low-detail recall shows an interesting part at `[p1]` — call again with `partIndex: 1` to see the full content without loading every part.',
+},
+{
+  name: 'charOffset',
+  type: 'number',
+  isOptional: true,
+  defaultValue: '0',
+  description:
+    'Character position to continue reading a truncated single part. Only applies with `cursor` and `partIndex`. When a part is larger than the token budget, the result includes `nextCharOffset` — pass that exact value here in the next call to read the following chunk. The chunks concatenate to the original part text.',
+},
+{
+  name: 'viewAttachment',
+  type: 'boolean',
+  isOptional: true,
+  defaultValue: 'false',
+  description:
+    'Show the attachment itself rather than only describing it. Requires `cursor` and `partIndex`, and applies when that part is an `image` or `file`. Inline data such as base64 or data URIs is sent as a native media part. Attachments stored as remote URLs or provider file IDs, media types outside `image/*` and `application/pdf`, and oversized payloads come back as an explanation instead.',
+},
+{
+  name: 'before',
+  type: 'string',
+  isOptional: true,
+  description:
+    'Filter to threads created before this date in threads mode, or observations dated before it in search mode. Accepts ISO 8601 format (e.g. `"2026-03-15"`, `"2026-03-10T00:00:00Z"`).',
+},
+{
+  name: 'after',
+  type: 'string',
+  isOptional: true,
+  description:
+    'Filter to threads created after this date in threads mode, or observations dated after it in search mode. Accepts ISO 8601 format (e.g. `"2026-03-01"`, `"2026-03-10T00:00:00Z"`).',
+},
 ]}
 />
 
-### 傳回值（messages 模式） {/* #returns-messages-mode */}
+### 返回（訊息模式） {/* #returns-messages-mode */}
 
 <PropertiesTable
   content={[
-  {
-    name: 'messages',
-    type: 'string',
-    description: '已格式化的訊息內容。格式取決於 `detail` 層級。',
-  },
-  {
-    name: 'count',
-    type: 'number',
-    description: '此頁的訊息數目。',
-  },
-  {
-    name: 'cursor',
-    type: 'string',
-    description: '此查詢所用的 cursor 訊息 ID。',
-  },
-  {
-    name: 'page',
-    type: 'number',
-    description: '傳回的頁碼。',
-  },
-  {
-    name: 'limit',
-    type: 'number',
-    description: '此查詢所用的 limit。',
-  },
-  {
-    name: 'detail',
-    type: "'low' | 'high'",
-    description: '此查詢所用的 detail 層級。',
-  },
-  {
-    name: 'hasNextPage',
-    type: 'boolean',
-    description: '此頁之後是否還有更多訊息。',
-  },
-  {
-    name: 'hasPrevPage',
-    type: 'boolean',
-    description: '此頁之前是否還有更多訊息。',
-  },
-  {
-    name: 'truncated',
-    type: 'boolean',
-    isOptional: true,
-    description:
-      '當輸出受 token 預算上限限制時，此欄位會存在並為 `true`。Agent 可透過分頁或使用 `partIndex` 存取餘下內容。',
-  },
-  {
-    name: 'tokenOffset',
-    type: 'number',
-    isOptional: true,
-    description: '當 `truncated` 為 true 時，被刪減的約略 token 數目。',
-  },
+{
+  name: 'messages',
+  type: 'string',
+  description: 'Formatted message content. Format depends on the `detail` level.',
+},
+{
+  name: 'count',
+  type: 'number',
+  description: 'Number of messages in this page.',
+},
+{
+  name: 'cursor',
+  type: 'string',
+  description: 'The cursor message ID used for this query.',
+},
+{
+  name: 'page',
+  type: 'number',
+  description: 'The page number returned.',
+},
+{
+  name: 'limit',
+  type: 'number',
+  description: 'The limit used for this query.',
+},
+{
+  name: 'detail',
+  type: "'low' | 'high'",
+  description: 'The detail level used for this query.',
+},
+{
+  name: 'hasNextPage',
+  type: 'boolean',
+  description: 'Whether more messages exist after this page.',
+},
+{
+  name: 'hasPrevPage',
+  type: 'boolean',
+  description: 'Whether more messages exist before this page.',
+},
+{
+  name: 'truncated',
+  type: 'boolean',
+  isOptional: true,
+  description:
+    'Present and `true` when the output was capped by the token budget. The agent can paginate or use `partIndex` to access remaining content. When a single part is itself too large, the `partIndex` result includes `nextCharOffset` for continuing within the part.',
+},
+{
+  name: 'tokenOffset',
+  type: 'number',
+  isOptional: true,
+  description: 'Approximate number of tokens that were trimmed when `truncated` is true.',
+},
+{
+  name: 'charOffset',
+  type: 'number',
+  isOptional: true,
+  description:
+    'On single-part results (`partIndex`), the character position this chunk starts at. `0` unless the call passed a `charOffset`.',
+},
+{
+  name: 'nextCharOffset',
+  type: 'number',
+  isOptional: true,
+  description:
+    'On single-part results, present when the part was truncated and more content remains. Pass this value as `charOffset` in the next call to continue reading from where this chunk ended.',
+},
+{
+  name: 'note',
+  type: 'string',
+  isOptional: true,
+  description: 'On truncated single-part results, the exact follow-up call for retrieving the next chunk.',
+},
 ]}
 />
 
-### 傳回值（threads 模式） {/* #returns-threads-mode */}
+### 返回（線程模式） {/* #returns-threads-mode */}
 
 <PropertiesTable
   content={[
-  {
-    name: 'threads',
-    type: 'string',
-    description: '已格式化的 thread 清單。每個 thread 都會顯示其標題、ID 及日期。目前的 thread 會以 `← current` 標示。',
-  },
-  {
-    name: 'count',
-    type: 'number',
-    description: '傳回的 thread 數目。',
-  },
-  {
-    name: 'page',
-    type: 'number',
-    description: '傳回的頁碼。',
-  },
-  {
-    name: 'hasMore',
-    type: 'boolean',
-    description: '下一頁是否還有更多 thread。',
-  },
+{
+  name: 'threads',
+  type: 'string',
+  description:
+    'Formatted thread listing. Each thread shows its title, ID, and dates. The current thread is marked with `← current`.',
+},
+{
+  name: 'count',
+  type: 'number',
+  description: 'Number of threads returned.',
+},
+{
+  name: 'page',
+  type: 'number',
+  description: 'The page number returned.',
+},
+{
+  name: 'hasMore',
+  type: 'boolean',
+  description: 'Whether more threads exist on the next page.',
+},
 ]}
 />
 
-### 傳回值（search 模式） {/* #returns-search-mode */}
+### 返回（搜尋模式） {/* #returns-search-mode */}
 
 <PropertiesTable
   content={[
-  {
-    name: 'results',
-    type: 'string',
-    description:
-      '按 thread 分組的已格式化搜尋結果。每項結果都會顯示 thread 標題、thread ID、相關度分數、訊息預覽，以及用於瀏覽該 thread 的 cursor ID。',
-  },
-  {
-    name: 'count',
-    type: 'number',
-    description: '找到的相符訊息數目。',
-  },
+{
+  name: 'results',
+  type: 'string',
+  description:
+    'Search hits displayed by observation date, with excerpts or compact references for evidence already in context. Full entries include thread details, a relevance score, an observation group ID, and source message ranges.',
+},
+{
+  name: 'count',
+  type: 'number',
+  description:
+    'Number of displayed observation groups, including compact references. Can exceed limit when search fills covered hits with additional excerpts.',
+},
 ]}
 />
 
-### ModelByInputTokens {/* #modelbyinputtokens */}
+### 按輸入令牌建模 {/* #modelbyinputtokens */}
 
-`ModelByInputTokens` 根據輸入 token 數目選擇模型。它會選擇能涵蓋實際輸入大小的最小閾值所對應的模型。
+`ModelByInputTokens`根據輸入令牌計數選擇模型。它選擇覆蓋實際輸入大小的最小閾值的模型。
 
-#### 建構函式 {/* #constructor */}
+#### 建構函數 {/* #constructor */}
 
 ```typescript
 new ModelByInputTokens(config)
 ```
 
-其中 `config` 是一個含有 `upTo` 鍵的物件，這些鍵會將 token 閾值（數字）對應至目標模型。
+在哪裡`config` is an object with `upTo` keys that map token thresholds (numbers) to model targets. Each tier needs a concrete model ID, not `"auto"`.
 
-#### 範例 {/* #example */}
+#### 例子 {/* #example */}
 
 ```typescript
 import { ModelByInputTokens } from '@mastra/memory'
@@ -1374,7 +1745,7 @@ import { ModelByInputTokens } from '@mastra/memory'
 const selector = new ModelByInputTokens({
   upTo: {
     10_000: 'google/gemini-2.5-flash', // Fast for small inputs
-    40_000: '__GATEWAY_OPENAI_MODEL_MINI__', // Stronger for medium inputs
+    40_000: '__GATEWAY_OPENAI_MODEL_LUNA__', // Stronger for medium inputs
     1_000_000: '__GATEWAY_OPENAI_MODEL__', // Most capable for large inputs
   },
 })
@@ -1382,33 +1753,86 @@ const selector = new ModelByInputTokens({
 
 #### 行為 {/* #behavior */}
 
-- 閾值會在內部排序，因此設定物件中的次序並不重要。
-- `inputTokens ≤ smallest threshold` → 使用該閾值的模型
-- `inputTokens > largest threshold` → `resolve()` 會拋出錯誤。如果在 OM Observer 或 Reflector 執行期間發生此情況，OM 會透過 TripWire 中止，因此呼叫者會收到空白的 `text` 結果或串流的 `tripwire`，而非正常的 assistant 回應。
-- OM 會計算 Observer 或 Reflector 呼叫的輸入 token 數目，並直接解析相符的模型層級
+* 閾值在內部排序，因此配置物件中的順序並不重要。
+* `inputTokens ≤ smallest threshold`→ 使用該閾值的模型
+* `inputTokens > largest threshold` → `resolve()` throws an error. If this happens during an OM Observer or Reflector run, OM aborts via TripWire, so callers receive an empty `text` result or streamed `tripwire` instead of a normal assistant response.
+*
 
 #### 方法 {/* #methods */}
 
 <PropertiesTable
   content={[
-  {
-    name: 'resolve',
-    type: '(inputTokens: number) => MastraModelConfig',
-    description:
-      '傳回指定輸入 token 數目所對應的模型。如果 inputTokens 超出所設定的最大閾值，便會拋出錯誤。在 OM 執行期間發生此情況時，呼叫者會收到 TripWire／空白文字結果，而非正常的 assistant 回應。',
-  },
-  {
-    name: 'getThresholds',
-    type: '() => number[]',
-    description: '按升序傳回已設定的閾值，有助進行內省。',
-  },
+{
+  name: 'resolve',
+  type: '(inputTokens: number) => MastraModelConfig',
+  description:
+    'Returns the model for the given input token count. Throws if inputTokens exceeds the largest configured threshold. When this happens during an OM run, callers receive a TripWire/empty-text outcome instead of a normal assistant response.',
+},
+{
+  name: 'getThresholds',
+  type: '() => number[]',
+  description: 'Returns the configured thresholds in ascending order. Useful for introspection.',
+},
 ]}
 />
 
-### 相關內容 {/* #related */}
+### 技能結果編輯器 {/* #skillresultredactor */}
 
-- [Observational Memory](/docs/memory/observational-memory)
-- [Memory 概覽](/docs/memory/overview)
-- [Memory 類別](/reference/memory/memory-class)
-- [Memory Processors](/docs/memory/memory-processors)
-- [Processors](/docs/agents/processors)
+`skillResultRedactor`建立一個`beforeObservation` transform hook that redacts the results of the built-in Agent Skills tools (`skill`, `skill_search`, and `skill_read`) before the Observer model sees them. Each result is replaced with a placeholder while the tool call is kept, so the Observer still records which skill was used and what it was called with, without the skill text.
+
+```typescript
+import { Memory } from '@mastra/memory'
+import { skillResultRedactor } from '@mastra/memory/hooks'
+
+const memory = new Memory({
+  options: {
+    observationalMemory: {
+      model: '__GATEWAY_GOOGLE_MODEL_FLASH__',
+      hooks: {
+        beforeObservation: skillResultRedactor(),
+      },
+    },
+  },
+})
+```
+
+經過`toolNames` to redact a different set of tools. To combine it with your own transform, chain the outputs and await each hook:
+
+```typescript oxfmt:false
+const dropSkillResults = skillResultRedactor()
+
+hooks: {
+  beforeObservation: async input => {
+    const messages = (await dropSkillResults(input))?.messages ?? input.messages
+    return { messages: messages.filter(m => m.role !== 'signal') }
+  },
+}
+```
+
+#### 參數 {/* #parameters-1 */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'toolNames',
+  type: 'readonly string[]',
+  description:
+    'Tool names whose results are redacted. Defaults to the built-in skill tools: `skill`, `skill_search`, and `skill_read`. Use this to redact a different set of tool results.',
+  isOptional: true,
+},
+]}
+/>
+
+#### 退貨 {/* #returns */}
+
+`(input: { messages: MastraDBMessage[] } & ObserveHookContext) => { messages: MastraDBMessage[] } | undefined`
+
+該鉤子傳回訊息，其中匹配的Tool結果被佔位符替換，或者`undefined` when no message matched (which passes the payload through unchanged). Tool calls, arguments, and every other message are left as they are.
+
+### 有關的 {/* #related */}
+
+* [觀察記憶](/docs/memory/observational-memory)
+* [記憶體概覽](/docs/memory/overview)
+* [記憶體等級](/reference/memory/memory-class)
+* [記憶體處理器](/docs/memory/memory-processors)
+* [處理器](/docs/agents/processors)

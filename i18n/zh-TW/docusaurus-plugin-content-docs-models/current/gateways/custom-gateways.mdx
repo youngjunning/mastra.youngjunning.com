@@ -1,35 +1,54 @@
 ---
-title: "自訂 Gateway | 模型 | Mastra"
-description: "為私有或專用 LLM 部署建立自訂模型 Gateway"
+title: "Custom gateways | Models | Mastra"
+description: "Create custom model gateways for private or specialized LLM deployments"
 ---
 
-# 自訂模型 Gateway
+# 客製化模型網關
 
-自訂模型 Gateway 可讓你透過 `MastraModelGatewayInterface` 介面或 `MastraModelGateway` 基礎類別，實作私有或專用的 LLM Provider 整合。
+自訂模型網關可讓您實施私人或專門的 LLM Provider與`MastraModelGatewayInterface`接口或`MastraModelGateway`基類。
 
-## 概覽 {/* #overview */}
+## 概述 {/* #overview */}
 
-Gateway 會處理存取語言模型時各 Provider 專屬的邏輯：
+網關處理用於存取語言模型的特定於Provider的邏輯：
 
-- Provider 設定與模型探索
-- 驗證與 API 金鑰管理
-- 建構 API 端點 URL
-- 建立語言模型執行個體
+* Provider配置和模型發現
+* 身份驗證和 API 金鑰管理
+* API 端點的 URL 建構
+* 語言模型實例創建
 
-建立自訂 Gateway 以支援：
+## 何時使用自訂網關 {/* #when-to-use-custom-gateways */}
 
-- 私有或企業 LLM 部署
-- 自訂驗證機制
-- 專用路由邏輯
-- 使用唯一 ID 管理 Gateway 版本
+使用自訂網關將 Mastra 連接到您自己運行的開放權重模型，例如 gpt-oss、Llama、Gemma、Mistral、Qwen 或 DeepSeek。自託管適合以下情況：
 
-## 建立自訂 Gateway {/* #creating-a-custom-gateway */}
+* 您的行業規則不允許向第三方 API 發送提示或客戶資料（HIPAA、GDPR、金融、國防）
+* 您進行了足夠的模型調用，每個代幣 API 的定價成本都高於運行您自己的 GPU
+* 您已經根據內部數據微調了開放權重模型，並希望您的Agent商使用它
+* 您需要一個僅在升級時才會更改的模型，因此Provider更新不會破壞您的提示
+* 您的Agent在氣隙網路、邊緣硬體或與您的應用程式相同的資料中心中離線運行
 
-若要建立純物件 Gateway，請實作 `MastraModelGatewayInterface`；若要使用基礎類別的預設值，則擴充 `MastraModelGateway`。
+網關列出了端點背後的模型，以便它們取得鍵入的模型 ID 並顯示在 Studio 模型選擇器中。它還可以解析每次調用的憑證，並且您可以[limit the Studio model picker](#showing-only-custom-gateways-in-studio) to your own models.
+
+`url` in the model config instead. Mastra doesn't read an API key from environment variables for a `url` model, so also set `apiKey` when the endpoint requires authentication. See [Use local models with Mastra](/models#use-local-models-with-mastra).
+
+## 建立自訂網關 {/* #creating-a-custom-gateway */}
+
+實施`MastraModelGatewayInterface` for a plain object gateway, or extend the `MastraModelGateway` base class.
+
+### 選擇一個普通物件或一個類別 {/* #choose-a-plain-object-or-a-class */}
+
+兩者在運行時的工作方式相同。基底類別提供預設值`getId()`, `shouldEnable()`, `handlesModel()`, and `serializeForSpan()` methods, and Mastra applies the same defaults to a plain object that leaves them out.
+
+當網關具有固定配置且沒有狀態時，使用普通物件。延長`MastraModelGateway` when the gateway:
+
+* 在其建構函式中採用選項，例如基本 URL 或 API 金鑰
+* 保留私有狀態，例如快取的令牌
+* 作為多個實例運行，例如每個區域或版本一個實例
+
+以下範例使用普通物件實作介面：
 
 ```typescript
-import { type MastraModelGatewayInterface, type ProviderConfig } from '@mastra/core/llm'
-import { createOpenAICompatible } from '@ai-sdk/openai-compatible-v5'
+import { type MastraModelGatewayInterface, type ProviderConfig } from '@mastra/core/llm';
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible-v5';
 
 const myPrivateGateway: MastraModelGatewayInterface = {
   id: 'private',
@@ -43,43 +62,51 @@ const myPrivateGateway: MastraModelGatewayInterface = {
         gateway: 'private',
         url: 'https://api.myprovider.com/v1',
       },
-    }
+    };
   },
   buildUrl() {
-    return 'https://api.myprovider.com/v1'
+    return 'https://api.myprovider.com/v1';
   },
   async getApiKey() {
-    return process.env.MY_API_KEY ?? ''
+    return process.env.MY_API_KEY ?? '';
   },
-  async resolveLanguageModel({ modelId, providerId, apiKey }) {
+  async resolveLanguageModel({ modelId, providerId, apiKey, headers }) {
     return createOpenAICompatible({
       name: providerId,
       apiKey,
+      headers,
       baseURL: 'https://api.myprovider.com/v1',
-    }).chatModel(modelId)
+    }).chatModel(modelId);
   },
-}
+};
 ```
 
-以下範例擴充 `MastraModelGateway` 類別：
+下面的例子擴充了`MastraModelGateway` and takes its ID, base URL, and API key as constructor options:
 
 ```typescript
-import { MastraModelGateway, type ProviderConfig } from '@mastra/core/llm'
-import { createOpenAICompatible } from '@ai-sdk/openai-compatible-v5'
-import type { LanguageModelV2 } from '@ai-sdk/provider-v5'
+import { MastraModelGateway, type GatewayLanguageModel, type ProviderConfig } from '@mastra/core/llm';
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible-v5';
+
+interface MyPrivateGatewayOptions {
+  id?: string;
+  baseURL?: string;
+  apiKey?: string;
+}
 
 class MyPrivateGateway extends MastraModelGateway {
-  // Required: Unique identifier for the gateway
-  // This ID is used as the prefix for all providers from this gateway
-  readonly id = 'private'
+  readonly id: string;
+  readonly name = 'My Private Gateway';
 
-  // Required: Human-readable name
-  readonly name = 'My Private Gateway'
+  private readonly baseURL: string;
+  private readonly apiKey?: string;
 
-  /**
-   * Fetch provider configurations from your gateway
-   * Returns a record of provider configurations
-   */
+  constructor(options: MyPrivateGatewayOptions = {}) {
+    super();
+    this.id = options.id ?? 'private';
+    this.baseURL = options.baseURL ?? 'https://api.myprovider.com/v1';
+    this.apiKey = options.apiKey;
+  }
+
   async fetchProviders(): Promise<Record<string, ProviderConfig>> {
     return {
       'my-provider': {
@@ -87,173 +114,176 @@ class MyPrivateGateway extends MastraModelGateway {
         models: ['__GATEWAY_OPENAI_MODEL__', '__GATEWAY_ANTHROPIC_MODEL_SONNET__'],
         apiKeyEnvVar: 'MY_API_KEY',
         gateway: this.id,
-        url: 'https://api.myprovider.com/v1',
+        url: this.baseURL,
       },
-    }
+    };
   }
 
-  /**
-   * Build the API URL for a model
-   * @param modelId - Full model ID (e.g., "private/my-provider/model-1")
-   * @param envVars - Environment variables (optional)
-   */
-  buildUrl(modelId: string, envVars?: Record<string, string>): string {
-    return 'https://api.myprovider.com/v1'
+  buildUrl(): string {
+    return this.baseURL;
   }
 
-  /**
-   * Get the API key for authentication
-   * @param modelId - Full model ID
-   */
-  async getApiKey(modelId: string): Promise<string> {
-    const apiKey = process.env.MY_API_KEY
+  async getApiKey(): Promise<string> {
+    const apiKey = this.apiKey ?? process.env.MY_API_KEY;
     if (!apiKey) {
-      throw new Error(`Missing MY_API_KEY environment variable`)
+      throw new Error('Missing MY_API_KEY environment variable');
     }
-    return apiKey
+    return apiKey;
   }
 
-  /**
-   * Create a language model instance
-   * @param args - Model ID, provider ID, and API key
-   */
-  async resolveLanguageModel({
+  resolveLanguageModel({
     modelId,
     providerId,
     apiKey,
+    headers,
   }: {
-    modelId: string
-    providerId: string
-    apiKey: string
-  }): Promise<LanguageModelV2> {
-    const baseURL = this.buildUrl(`${providerId}/${modelId}`)
-
+    modelId: string;
+    providerId: string;
+    apiKey: string;
+    headers?: Record<string, string>;
+  }): GatewayLanguageModel {
     return createOpenAICompatible({
       name: providerId,
       apiKey,
-      baseURL,
+      headers,
+      baseURL: this.baseURL,
       supportsStructuredOutputs: true,
-    }).chatModel(modelId)
+    }).chatModel(modelId);
   }
 }
 ```
 
-### Gateway 自有驗證 {/* #gateway-owned-authentication */}
+若要為每個端點執行一個實例，請為每個實例提供自己的`id`. Mastra keeps only the first gateway registered with a given ID, and the ID is the model ID prefix:
 
-當 Gateway 負責查找憑證時，請新增 `resolveAuth`。Mastra 會先使用此 hook，再退回使用 `getApiKey()`。
+```typescript
+import { Mastra } from '@mastra/core';
+
+const mastra = new Mastra({
+  gateways: {
+    privateEu: new MyPrivateGateway({ id: 'private-eu', baseURL: 'https://eu.api.myprovider.com/v1' }),
+    privateUs: new MyPrivateGateway({ id: 'private-us', baseURL: 'https://us.api.myprovider.com/v1' }),
+  },
+});
+
+// Models: 'private-eu/my-provider/__GATEWAY_OPENAI_MODEL__' and 'private-us/my-provider/__GATEWAY_OPENAI_MODEL__'
+```
+
+### 網關擁有的身份驗證 {/* #gateway-owned-authentication */}
+
+添加`resolveAuth` when the gateway owns credential lookup. Mastra uses this hook before falling back to `getApiKey()`.
 
 ```typescript
 const myPrivateGateway: MastraModelGatewayInterface = {
   // ...gateway fields and methods
   async resolveAuth() {
-    const apiKey = process.env.MY_API_KEY
-    return apiKey ? { apiKey, source: 'gateway' } : undefined
+    const apiKey = process.env.MY_API_KEY;
+    return apiKey ? { apiKey, source: 'gateway' } : undefined;
   },
-}
+};
 ```
 
-## 註冊自訂 Gateway {/* #registering-custom-gateways */}
+## 註冊自訂網關 {/* #registering-custom-gateways */}
 
 ### 初始化期間 {/* #during-initialization */}
 
-建立 Mastra 執行個體時，以 record 傳入 Gateway：
+建立 Mastra 實例時將網關作為記錄傳遞：
 
 ```typescript
-import { Mastra } from '@mastra/core'
+import { Mastra } from '@mastra/core';
 
 const mastra = new Mastra({
   gateways: {
     myGateway: new MyPrivateGateway(),
     anotherGateway: new AnotherGateway(),
   },
-})
+});
 ```
 
-### 初始化之後 {/* #after-initialization */}
+### 初始化後 {/* #after-initialization */}
 
-使用 `addGateway` 動態新增 Gateway：
+使用動態新增網關`addGateway`:
 
 ```typescript
-const mastra = new Mastra()
+const mastra = new Mastra();
 
 // Add with explicit key
-mastra.addGateway(new MyPrivateGateway(), 'myGateway')
+mastra.addGateway(new MyPrivateGateway(), 'myGateway');
 
 // Add using gateway's ID
-mastra.addGateway(new MyPrivateGateway())
+mastra.addGateway(new MyPrivateGateway());
 // Stored with key 'my-private-gateway' (the gateway's id)
 ```
 
-## 使用自訂 Gateway {/* #using-custom-gateways */}
+## 使用自訂網關 {/* #using-custom-gateways */}
 
-使用 Gateway ID 作為前綴，參照自訂 Gateway 中的模型：
+使用網關 ID 作為前綴的自訂網關的參考模型：
 
 ```typescript
-import { Agent } from '@mastra/core/agent'
+import { Agent } from '@mastra/core/agent';
 
 const agent = new Agent({
   id: 'my-agent',
   name: 'My Agent',
   instructions: 'You are a helpful assistant',
   model: 'private/my-provider/__GATEWAY_OPENAI_MODEL__', // Uses MyPrivateGateway
-})
+});
 
-mastra.addAgent(agent, 'myAgent')
+mastra.addAgent(agent, 'myAgent');
 ```
 
-建立 Agent 或使用模型時，Mastra 的模型路由器會根據模型 ID 自動選取適合的 Gateway。Gateway ID 會作為前綴。若沒有符合的自訂 Gateway，便會退回使用內建 Gateway。
+當您建立Agent或使用模型時，Mastra 的模型路由器會根據模型 ID 自動選擇適當的閘道。網關ID作為前綴。如果沒有符合的自訂網關，則會回退到內建網關。
 
 ### TypeScript 自動完成 {/* #typescript-autocomplete */}
 
-#### 在開發環境中自動產生型別 {/* #automatic-type-generation-in-development */}
+#### 開發中的自動類型生成 {/* #automatic-type-generation-in-development */}
 
-以開發模式執行時（`MASTRA_DEV=true`），Mastra 會自動為自訂 Gateway 產生 TypeScript 型別。
+當在開發模式下運作時（`MASTRA_DEV=true`), Mastra automatically generates TypeScript types for your custom gateways.
 
-1. **設定環境變數**：
+1. **設定環境變數**:
    ```bash
    export MASTRA_DEV=true
    ```
 
-1. **註冊 Gateway**：
+2. **註冊您的網關**:
    ```typescript
    const mastra = new Mastra({
      gateways: {
        myGateway: new MyPrivateGateway(),
      },
-   })
+   });
    ```
 
-1. **自動產生型別**：
-   - 新增 Gateway 時，Mastra 會與 GatewayRegistry 同步
-   - Registry 會從自訂 Gateway 擷取 Provider
-   - TypeScript 型別會在 `~/.cache/mastra/` 中重新產生
-   - IDE 會在數秒內取得新型別
+3. **類型是自動產生的**:
+   * 新增網關時，Mastra 會與 GatewayRegistry 同步
+   * 註冊表從您的自訂網關取得提供程序
+   * TypeScript 類型在中重新生成`~/.cache/mastra/`
+   * 您的 IDE 在幾秒鐘內即可取得新類型
 
-1. **現在可使用自動完成功能**：
+4. **自動完成現在可以使用**:
    ```typescript
    const agent = new Agent({
      model: 'my-gateway-id/my-provider/model-1', // Full autocomplete!
-   })
+   });
    ```
 
-#### 運作方式 {/* #how-it-works */}
+#### 它是如何運作的 {/* #how-it-works */}
 
-GatewayRegistry 每小時會執行一次同步：
+GatewayRegistry 每小時運行一次同步：
 
-- 對所有已註冊的 Gateway 呼叫 `fetchProviders()`
-- 產生 TypeScript 型別定義
-- 將型別寫入全域快取與專案的 `dist/` 目錄
-- TypeScript 伺服器會自動取得變更
+* 通話`fetchProviders()` on all registered gateways
+* 產生 TypeScript 類型定義
+* 將它們寫入全域快取和您的項目的`dist/` directory
+* 您的 TypeScript 伺服器會自動取得更改
 
-:::tip
-第一次新增 Gateway 時，可能需要幾秒鐘才能產生型別。後續更新會每小時在背景執行。
+:::提示
+第一次新增網關時，可能需要幾秒鐘的時間才能產生類型。隨後的更新每小時在後台發生一次。
 :::
 
-#### 手動產生型別的替代方案 {/* #manual-type-generation-alternatives */}
+#### 手動類型產生替代方案 {/* #manual-type-generation-alternatives */}
 
-如果未使用開發模式，或需要立即更新型別：
 
-**選項 1：使用型別斷言（最簡單）**
+
+**選項 1：使用類型斷言（最簡單）**
 
 ```typescript
 const agent = new Agent({
@@ -261,29 +291,29 @@ const agent = new Agent({
   name: 'my-agent',
   instructions: 'You are a helpful assistant',
   model: 'private/my-provider/model-1' as any, // Bypass type checking
-})
+});
 ```
 
-**選項 2：建立自訂聯集型別（型別安全）**
+**選項 2：建立自訂類型聯合（類型安全）**
 
 ```typescript
-import type { ModelRouterModelId } from '@mastra/core/llm'
+import type { ModelRouterModelId } from '@mastra/core/llm';
 
 // Define your custom model IDs
 type CustomModelId =
   | 'private/my-provider/model-1'
   | 'private/my-provider/model-2'
-  | 'private/my-provider/model-3'
+  | 'private/my-provider/model-3';
 
 // Combine with built-in models
-type AllModelIds = ModelRouterModelId | CustomModelId
+type AllModelIds = ModelRouterModelId | CustomModelId;
 
 const agent = new Agent({
   id: 'my-agent',
   name: 'my-agent',
   instructions: 'You are a helpful assistant',
   model: 'private/my-provider/model-1' satisfies AllModelIds,
-})
+});
 ```
 
 **選項 3：全域擴充 ModelRouterModelId（進階）**
@@ -292,119 +322,143 @@ const agent = new Agent({
 // In a types.d.ts file in your project
 // The import is required: it makes this file a module, so the block below
 // merges into the existing types instead of replacing the module.
-import '@mastra/core/llm'
+import '@mastra/core/llm';
 
 declare module '@mastra/core/llm' {
   interface ProviderModelsMap {
-    'my-provider': readonly ['model-1', 'model-2', 'model-3']
+    'my-provider': readonly ['model-1', 'model-2', 'model-3'];
   }
 }
 ```
 
-這會擴充內建型別以納入自訂模型，提供完整的自動完成支援。
 
-## Gateway 管理 {/* #gateway-management */}
 
-### getGateway(key) {/* #getgatewaykey */}
+## 網關管理 {/* #gateway-management */}
 
-依註冊 key 取得 Gateway：
+### 取得網關（金鑰） {/* #getgatewaykey */}
 
-```typescript
-const gateway = mastra.getGateway('myGateway')
-console.log(gateway.name) // 'My Private Gateway'
-```
-
-### getGatewayById(id) {/* #getgatewaybyidid */}
-
-依唯一 ID 取得 Gateway：
+透過註冊密鑰檢索網關：
 
 ```typescript
-const gateway = mastra.getGatewayById('my-private-gateway')
-console.log(gateway.name) // 'My Private Gateway'
+const gateway = mastra.getGateway('myGateway');
+console.log(gateway.name); // 'My Private Gateway'
 ```
 
-這適用於：
+### 取得網關ID(id) {/* #getgatewaybyidid */}
 
-- Gateway 的明確 ID 與註冊 key 不同
-- 需要跨不同執行個體，依 ID 尋找 Gateway
-- 支援 Gateway 版本管理（例如 `'gateway-v1'`、`'gateway-v2'`）
-
-### listGateways() {/* #listgateways */}
-
-取得所有已註冊的 Gateway：
+透過唯一 ID 檢索網關：
 
 ```typescript
-const gateways = mastra.listGateways()
-console.log(Object.keys(gateways)) // ['myGateway', 'anotherGateway']
+const gateway = mastra.getGatewayById('my-private-gateway');
+console.log(gateway.name); // 'My Private Gateway'
 ```
 
-## Gateway 屬性 {/* #gateway-properties */}
+這在以下情況下很有用：
 
-### 必要屬性 {/* #required */}
+* 網關具有與其註冊金鑰不同的明確 ID
+* 您需要跨不同實例透過 ID 尋找網關
+* 支援網關版本控制（例如，`'gateway-v1'`, `'gateway-v2'`)
 
-| 屬性 | 型別 | 說明 |
-| - | - | - |
-| `id` | `string` | Gateway 的唯一識別碼，用作模型字串的 Gateway 前綴 |
-| `name` | `string` | 易讀的 Gateway 名稱 |
+`getGatewayById()`拋出一個`MastraError` if no registered gateway has the given ID. It doesn't return `undefined`.
+
+### 列表網關() {/* #listgateways */}
+
+取得所有已註冊的網關：
+
+```typescript
+const gateways = mastra.listGateways();
+console.log(Object.keys(gateways)); // ['myGateway', 'anotherGateway']
+```
+
+## 網關屬性 {/* #gateway-properties */}
+
+### 必需的 {/* #required */}
+
+|物業 |類型 |說明 |
+|----------|------|-------------|
+|`id` | `string` | Unique identifier for the gateway, used as the gateway prefix for the model string |
+| `name` | `string` | Human-readable gateway name |
 
 ### 方法 {/* #methods */}
 
-| 方法 | 說明 |
-| - | - |
-| `fetchProviders()` | 擷取 Provider 設定 |
-| `buildUrl(modelId, envVars?)` | 為模型建構 API URL |
-| `getApiKey(modelId)` | 取得用於驗證的 API 金鑰 |
-| `resolveLanguageModel(args)` | 建立語言模型執行個體 |
-| `getId()` | 取得 Gateway ID（傳回 `id` 或 `name`） |
+|方法|描述 |
+|--------|-------------|
+|`fetchProviders()` | Fetch provider configurations |
+| `buildUrl(modelId, envVars?)` | Build API URL for a model |
+| `getApiKey(modelId)` | Get API key for authentication |
+| `resolveLanguageModel(args)` | Create language model instance |
+| `getId()` | Get gateway ID (returns `id` or `name`) |
 
-## Provider 設定 {/* #provider-configuration */}
+## Provider配置 {/* #provider-configuration */}
 
-`fetchProviders()` 方法會傳回由 `ProviderConfig` 物件組成的 record：
+這`fetchProviders()` method returns a record of `ProviderConfig` objects:
 
 ```typescript
 interface ProviderConfig {
-  name: string // Display name
-  models: string[] // Available model IDs
-  apiKeyEnvVar: string | string[] // Environment variable(s) for API key
-  gateway: string // Gateway identifier
-  url?: string // Optional API base URL
-  apiKeyHeader?: string // Optional custom auth header
-  docUrl?: string // Optional documentation URL
+  name: string;                    // Display name
+  models: string[];                // Available model IDs
+  apiKeyEnvVar: string | string[]; // Environment variable(s) for API key
+  gateway: string;                 // Gateway identifier
+  url?: string;                    // Optional API base URL
+  apiKeyHeader?: string;           // Optional custom auth header
+  docUrl?: string;                 // Optional documentation URL
+  pricing?: Record<string, ModelPricing>; // Optional prices per model ID
 }
 ```
 
-## Gateway ID 與 key 的差異 {/* #gateway-ids-vs-keys */}
+### 型號定價 {/* #model-pricing */}
 
-兩者的差異如下：
+models.dev 沒有列出私有部署，因此它們的呼叫沒有成本[metrics](/docs/observability/metrics/overview). Add a `pricing` entry per model to give them one. Prices are in USD per 1 million tokens and use the same keys as a model's `cost` on [models.dev](https://models.dev): `input`, `output`, `cache_read`, `cache_write`, `reasoning`, `input_audio`, and `output_audio`. `@mastra/observability` reads these prices on the first call to a model it can't price, which also picks up gateways added later with `addGateway()`. Under `mastra dev`, or with `MASTRA_AUTO_REFRESH_PRICING=true`, it also reads them when Mastra starts, so the first call is priced too. models.dev prices take precedence. A gateway price is used only when models.dev has none for that provider and model ID, and then it applies to every call with those IDs, including direct calls. Give a reseller its own provider ID when its rates must stay separate from direct calls. A gateway whose `fetchProviders()` fails is logged and retried about once an hour. Set `MASTRA_OFFLINE=true` to skip loading them. The same shape as models.dev also means you can add `tiers` for long-context pricing.
 
-- **Key**：將 Gateway 新增至 Mastra 時使用的註冊 key（record key）
-- **ID**：Gateway 的唯一識別碼（透過 `id` 屬性；若未設定，則使用 `name`）
+```typescript
+async fetchProviders(): Promise<Record<string, ProviderConfig>> {
+  return {
+    'my-provider': {
+      name: 'My Provider',
+      models: ['model-1'],
+      apiKeyEnvVar: 'MY_API_KEY',
+      gateway: 'private',
+      url: 'https://api.myprovider.com/v1',
+      pricing: {
+        'model-1': { input: 0.5, output: 1.5, cache_read: 0.05 },
+      },
+    },
+  };
+}
+```
+
+## 網關 ID 與金鑰 {/* #gateway-ids-vs-keys */}
+
+了解差異：
+
+* **鑰匙**：向Mastra新增網關時使用的註冊密鑰（記錄密鑰）
+* **ID**：網關的唯一識別碼（透過`id` property or `name` if not set)
 
 ```typescript
 class VersionedGateway extends MastraModelGateway {
-  readonly id = 'my-gateway-v2' // Unique ID for versioning and prefixing
-  readonly name = 'My Gateway' // Display name
+  readonly id = 'my-gateway-v2';     // Unique ID for versioning and prefixing
+  readonly name = 'My Gateway';       // Display name
 }
 
 const mastra = new Mastra({
   gateways: {
     currentGateway: new VersionedGateway(), // Key: 'currentGateway'
   },
-})
+});
 
 // Retrieve by key
-const byKey = mastra.getGateway('currentGateway')
+const byKey = mastra.getGateway('currentGateway');
 
 // Retrieve by ID
-const byId = mastra.getGatewayById('my-gateway-v2')
+const byId = mastra.getGatewayById('my-gateway-v2');
 
 // Both return the same gateway
-console.log(byKey === byId) // true
+console.log(byKey === byId); // true
 ```
 
-## 模型 ID 格式 {/* #model-id-format */}
+## 型號 ID 格式 {/* #model-id-format */}
 
-透過自訂 Gateway 存取的模型會遵循以下格式：
+透過自訂網關存取的模型遵循以下格式：
 
 ```
 [gatewayId]/[provider]/[model]
@@ -412,22 +466,22 @@ console.log(byKey === byId) // true
 
 範例：
 
-- `private/my-provider/model-1`
+* `private/my-provider/model-1`
 
 ## 進階範例 {/* #advanced-example */}
 
-具備快取功能的 token 型 Gateway：
+帶有緩存的基於令牌的網關：
 
 ```typescript
 class TokenGateway extends MastraModelGateway {
-  readonly id = 'token-gateway-v1'
-  readonly name = 'Token Gateway'
+  readonly id = 'token-gateway-v1';
+  readonly name = 'Token Gateway';
 
-  private tokenCache: Map<string, { token: string; expiresAt: number }> = new Map()
+  private tokenCache: Map<string, { token: string; expiresAt: number }> = new Map();
 
   async fetchProviders(): Promise<Record<string, ProviderConfig>> {
-    const response = await fetch('https://api.gateway.com/providers')
-    const data = await response.json()
+    const response = await fetch('https://api.gateway.com/providers');
+    const data = await response.json();
 
     return {
       provider: {
@@ -436,182 +490,178 @@ class TokenGateway extends MastraModelGateway {
         apiKeyEnvVar: 'GATEWAY_TOKEN',
         gateway: this.id,
       },
-    }
+    };
   }
 
   async buildUrl(modelId: string, envVars?: Record<string, string>): Promise<string> {
-    const token = await this.getApiKey(modelId)
-    const siteId = envVars?.SITE_ID || process.env.SITE_ID
+    const token = await this.getApiKey(modelId);
+    const siteId = envVars?.SITE_ID || process.env.SITE_ID;
 
     const response = await fetch(`https://api.gateway.com/sites/${siteId}/token`, {
       headers: { Authorization: `Bearer ${token}` },
-    })
+    });
 
-    const { url } = await response.json()
-    return url
+    const { url } = await response.json();
+    return url;
   }
 
   async getApiKey(modelId: string): Promise<string> {
-    const cached = this.tokenCache.get(modelId)
+    const cached = this.tokenCache.get(modelId);
 
     if (cached && cached.expiresAt > Date.now()) {
-      return cached.token
+      return cached.token;
     }
 
-    const token = process.env.GATEWAY_TOKEN
+    const token = process.env.GATEWAY_TOKEN;
     if (!token) {
-      throw new Error('Missing GATEWAY_TOKEN')
+      throw new Error('Missing GATEWAY_TOKEN');
     }
 
     // Cache token for 1 hour
     this.tokenCache.set(modelId, {
       token,
       expiresAt: Date.now() + 3600000,
-    })
+    });
 
-    return token
+    return token;
   }
 
-  async resolveLanguageModel({
-    modelId,
-    providerId,
-    apiKey,
-  }: {
-    modelId: string
-    providerId: string
-    apiKey: string
+  async resolveLanguageModel({ modelId, providerId, apiKey }: {
+    modelId: string;
+    providerId: string;
+    apiKey: string;
   }): Promise<LanguageModelV2> {
-    const baseURL = await this.buildUrl(`${providerId}/${modelId}`)
+    const baseURL = await this.buildUrl(`${providerId}/${modelId}`);
 
     return createOpenAICompatible({
       name: providerId,
       apiKey,
       baseURL,
       supportsStructuredOutputs: true,
-    }).chatModel(modelId)
+    }).chatModel(modelId);
   }
 }
 ```
 
 ## 錯誤處理 {/* #error-handling */}
 
-針對常見失敗情境提供具體的錯誤訊息：
+提供常見故障場景的描述性錯誤：
 
 ```typescript
 class RobustGateway extends MastraModelGateway {
   // ... properties
 
   async getApiKey(modelId: string): Promise<string> {
-    const apiKey = process.env.MY_API_KEY
+    const apiKey = process.env.MY_API_KEY;
 
     if (!apiKey) {
       throw new Error(
         `Missing MY_API_KEY environment variable for model: ${modelId}. ` +
-          `Please set MY_API_KEY in your environment.`,
-      )
+        `Please set MY_API_KEY in your environment.`
+      );
     }
 
-    return apiKey
+    return apiKey;
   }
 
   async buildUrl(modelId: string, envVars?: Record<string, string>): Promise<string> {
-    const baseUrl = envVars?.BASE_URL || process.env.BASE_URL
+    const baseUrl = envVars?.BASE_URL || process.env.BASE_URL;
 
     if (!baseUrl) {
       throw new Error(
         `No base URL configured for model: ${modelId}. ` +
-          `Set BASE_URL environment variable or pass it in envVars.`,
-      )
+        `Set BASE_URL environment variable or pass it in envVars.`
+      );
     }
 
-    return baseUrl
+    return baseUrl;
   }
 }
 ```
 
-## 測試自訂 Gateway {/* #testing-custom-gateways */}
+## 測試自訂網關 {/* #testing-custom-gateways */}
 
 測試結構範例：
 
 ```typescript
-import { describe, it, expect, beforeEach } from 'vitest'
-import { Mastra } from '@mastra/core'
+import { describe, it, expect, beforeEach } from 'vitest';
+import { Mastra } from '@mastra/core';
 
 describe('MyPrivateGateway', () => {
   beforeEach(() => {
-    process.env.MY_API_KEY = 'test-key'
-  })
+    process.env.MY_API_KEY = 'test-key';
+  });
 
   it('should fetch providers', async () => {
-    const gateway = new MyPrivateGateway()
-    const providers = await gateway.fetchProviders()
+    const gateway = new MyPrivateGateway();
+    const providers = await gateway.fetchProviders();
 
-    expect(providers['my-provider']).toBeDefined()
-    expect(providers['my-provider'].models).toContain('model-1')
-  })
+    expect(providers['my-provider']).toBeDefined();
+    expect(providers['my-provider'].models).toContain('model-1');
+  });
 
   it('should integrate with Mastra', () => {
     const mastra = new Mastra({
       gateways: {
         private: new MyPrivateGateway(),
       },
-    })
+    });
 
-    const gateway = mastra.getGateway('private')
-    expect(gateway.name).toBe('My Private Gateway')
-  })
+    const gateway = mastra.getGateway('private');
+    expect(gateway.name).toBe('My Private Gateway');
+  });
 
   it('should resolve models by ID', () => {
     const mastra = new Mastra({
       gateways: {
         key: new MyPrivateGateway(),
       },
-    })
+    });
 
-    const gateway = mastra.getGatewayById('my-private-gateway')
-    expect(gateway).toBeDefined()
-  })
-})
+    const gateway = mastra.getGatewayById('my-private-gateway');
+    expect(gateway).toBeDefined();
+  });
+});
 ```
 
-## 最佳實務 {/* #best-practices */}
+## 最佳實踐 {/* #best-practices */}
 
-1. **使用具體 ID 管理版本**：需要管理 Gateway 版本時，請設定明確的 `id` 值
+1. **使用描述性 ID 進行版本控制**：設定顯式`id` values when you need to version your gateways
    ```typescript
    readonly id = 'my-gateway-v1';
    ```
 
-1. **實作適當的錯誤處理**：擲出具體且可據以採取行動的錯誤訊息
+2. **實作正確的錯誤處理**：使用可操作的訊息拋出描述性錯誤
 
-1. **快取成本高昂的作業**：適時快取 token、URL 或 Provider 設定
+3. **快取昂貴的操作**：在適當的時候快取令牌、URL 或Provider配置
 
-1. **驗證環境變數**：在 `getApiKey` 與 `buildUrl` 中檢查必要的環境變數
+4. **驗證環境變數**：檢查所需的環境變數`getApiKey` and `buildUrl`
 
-1. **為 Gateway 撰寫文件**：新增 JSDoc 註解，說明 Gateway 的用途與設定
+5. **記錄您的網關**：新增 JSDoc 註解來解釋網關的用途和配置
 
-1. **遵循命名慣例**：為 Provider 與模型採用清楚、一致的命名
+6. **遵循命名約定**：對Provider和模型使用清晰、一致的命名
 
-1. **處理非同步作業**：使用 `async/await` 處理網路要求與 I/O 作業
+7. **處理非同步操作**： 使用`async/await` for network requests and I/O operations
 
-1. **完整測試**：為所有 Gateway 方法撰寫單元測試
+8. **徹底測試**：為所有網關方法編寫單元測試
 
-## 在 Studio 中只顯示自訂 Gateway {/* #showing-only-custom-gateways-in-studio */}
+## 在 Studio 中僅顯示自訂網關 {/* #showing-only-custom-gateways-in-studio */}
 
-根據預設，**Studio** 會列出所有外部模型 Provider（例如 OpenAI、Anthropic 與 Gemini），以及你註冊的所有自訂 Gateway。若要隱藏外部 Provider，請設定 `AUTO_BLOCK_EXTERNAL_PROVIDERS` 環境變數：
+預設情況下，**Studio** lists every external model provider (such as OpenAI, Anthropic, and Gemini) alongside any custom gateways you register. To hide the external providers, set the `AUTO_BLOCK_EXTERNAL_PROVIDERS` environment variable:
 
 ```bash
 AUTO_BLOCK_EXTERNAL_PROVIDERS=true
 ```
 
-此變數設為 `true` 或 `1` 時，Mastra 只會傳回你自行註冊之 Gateway 中的 Provider。靜態 Provider Registry 與內建 Gateway（`models.dev`、`netlify` 和 `mastra`）都會從模型選擇器中隱藏。若所有模型流量都透過單一私有 Gateway 路由，而且不希望顯示其他 Provider，這項設定會很有用。
+當該變數設定為`true` or `1`, Mastra returns only the providers from gateways you register yourself. The static provider registry and the built-in gateways (`models.dev`, `netlify`, and `mastra`) are hidden from the model picker. This is useful when you route all model traffic through a single private gateway and don't want the other providers to appear. The filter applies to the server's `GET /agents/providers` endpoint, which Studio uses for the model picker, so API clients don't see the external providers either. It only changes which providers are listed. It doesn't stop agents from calling other providers in code.
 
-設定此變數且未註冊任何自訂 Gateway 時，模型選擇器會是空的。請至少註冊一個自訂 Gateway，才會顯示其中的模型。
+設定此變數且未註冊自訂網關後，模型選擇器為空。註冊至少一個自訂網關以公開其模型。
 
-## 內建 Gateway {/* #built-in-gateways */}
+## 內建網關 {/* #built-in-gateways */}
 
-Mastra 包含下列內建 Gateway，作為參考實作：
+Mastra 包含內建網關作為參考實作：
 
-- **NetlifyGateway**：整合支援 token 交換的 Netlify AI Gateway
-- **ModelsDevGateway**：models.dev 中相容於 OpenAI 的 Provider Registry
+* **Netlify網關**：Netlify AI Gateway 與代幣交換集成
+* **模型DevGateway**
 
-如需 Gateway 使用方式的範例，請參閱 [Netlify](/models/gateways/netlify)、[OpenRouter](/models/gateways/openrouter) 與 [Vercel](/models/gateways/vercel)。
+看[Netlify](/models/gateways/netlify), [OpenRouter](/models/gateways/openrouter), and [Vercel](/models/gateways/vercel) for examples of gateway usage.

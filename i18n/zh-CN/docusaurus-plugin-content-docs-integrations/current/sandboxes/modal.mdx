@@ -1,0 +1,298 @@
+---
+title: "Modal | Sandbox"
+description: "Run Mastra workspace commands in isolated Modal cloud sandboxes with authentication, lifecycle controls, background processes, and reconnection."
+packages:
+  - "@mastra/modal"
+---
+
+# 莫代尔
+
+在隔离中执行命令[Modal](https://modal.com)云Sandbox。提供由 Modal 基础设施支持的安全、临时环境。接口详情请参见[Workspace沙盒界面](/reference/workspace/sandbox).
+
+## 安装 {/* #installation */}
+
+```bash npm2yarn
+npm install @mastra/modal
+```
+
+## 用法 {/* #usage */}
+
+添加一个`ModalSandbox` to a workspace and assign it to an agent:
+
+```typescript
+import { Agent } from '@mastra/core/agent'
+import { Workspace } from '@mastra/core/workspace'
+import { ModalSandbox } from '@mastra/modal'
+
+const workspace = new Workspace({
+  sandbox: new ModalSandbox({
+    id: 'dev-sandbox',
+    baseImage: 'ubuntu:22.04',
+    timeoutMs: 60_000,
+  }),
+})
+
+const agent = new Agent({
+  id: 'dev-agent',
+  model: '__GATEWAY_ANTHROPIC_MODEL_OPUS__',
+  workspace,
+})
+```
+
+## 验证 {/* #authentication */}
+
+通过环境变量或构造函数选项设置模态凭据：
+
+```bash
+MODAL_TOKEN_ID=ak-...
+MODAL_TOKEN_SECRET=as-...
+```
+
+或者直接传递它们：
+
+```typescript
+const sandbox = new ModalSandbox({
+  tokenId: process.env.MODAL_TOKEN_ID,
+  tokenSecret: process.env.MODAL_TOKEN_SECRET,
+})
+```
+
+从以下位置获取您的凭据[Modal dashboard](https://modal.com/settings/tokens).
+
+## 构造函数参数 {/* #constructor-parameters */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'id',
+  type: 'string',
+  description:
+    'Unique identifier / name for this sandbox. Used as the Modal sandbox name so the sandbox can be reconnected on subsequent start() calls.',
+  isOptional: true,
+  defaultValue: 'Auto-generated',
+},
+{
+  name: 'appName',
+  type: 'string',
+  description: 'Modal App name to associate sandboxes with.',
+  isOptional: true,
+  defaultValue: "'mastra'",
+},
+{
+  name: 'baseImage',
+  type: 'string',
+  description: 'Docker image to use for the sandbox.',
+  isOptional: true,
+  defaultValue: "'ubuntu:22.04'",
+},
+{
+  name: 'timeoutMs',
+  type: 'number',
+  description:
+    "Wall-clock max lifetime in milliseconds. The sandbox is terminated when this expires, regardless of activity. Modal's maximum is 24 hours (86_400_000).",
+  isOptional: true,
+  defaultValue: '300000 (5 minutes)',
+},
+{
+  name: 'env',
+  type: 'Record<string, string>',
+  description: 'Environment variables baked into the sandbox at create time.',
+  isOptional: true,
+},
+{
+  name: 'workingDirectory',
+  type: 'string',
+  description:
+    'Default working directory inside the sandbox, used for command execution when no per-command `cwd` is given. A per-command `cwd` always wins.',
+  isOptional: true,
+},
+{
+  name: 'workdir',
+  type: 'string',
+  description: 'Deprecated alias for `workingDirectory`. When both are set, `workingDirectory` wins.',
+  isOptional: true,
+},
+{
+  name: 'tokenId',
+  type: 'string',
+  description: 'Modal token ID. Falls back to MODAL_TOKEN_ID environment variable.',
+  isOptional: true,
+},
+{
+  name: 'tokenSecret',
+  type: 'string',
+  description: 'Modal token secret. Falls back to MODAL_TOKEN_SECRET environment variable.',
+  isOptional: true,
+},
+{
+  name: 'instructions',
+  type: 'string | function',
+  description:
+    'Custom instructions returned by getInstructions(). Pass a string to fully replace the default, or a function to extend it.',
+  isOptional: true,
+},
+{
+  name: 'onStart',
+  type: 'function',
+  description: 'Lifecycle hook called after the sandbox reaches running status.',
+  isOptional: true,
+},
+{
+  name: 'volumes',
+  type: 'Record<string, Volume>',
+  description:
+    'Modal Volumes to mount into the sandbox, keyed by absolute mount path. The working directory must not be at or inside a mount path.',
+  isOptional: true,
+},
+{
+  name: 'onStop',
+  type: 'function',
+  description: 'Lifecycle hook called before the sandbox stops.',
+  isOptional: true,
+},
+{
+  name: 'onDestroy',
+  type: 'function',
+  description: 'Lifecycle hook called before the sandbox is destroyed.',
+  isOptional: true,
+},
+]}
+/>
+
+## 特性 {/* #properties */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'id',
+  type: 'string',
+  description: 'Sandbox instance identifier.',
+},
+{
+  name: 'name',
+  type: 'string',
+  description: "Provider name ('ModalSandbox')",
+},
+{
+  name: 'provider',
+  type: 'string',
+  description: "Provider identifier ('modal')",
+},
+{
+  name: 'status',
+  type: 'ProviderStatus',
+  description: "'pending' | 'starting' | 'running' | 'stopping' | 'stopped' | 'destroying' | 'destroyed' | 'error'",
+},
+{
+  name: 'modal',
+  type: 'Sandbox',
+  description:
+    'The underlying Modal Sandbox instance. Throws SandboxNotReadyError if the sandbox has not been started.',
+},
+{
+  name: 'processes',
+  type: 'ModalProcessManager',
+  description:
+    'Background process manager. See [SandboxProcessManager reference](/reference/workspace/process-manager).',
+},
+]}
+/>
+
+## 沙盒生命周期 {/* #sandbox-lifecycle */}
+
+* **`_start()`**：尝试重新连接到现有正在运行的Sandbox。如果没有找到，则从最新快照创建一个Sandbox（如果可以从以前的快照中获取）`_stop()`), or from the baseImage.
+* **`_stop()`**：对文件系统进行快照，然后终止Sandbox。快照保存在同一实例的内存中以供将来启动。
+* **`_destroy()`**：终止Sandbox并丢弃任何快照。
+
+```typescript
+const sandbox = new ModalSandbox({
+  id: 'dev-sandbox',
+  baseImage: 'ubuntu:22.04',
+  timeoutMs: 300_000,
+})
+
+await sandbox._start()
+await sandbox.processes.spawn('npm install')
+await sandbox._stop()
+await sandbox._start()
+```
+
+## 卷和持久文件 {/* #volumes-and-persistent-files */}
+
+山[Modal Volumes](https://modal.com/docs/guide/volumes) with the `volumes` option, then use `ModalFilesystem` to expose a mounted path to the agent's workspace file tools. Files written under the mount persist across sandbox restarts.
+
+```typescript
+import { Workspace } from '@mastra/core/workspace'
+import { ModalFilesystem, ModalSandbox } from '@mastra/modal'
+import { ModalClient } from 'modal'
+
+const modal = new ModalClient()
+const privateVolume = await modal.volumes.fromName('agent-user-123', { createIfMissing: true })
+const teamVolume = await modal.volumes.fromName('agent-team', { createIfMissing: true })
+
+const sandbox = new ModalSandbox({
+  id: 'agent-sandbox',
+  workingDirectory: '/workspace',
+  volumes: {
+    '/mnt/agent': privateVolume,
+    '/mnt/team': teamVolume,
+  },
+})
+
+const workspace = new Workspace({
+  sandbox,
+  filesystem: new ModalFilesystem({ sandbox, basePath: '/mnt/agent' }),
+})
+```
+
+`ModalFilesystem`在Sandbox内运行文件操作并将所有路径限制为`basePath`. Set `readOnly: true` to reject writes.
+
+其他Sandbox对同一卷的写入仅在重新加载后可见。称呼`reloadVolumes()` on a long-lived sandbox to pick them up:
+
+```typescript
+await sandbox.reloadVolumes()
+```
+
+：：：笔记
+
+将工作目录保留在每个卷挂载之外（例如`/workspace`). Modal can't reload a Volume that is the current working directory, so `ModalSandbox` throws if `workingDirectory` is at or inside a mount path.
+
+:::
+
+## 后台进程 {/* #background-processes */}
+
+`ModalSandbox`包括一个内置的进程管理器，用于生成和管理后台进程。每个`spawn()` call creates a new `ContainerProcess` via the Modal SDK's `Sandbox.exec()` API.
+
+```typescript
+const sandbox = new ModalSandbox({ id: 'dev-sandbox' })
+await sandbox._start()
+
+// Spawn a background process
+const handle = await sandbox.processes.spawn('node script.js', {
+  env: { PORT: '3000' },
+  onStdout: data => console.log(data),
+})
+
+// Wait for the process to complete
+const result = await handle.wait()
+console.log(result.exitCode)
+
+// Kill the process
+await handle.kill()
+```
+
+：：：笔记
+
+`sendStdin()`不支持。 Modal JS SDK 不公开标准输入`Sandbox.exec()`.
+
+:::
+
+看[`SandboxProcessManager` reference](/reference/workspace/process-manager) for the full API.
+
+## 有关的 {/* #related */}
+
+* [SandboxProcessManager 参考](/reference/workspace/process-manager)
+* [Workspace沙盒界面](/reference/workspace/sandbox)
+* [E2BSandbox参考](/integrations/sandboxes/e2b)
+* [DaytonaSandbox 参考](/integrations/sandboxes/daytona)
+* [沙盒](/docs/sandbox/overview)

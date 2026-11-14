@@ -17,42 +17,42 @@ const unknownArguments = process.argv
 const localeTargets = {
   'zh-CN': {
     docs: 'i18n/zh-CN/docusaurus-plugin-content-docs/current',
-    guides: 'i18n/zh-CN/docusaurus-plugin-content-docs-guides/current',
+    integrations: 'i18n/zh-CN/docusaurus-plugin-content-docs-integrations/current',
     reference: 'i18n/zh-CN/docusaurus-plugin-content-docs-reference/current',
     models: 'i18n/zh-CN/docusaurus-plugin-content-docs-models/current',
     learn: 'src/learn/content/zh-CN',
   },
   fr: {
     docs: 'i18n/fr/docusaurus-plugin-content-docs/current',
-    guides: 'i18n/fr/docusaurus-plugin-content-docs-guides/current',
+    integrations: 'i18n/fr/docusaurus-plugin-content-docs-integrations/current',
     reference: 'i18n/fr/docusaurus-plugin-content-docs-reference/current',
     models: 'i18n/fr/docusaurus-plugin-content-docs-models/current',
     learn: 'src/learn/content/fr',
   },
   ko: {
     docs: 'i18n/ko/docusaurus-plugin-content-docs/current',
-    guides: 'i18n/ko/docusaurus-plugin-content-docs-guides/current',
+    integrations: 'i18n/ko/docusaurus-plugin-content-docs-integrations/current',
     reference: 'i18n/ko/docusaurus-plugin-content-docs-reference/current',
     models: 'i18n/ko/docusaurus-plugin-content-docs-models/current',
     learn: 'src/learn/content/ko',
   },
   'zh-TW': {
     docs: 'i18n/zh-TW/docusaurus-plugin-content-docs/current',
-    guides: 'i18n/zh-TW/docusaurus-plugin-content-docs-guides/current',
+    integrations: 'i18n/zh-TW/docusaurus-plugin-content-docs-integrations/current',
     reference: 'i18n/zh-TW/docusaurus-plugin-content-docs-reference/current',
     models: 'i18n/zh-TW/docusaurus-plugin-content-docs-models/current',
     learn: 'src/learn/content/zh-TW',
   },
   'zh-HK': {
     docs: 'i18n/zh-HK/docusaurus-plugin-content-docs/current',
-    guides: 'i18n/zh-HK/docusaurus-plugin-content-docs-guides/current',
+    integrations: 'i18n/zh-HK/docusaurus-plugin-content-docs-integrations/current',
     reference: 'i18n/zh-HK/docusaurus-plugin-content-docs-reference/current',
     models: 'i18n/zh-HK/docusaurus-plugin-content-docs-models/current',
     learn: 'src/learn/content/zh-HK',
   },
   ja: {
     docs: 'i18n/ja/docusaurus-plugin-content-docs/current',
-    guides: 'i18n/ja/docusaurus-plugin-content-docs-guides/current',
+    integrations: 'i18n/ja/docusaurus-plugin-content-docs-integrations/current',
     reference: 'i18n/ja/docusaurus-plugin-content-docs-reference/current',
     models: 'i18n/ja/docusaurus-plugin-content-docs-models/current',
     learn: 'src/learn/content/ja',
@@ -61,7 +61,7 @@ const localeTargets = {
 
 const contentRoots = [
   { name: 'docs', source: 'src/content/en/docs', recursive: true },
-  { name: 'guides', source: 'src/content/en/guides', recursive: true },
+  { name: 'integrations', source: 'src/content/en/integrations', recursive: true },
   { name: 'reference', source: 'src/content/en/reference', recursive: true },
   { name: 'models', source: 'src/content/en/models', recursive: true },
   { name: 'learn', source: 'src/learn/content', recursive: false },

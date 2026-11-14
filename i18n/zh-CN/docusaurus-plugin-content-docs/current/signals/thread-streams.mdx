@@ -1,0 +1,129 @@
+---
+title: 'Thread streams | Signals'
+description: 'Subscribe to a Mastra agent thread to read stored history, live output, and lifecycle events as a single ordered stream.'
+packages:
+  - '@mastra/core'
+  - '@mastra/client-js'
+---
+
+# 线程流
+
+线程流在同一线程上运行时携带Agent的输出[thread](/docs/memory/message-history#threads-and-resources)。您订阅一次即可接收模型文本、Tool调用和结果、批准请求和错误，如下所示[块](/reference/streaming/ChunkType)。订阅在运行之间保持打开状态，因此您无需在每次发送输入时创建新的响应流。
+
+您还可以在订阅开始时请求存储的消息。这可以让您的应用程序在显示新输出之前显示到目前为止的对话。
+
+## 快速入门 {/* #quickstart */}
+
+在发送输入之前订阅，以便您可以从运行开始就接收输出。本示例使用[`subscribeToThread()`](/reference/client-js/agents#subscribetothread) from the JavaScript client SDK. It needs a running Mastra server with a `support-agent` agent. Configure [Memory](/docs/memory/overview) on that agent if you want to store history.
+
+对于使用的服务器端代码`Agent` instance directly, follow the [Agent quickstart](/docs/signals/overview#use-an-agent) instead.
+
+```typescript title="src/app/chat.ts"
+import { MastraClient } from '@mastra/client-js'
+
+const client = new MastraClient({ baseUrl: 'http://localhost:4111' })
+const agent = client.getAgent('support-agent')
+
+const subscription = await agent.subscribeToThread({
+  resourceId: 'user-123',
+  threadId: 'thread-456',
+})
+
+await agent.sendMessage({
+  message: 'Show the shorter version.',
+  resourceId: 'user-123',
+  threadId: 'thread-456',
+})
+
+await subscription.processDataStream({
+  onChunk: chunk => {
+    console.log(chunk)
+  },
+  reconnect: true,
+})
+```
+
+[`client.getAgent()`](/reference/client-js/mastra-client#methods)选择服务器的Agent。[`sendMessage()`](/reference/client-js/agents#sendmessage) returns when Mastra accepts the input. [`processDataStream()`](/reference/client-js/agents#subscribetothread) passes output to `onChunk`, which prints each chunk here. It continues listening after the answer finishes.
+
+## 读取流 {/* #read-the-stream */}
+
+### 存储的历史记录和活动部件 {/* #stored-history-and-live-parts */}
+
+经过`withInitialHistory: true` to begin with a `thread-history` chunk, which carries the newest page of stored messages in oldest-first order. `perPage` defaults to 40. Subscribers then receive retained parts newer than that history, followed by live parts. History requires memory. Without it, or before the thread has messages, the chunk still arrives first with an empty `messages` array.
+
+### 块和运行 {/* #chunks-and-runs */}
+
+使用`runId` to group chunks from the same run. The exception is [`thread-history`](/reference/streaming/ChunkType#thread-history), which has an empty `runId` because its messages can span several runs. The subscription's [`activeRunId()`](/reference/agents/agent#subscribetothreadoptions) returns the active run's ID or `null`.
+
+公开订阅流包括`AgentChunkType`. `withInitialHistory` adds `ThreadHistoryChunk`, and `withRunStatus: true` adds `ThreadRunStatusChunk`. Both options default to `false`. The [ChunkType reference](/reference/streaming/ChunkType) lists the fields for model output, tool calls and results, approvals, aborts, and errors. To observe queue counts, use [`subscribeThreadEvents()`](/reference/signals/thread-events)分别地。
+
+### 检测运行何时完成 {/* #detect-when-a-run-finishes */}
+
+经过`withRunStatus: true` to opt in to run outcomes. Existing subscriptions don't receive these chunks by default.
+
+```typescript
+const subscription = await agent.subscribeToThread({
+  resourceId: 'user-123',
+  threadId: 'thread-456',
+  withRunStatus: true,
+})
+```
+
+一个[`thread-run-status`](/reference/streaming/ChunkType#thread-run-status) chunk identifies the run's outcome independently of its output:
+
+```typescript
+const chunk = {
+  type: 'thread-run-status',
+  runId: 'run-123',
+  from: 'AGENT',
+  payload: { status: 'success' },
+}
+```
+
+`status`是`success`, `failed`, `aborted`, or `suspended`. Live output arrives before its status. A suspension is resumable: the same run can later produce more output and a final status. A run outcome doesn't close the thread subscription, which continues listening for later runs.
+
+和`withInitialHistory`, the first chunk's payload is `{ messages, hasMore, activeRunId }`. `activeRunId` identifies the run holding thread ownership during hydration, or is `null` when idle. Use `thread-run-status` to determine the outcome. An idle thread alone doesn't indicate success.
+
+和`withRunStatus: true`, retained outcomes are delivered even when a run finished before you subscribed and its text is already in history. A late subscriber using both options receives one status for every still-retained finished run, including runs outside the initial history page. It doesn't receive only the newest run's status. Final outcomes are deduplicated within one subscription. Suspension notifications are deduplicated per execution segment. A reconnect creates a new subscription and may deliver the same outcome again. Group updates by `runId` rather than treating each delivery as a new answer.
+
+### 批准Tool调用 {/* #approve-tool-calls */}
+
+当运行暂停以等待Tool批准时，请发送您的决定[`client.getAgent().sendToolApproval()`](/reference/client-js/agents#sendtoolapproval) or the [server approval route](/reference/server/routes#subscription-tool-approval-routes). The existing subscription receives output when the run resumes.
+
+暂停的运行保留线程的所有权。尝试开始新运行的信号会收到`accepted` action of `blocked` until the paused run resumes or is aborted. Pending approvals and suspensions are replayed when you subscribe again. Completed stored output isn't replayed. Retained run outcomes are delivered when `withRunStatus: true`. [When the agent sees your input](/docs/signals/sending-signals#when-the-agent-sees-your-input) covers the interrupt and wait rules for input that arrives during a run.
+
+### 过滤订阅中的信号 {/* #filter-signals-in-a-subscription */}
+
+`hideSignals`过滤一个订阅者的信号块。经过`true` to hide every recognized signal, `false` to show them, or an array of signal types. It doesn't change model context, stored messages, shared broadcasts, or other subscribers, and it isn't a security boundary. The option exists on the in-process core subscription. HTTP and `client-js` subscription requests don't support it.
+
+## 停止运行或关闭订阅 {/* #stop-a-run-or-close-a-subscription */}
+
+[`abort()`](/reference/client-js/agents#subscribetothread)请求取消当前运行。`unsubscribe()` closes the subscription without aborting, so the run continues and you can subscribe again later. Pending signals survive an abort unless you pass `clearPendingSignals: true`.
+
+## 重新连接 {/* #reconnect */}
+
+使用`reconnect: true` for long-lived subscriptions. `processDataStream()` then resubscribes when the transport closes or a reconnect request fails, retrying indefinitely with a one-second delay by default. A 4xx other than `408` or `429`, or a `501`, stops reconnecting and rejects. See the [`subscribeToThread()` reference](/reference/client-js/agents#subscribetothread) for retry options.
+
+重新连接可以恢复共享的输出[PubSub backend](/docs/server/pubsub) still retains. It can't recover events held only in another process's in-memory cache. Use `withInitialHistory` to reload the newest page of stored messages when you need conversation history.
+
+存储的消息并不是每个流式文本片段的记录。重新连接不会重播已完成的存储输出或重建未保留的片段。
+
+结果恢复受 PubSub 后端保留的限制，而不是受历史页面大小的限制。当保存的输出被修剪时，Redis Streams 会保留紧凑的终端事件和执行权限元数据，但其配置的流长度和空闲 TTL 仍然可以驱逐它们。这不是永久的运行审核日志或保证的时间窗口。升级两者`@mastra/core` and `@mastra/redis-streams` for recovery after trimming. Older adapters may delete terminal events with the output.
+
+### 自定义端点的 SSE 心跳 {/* #sse-heartbeats-for-custom-endpoints */}
+
+如果您为线程订阅公开自己的服务器发送事件 (SSE) 端点，请在流空闲时定期发送心跳帧。这可以防止浏览器、Agent和负载均衡器在下一个信号或模型块到达之前关闭连接。
+
+以下示例每 25 秒发送一条 SSE 评论：
+
+```typescript title="src/api/subscribe.ts"
+const heartbeat = setInterval(() => {
+  controller.enqueue(encoder.encode(': keep-alive\n\n'))
+}, 25_000)
+
+request.signal.addEventListener('abort', () => {
+  clearInterval(heartbeat)
+})
+```
+
+将心跳与客户端重新连接逻辑结合使用。心跳减少空闲断开，而重新连接会在网络或运行时仍然关闭流时恢复。

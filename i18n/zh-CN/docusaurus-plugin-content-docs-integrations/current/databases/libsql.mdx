@@ -1,0 +1,172 @@
+---
+title: "libSQL | Database"
+description: "Persist Mastra messages, workflow snapshots, traces, and eval scores in local or remote libSQL with managed tables and initialization options."
+packages:
+  - "@mastra/libsql"
+  - "@mastra/memory"
+---
+
+# 库SQL
+
+[库SQL](https://docs.turso.tech/libsql)是一个开源的、兼容 SQLite 的数据库，支持本地和远程部署。它可用于存储消息历史记录、Workflow快照、跟踪和评估分数。
+
+对于语义召回或传统 RAG 等向量，请使用[libSQL Vector](/integrations/vectors/libsql) which covers embeddings and vector search.
+
+## 安装 {/* #installation */}
+
+存储提供程序必须作为单独的包安装：
+
+```bash npm2yarn
+npm install @mastra/libsql@latest
+```
+
+## 用法 {/* #usage */}
+
+```typescript
+import { LibSQLStore } from '@mastra/libsql'
+import { Mastra } from '@mastra/core'
+
+const mastra = new Mastra({
+  storage: new LibSQLStore({
+    id: 'libsql-storage',
+    url: 'file:./storage.db',
+  }),
+})
+```
+
+Agent级文件存储：
+
+```typescript
+import { Memory } from '@mastra/memory'
+import { Agent } from '@mastra/core/agent'
+import { LibSQLStore } from '@mastra/libsql'
+
+export const agent = new Agent({
+  id: 'example-agent',
+  memory: new Memory({
+    storage: new LibSQLStore({
+      id: 'libsql-storage',
+      url: 'file:./agent.db',
+    }),
+  }),
+})
+```
+
+:::警告
+文件存储不适用于具有临时文件系统的无服务器平台。对于无服务器部署，请使用[Turso](https://turso.tech) or a different database engine.
+:::
+
+使用远程数据库进行生产：
+
+```typescript
+storage: new LibSQLStore({
+  id: 'libsql-storage',
+  url: 'libsql://your-db-name.aws-ap-northeast-1.turso.io',
+  authToken: process.env.TURSO_AUTH_TOKEN,
+})
+```
+
+对于本地开发和测试，您可以将数据存储在内存中：
+
+```typescript
+storage: new LibSQLStore({
+  id: 'libsql-storage',
+  url: ':memory:',
+})
+```
+
+:::警告
+当进程发生变化时，内存存储会重置。只适合开发。
+:::
+
+与远程主副本（例如 Turso）同步的嵌入式副本：
+
+```typescript
+storage: new LibSQLStore({
+  id: 'libsql-storage',
+  url: 'file:./replica.db',
+  syncUrl: 'libsql://your-db-name.aws-ap-northeast-1.turso.io',
+  authToken: process.env.TURSO_AUTH_TOKEN,
+  syncInterval: 60,
+})
+```
+
+## 选项 {/* #options */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'url',
+  type: 'string',
+  description:
+    'Database URL. Use `:memory:` for in-memory database, `file:filename.db` for a file database, or a libSQL connection string (e.g., `libsql://your-database.turso.io`) for remote storage.',
+  isOptional: false,
+},
+{
+  name: 'authToken',
+  type: 'string',
+  description: 'Authentication token for remote libSQL databases.',
+  isOptional: true,
+},
+{
+  name: 'syncUrl',
+  type: 'string',
+  description:
+    'URL of the remote primary database to sync from, enabling an embedded replica. Requires a local `file:` url.',
+  isOptional: true,
+},
+{
+  name: 'syncInterval',
+  type: 'number',
+  description: 'Interval in seconds for automatic sync with the remote primary. Only applies when `syncUrl` is set.',
+  isOptional: true,
+},
+]}
+/>
+
+## 托管表 {/* #managed-tables */}
+
+存储实现自动创建核心存储表，包括`mastra_notifications` for notification inbox records and delivery metadata.
+
+`LibSQLStore`通过公开通知存储`getStore('notifications')`.
+
+## 初始化 {/* #initialization */}
+
+当您将存储传递给 Mastra 类时，`init()` is called automatically to create the [core schema](/reference/storage/overview#core-schema):
+
+```typescript
+import { Mastra } from '@mastra/core'
+import { LibSQLStore } from '@mastra/libsql'
+
+const storage = new LibSQLStore({
+  id: 'libsql-storage',
+  url: 'file:./storage.db',
+})
+
+const mastra = new Mastra({
+  storage, // init() called automatically
+})
+```
+
+如果不使用 Mastra 直接使用存储，请致电`init()` explicitly:
+
+```typescript
+import { LibSQLStore } from '@mastra/libsql'
+
+const storage = new LibSQLStore({
+  id: 'libsql-storage',
+  url: 'file:./storage.db',
+})
+
+await storage.init()
+
+// Access domain-specific stores via getStore()
+const memoryStore = await storage.getStore('memory')
+const thread = await memoryStore?.getThreadById({ threadId: '...' })
+```
+
+## 可观察性 {/* #observability */}
+
+libSQL 支持可观察性，非常适合本地开发。使用`realtime` [tracing strategy](/docs/observability/integrations/exporters/mastra-storage#tracing-strategies) for immediate visibility while debugging.
+
+对于具有较高跟踪量的生产环境，请考虑使用[PostgreSQL](/integrations/databases/postgresql) or [ClickHouse via composite storage](/reference/storage/composite#specialized-storage-for-observability).

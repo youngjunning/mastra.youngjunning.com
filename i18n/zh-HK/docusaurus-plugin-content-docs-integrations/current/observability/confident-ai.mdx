@@ -1,0 +1,149 @@
+---
+title: "Confident AI | Observability"
+description: "Export Mastra traces to Confident AI for LLM observability and online evals, using environment credentials or explicit exporter configuration."
+packages:
+  - "@mastra/observability"
+---
+
+# 自信的人工智慧
+
+[自信的人工智慧](https://www.confident-ai.com/)是一個法學碩士可觀察性和評估平台，供團隊在開發和生產中建立可靠的人工智慧應用程式。
+
+這`ConfidentMastraExporter` from [`confident-trace`](https://github.com/confident-ai/confident-trace)將您的 Mastra 追蹤發送到 Confident AI，其中Agent運行會顯示完整的Agent、模型和Tool層次結構，並且可以在到達時自動評分。
+
+## 安裝 {/* #installation */}
+
+```bash npm2yarn
+npm install confident-trace@latest
+```
+
+## 配置 {/* #configuration */}
+
+### 先決條件 {/* #prerequisites */}
+
+1. **自信AI帳號**: 報名於[confident-ai.com](https://app.confident-ai.com)
+2. **API金鑰**：在您的 Confident AI 專案設定中產生一個
+3. **環境變數**：設定您的憑證：
+
+```bash title=".env"
+CONFIDENT_API_KEY=confident_proj_xxxxxxxxxxxxx
+
+# Optional. EU region, defaults to the US servers
+CONFIDENT_OTEL_ENDPOINT=https://eu.otel.confident-ai.com/v1/traces
+```
+
+### 零配置設定 {/* #zero-config-setup */}
+
+設定環境變數後，無需配置即可使用匯出器：
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { Observability } from '@mastra/observability'
+import { ConfidentMastraExporter } from 'confident-trace/mastra'
+
+export const mastra = new Mastra({
+  observability: new Observability({
+    configs: {
+      confidentAI: {
+        serviceName: 'my-service',
+        exporters: [new ConfidentMastraExporter()],
+      },
+    },
+  }),
+})
+```
+
+### 明確配置 {/* #explicit-configuration */}
+
+您也可以直接傳遞憑證（優先於環境變數）：
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { Observability } from '@mastra/observability'
+import { ConfidentMastraExporter } from 'confident-trace/mastra'
+
+export const mastra = new Mastra({
+  observability: new Observability({
+    configs: {
+      confidentAI: {
+        serviceName: 'my-service',
+        exporters: [
+          new ConfidentMastraExporter({
+            apiKey: process.env.CONFIDENT_API_KEY,
+            endpoint: process.env.CONFIDENT_OTEL_ENDPOINT,
+          }),
+        ],
+      },
+    },
+  }),
+})
+```
+
+您可以使用以下選項：
+
+```typescript
+new ConfidentMastraExporter({
+  apiKey: process.env.CONFIDENT_API_KEY, // Default: CONFIDENT_API_KEY
+  endpoint: process.env.CONFIDENT_OTEL_ENDPOINT, // Default: US servers
+  captureContent: false, // Omit inputs, outputs, and messages
+  maxContentBytes: 512, // Truncate captured content
+  timeoutMillis: 30000, // Flush and shutdown budget
+  resourceAttributes: { 'service.name': 'my-agent' }, // Overrides serviceName
+})
+```
+
+痕跡攜帶Mastra的配置`serviceName` unless `resourceAttributes['service.name']` overrides it. Mastra's own sampling, filters, and span processors run before export, so whatever your pipeline lets through is what Confident AI receives.
+
+## 支援的訊號 {/* #supported-signals */}
+
+匯出器將結束的 Mastra Span 轉換為 OTLP Span，保留追蹤 ID、Span ID、父 ID、外部父 ID 和原始時間戳記。它不需要啟動事件緩存，因此可以正確恢復Workflow範圍和無序完成導出。
+
+* **Agent和Workflow執行**：操作名稱、時間、狀態、步驟之間的父子關係。
+* **模型調用**：模型詳細資訊、訊息、完成原因以及[token usage](https://www.confident-ai.com/docs/llm-tracing/features/token-usage-cost).
+* **Tool調用**: Tool名稱及其[input/output](https://www.confident-ai.com/docs/llm-tracing/features/input-output).
+* **追蹤詳情**：根操作的名稱、標籤、元資料和輸入/輸出。
+* **錯誤**：失敗的操作保留其錯誤狀態，以使失敗在追蹤中可見。
+
+此整合導出追蹤數據。不包括 Mastra 日誌、指標、分數和回饋。
+
+## 自訂追蹤元數據 {/* #custom-trace-metadata */}
+
+透過 Mastra 傳遞的元資料和標籤`tracingOptions` are forwarded to the trace in Confident AI, where you can filter and group by them:
+
+```typescript
+const result = await mastra.getAgent('assistant').generate('How do you make the best coffee?', {
+  tracingOptions: {
+    metadata: { release: '2026-09', tier: 'enterprise' },
+    tags: ['production', 'support'],
+  },
+})
+```
+
+您的元資料將與 Mastra 自身設定的欄位合併，例如`runId`. Tags apply to the root span, so they land on the trace rather than on individual spans.
+
+## 生命週期 {/* #lifecycle */}
+
+馬斯特拉擁有這家出口商。它創建自己的 OTLP 處理器，並且從不註冊、替換或關閉全域 OpenTelemetry 提供程序，因此不存在`init()` call to make and no preload to add to your start command.
+
+當導出器關閉時，跨度會被大量發送。在每個Agent程式運行和流完成後，或在發送任何內容之前退出短暫的腳本時，將其關閉一次：
+
+```typescript
+await observability.shutdown()
+```
+
+
+
+## 線程和跟踪屬性 {/* #threads-and-trace-properties */}
+
+該導出器映射 Mastra 自己的追蹤表面，因此追蹤元資料和標籤來自`tracingOptions` as shown above.
+
+分組變成[threads](https://www.confident-ai.com/docs/llm-tracing/features/threads) and setting trace-level properties such as user IDs use `confident-trace`'s SDK instrumentation, which attaches to Mastra directly rather than through an exporter. See the [Mastra integration guide](https://www.confident-ai.com/docs/integrations/third-party/mastra) for that setup.
+
+選擇其中之一。不要同時使用兩者。
+
+## 有關的 {/* #related */}
+
+* [追蹤概述](/docs/observability/tracing/overview)
+* [Mastra 整合指南](https://www.confident-ai.com/docs/integrations/third-party/mastra)
+* [線上評估](https://www.confident-ai.com/docs/llm-tracing/online-evals)
+* [GitHub 上的自信追蹤](https://github.com/confident-ai/confident-trace)

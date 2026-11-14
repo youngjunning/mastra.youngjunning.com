@@ -1,26 +1,28 @@
 ---
-title: "參考：RedisStreamsPubSub | PubSub"
-description: RedisStreamsPubSub（用於分散式事件傳送的 Redis Streams 發佈／訂閱實作）API 參考。
+title: 'Reference: RedisStreamsPubSub | PubSub'
+description: "RedisStreamsPubSub is a PubSub implementation backed by Redis Streams. It delivers events across processes and hosts, with persistence, consumer groups, and redelivery on failure."
 packages:
-  - "@mastra/core"
-  - "@mastra/redis-streams"
+  - '@mastra/core'
+  - '@mastra/redis-streams'
 ---
 
 # RedisStreamsPubSub
 
-`RedisStreamsPubSub` 是由 [Redis Streams](https://redis.io/docs/latest/develop/data-types/streams/) 支援的 [`PubSub`](/reference/pubsub/base) 實作。它可跨程序及主機傳送事件，並支援持久化、使用者群組及失敗後重新傳送。它亦實作 [`LeaseProvider`](/reference/pubsub/lease-provider)，因此 signals 層可以跨實例為每項資源選出一名擁有者，讓 signals 能夠在分散式及 serverless 部署中協調執行。
+`RedisStreamsPubSub`是一個[`PubSub`](/reference/pubsub/base)實施支持[Redis 串流](https://redis.io/docs/latest/develop/data-types/streams/)。它跨進程和主機傳遞事件，具有持久性、消費者群組和失敗時的重新傳遞。它還實現了[`LeaseProvider`](/reference/pubsub/lease-provider)。訊號層可以為跨實例的每個資源選擇一個擁有者，這可以讓訊號在分散式和無伺服器部署中協調運作。
 
-適用於多個服務共用事件串流的分散式部署。如要在單一程序內傳送，請使用 [`EventEmitterPubSub`](/reference/pubsub/event-emitter)。如使用 Google Cloud，請使用 [`GoogleCloudPubSub`](/reference/pubsub/google-cloud-pubsub)。
+將其用於多個服務共用事件流的分散式部署。對於單一進程交付，請使用[`EventEmitterPubSub`](/reference/pubsub/event-emitter). For Google Cloud, use [`GoogleCloudPubSub`](/reference/pubsub/google-cloud-pubsub).
 
-每個主題都會對應至 Redis 串流 key。設有群組的訂閱會使用 Redis 使用者群組，讓成員以 round-robin 方式分擔工作。沒有群組的訂閱則會建立私人使用者群組，讓每名訂閱者都收到每個事件。
+每個主題映射到一個 Redis 流鍵。組訂閱使用 Redis 使用者群組。成員循環分擔工作。沒有群組的訂閱會建立一個私人消費者群組。每個訂閱者都會收到每個事件。
 
-`RedisStreamsPubSub` 是拉取式傳輸：使用者透過 `XREADGROUP` 讀取事件，因此 Mastra 會代為執行協調 worker 以讀取事件。
+`RedisStreamsPubSub`是一種拉式傳輸：消費者使用以下方式讀取事件`XREADGROUP`, so Mastra runs an orchestration worker to read on its behalf.
 
 ## 安裝 {/* #installation */}
 
 ```bash npm2yarn
 npm install @mastra/redis-streams
 ```
+
+需要 Redis 7.0 或更高版本。回收循環依賴`XCLAIM` removing trimmed entries from the pending list, which earlier versions don't do.
 
 ## 使用範例 {/* #usage-example */}
 
@@ -37,111 +39,186 @@ export const mastra = new Mastra({
 })
 ```
 
-## 建構函式參數 {/* #constructor-parameters */}
+### Redis集群 {/* #redis-cluster */}
+
+經過`cluster` instead of `url`/`redisOptions` to connect to a Redis Cluster (for example, AWS ElastiCache with cluster mode enabled). The options are forwarded to `createCluster()` from `redis`.
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { RedisStreamsPubSub } from '@mastra/redis-streams'
+
+export const mastra = new Mastra({
+  pubsub: new RedisStreamsPubSub({
+    cluster: {
+      rootNodes: [{ url: 'redis://node-1:6379' }, { url: 'redis://node-2:6379' }],
+    },
+  }),
+})
+```
+
+### 帶上自己的客戶 {/* #bring-your-own-client */}
+
+若要自行控制客戶端建構（TLS、憑證提供者等），請傳遞未連線的`redis` client as `client`. The pubsub uses it as its writer and calls `client.duplicate()` for each subscription's blocking reader. Every connection stays distinct. The pubsub owns the client's lifecycle (it connects on first use and quits it on `close()`), so don't share it with the rest of your app.
+
+```typescript title="src/mastra/index.ts"
+import { RedisStreamsPubSub } from '@mastra/redis-streams'
+import { createClient } from 'redis'
+
+const pubsub = new RedisStreamsPubSub({
+  client: createClient({ url: process.env.REDIS_URL, socket: { tls: true } }),
+})
+```
+
+## 建構函數參數 {/* #constructor-parameters */}
 
 <PropertiesTable
   content={[
-  {
-    name: 'url',
-    type: 'string',
-    description: 'Redis 連線 URL。如未設定，會使用 `redisOptions.url`。',
-    isOptional: true,
-    defaultValue: 'redis://localhost:6379',
-  },
-  {
-    name: 'keyPrefix',
-    type: 'string',
-    description: '串流 key 的前綴。每個主題都會對應至 `<keyPrefix>:<topic>`。',
-    isOptional: true,
-    defaultValue: 'mastra:topic',
-  },
-  {
-    name: 'blockMs',
-    type: 'number',
-    description: '每次讀取在等待新事件時阻塞的時間（毫秒）。',
-    isOptional: true,
-    defaultValue: '1000',
-  },
-  {
-    name: 'redisOptions',
-    type: 'RedisClientOptions',
-    description: '傳入底層 `redis` client、用於進階設定的選項。',
-    isOptional: true,
-  },
-  {
-    name: 'maxStreamLength',
-    type: 'number',
-    description: '每個串流大約保留的項目數目上限。設為 0 可停用修剪。',
-    isOptional: true,
-    defaultValue: '10000',
-  },
-  {
-    name: 'streamIdleTtlMs',
-    type: 'number',
-    description:
-      '閒置到期時間（毫秒）：每次寫入（發佈、nack 重試、重新建立群組）時都會重新整理的滑動 TTL。每次寫入都會重設 TTL，因此持續有內容寫入的串流不會在處理期間到期；串流閒置整段指定時間後，Redis 會自動將其刪除。請注意，只有寫入操作會重新整理 TTL，緩慢清理 backlog 的使用者並不會重新整理；因此，此值應遠高於即時主題兩次寫入之間預期的最長間隔。這是最後保障，而非主要清理機制；`clearTopic` 會處理生命週期正常結束時的刪除，而此設定只會限制從未呼叫 `clearTopic` 的串流（例如執行崩潰）的記憶體用量。必須是非負整數。預設為 0（停用）。',
-    isOptional: true,
-    defaultValue: '0',
-  },
-  {
-    name: 'reclaimIntervalMs',
-    type: 'number',
-    description: '訂閱收回先前使用者已讀取但從未確認之事件的頻率（毫秒）。設為 0 可停用。',
-    isOptional: true,
-    defaultValue: '30000',
-  },
-  {
-    name: 'reclaimIdleMs',
-    type: 'number',
-    description: '待處理事件符合收回資格前的最短閒置時間（毫秒）。此值應遠高於一般處理時間，以免重複傳送。',
-    isOptional: true,
-    defaultValue: '60000',
-  },
-  {
-    name: 'maxDeliveryAttempts',
-    type: 'number',
-    description: '事件透過 `nack` 重新傳送並最終被捨棄前的最大次數。傳入 `Infinity` 可停用此上限。',
-    isOptional: true,
-    defaultValue: '5',
-  },
-  {
-    name: 'logger',
-    type: '{ debug?: Function; warn?: Function }',
-    description: '用於診斷的可選 logger。如省略此項，被抑制的錯誤不會產生任何輸出。',
-    isOptional: true,
-  },
+{
+  name: 'url',
+  type: 'string',
+  description: 'Redis connection URL. Falls back to `redisOptions.url`.',
+  isOptional: true,
+  defaultValue: 'redis://localhost:6379',
+},
+{
+  name: 'keyPrefix',
+  type: 'string',
+  description: 'Prefix for stream keys. Each topic maps to `<keyPrefix>:<topic>`.',
+  isOptional: true,
+  defaultValue: 'mastra:topic',
+},
+{
+  name: 'blockMs',
+  type: 'number',
+  description: 'How long, in milliseconds, each read blocks while waiting for new events.',
+  isOptional: true,
+  defaultValue: '1000',
+},
+{
+  name: 'redisOptions',
+  type: 'RedisClientOptions',
+  description: 'Options passed to the underlying `redis` client for advanced configuration.',
+  isOptional: true,
+},
+{
+  name: 'cluster',
+  type: 'RedisClusterOptions',
+  description:
+    'Connect to a Redis Cluster. Options are passed to `createCluster()` from `redis`. Mutually exclusive with `url`, `redisOptions`, and `client`.',
+  isOptional: true,
+},
+{
+  name: 'client',
+  type: 'RedisClientType | RedisClusterType',
+  description:
+    'A pre-configured, unconnected `redis` client (standalone or cluster) used as the writer; readers are created with `client.duplicate()`. The pubsub owns its lifecycle (connects lazily, quits on `close()`). Mutually exclusive with `url`, `redisOptions`, and `cluster`.',
+  isOptional: true,
+},
+{
+  name: 'maxStreamLength',
+  type: 'number',
+  description: 'Approximate maximum number of entries kept per stream. Set to 0 to disable trimming.',
+  isOptional: true,
+  defaultValue: '10000',
+},
+{
+  name: 'streamIdleTtlMs',
+  type: 'number',
+  description:
+    'Idle expiry in milliseconds: a sliding TTL refreshed on every write to a stream (publish, subscribe creating its consumer group, nack retry). Each write resets it, so an actively-written stream never expires mid-flight; a stream left idle for the full duration is deleted by Redis automatically, together with its entries and consumer groups. Only writes refresh the TTL — a consumer slowly draining a backlog does not — so keep it well above the longest expected gap between writes on a live topic, and above the longest a grouped worker may be offline while still expecting to replay its backlog on restart. For topics with a clear end of life (workflow and agent runs), `clearTopic` deletes the stream eagerly and the TTL only covers streams that never reach that call, such as a crashed run. For open-ended topics that are never cleared (for example, per-conversation streams), the TTL is the only mechanism that reclaims their memory. Set to 0 to disable expiry; streams that never reach `clearTopic` then stay in Redis forever. Must be a non-negative integer.',
+  isOptional: true,
+  defaultValue: '604800000 (7 days)',
+},
+{
+  name: 'reclaimIntervalMs',
+  type: 'number',
+  description:
+    "How often, in milliseconds, a subscription reclaims events that an earlier consumer read but never acknowledged. Set to 0 to disable. While it's enabled, workflow recovery leaves evented runs to this reclaim instead of restarting them. With 0, the pubsub no longer redelivers a stopped worker's events, so workflow recovery restarts evented runs when an instance boots, as it does without a broker.",
+  isOptional: true,
+  defaultValue: '30000',
+},
+{
+  name: 'reclaimIdleMs',
+  type: 'number',
+  description:
+    'Minimum idle time, in milliseconds, before a pending event is eligible for reclaim. Keep this well above typical processing time to avoid double delivery, and at 30000 or more for evented workflows: a step event reclaimed sooner can be dropped as a duplicate.',
+  isOptional: true,
+  defaultValue: '60000',
+},
+{
+  name: 'maxDeliveryAttempts',
+  type: 'number',
+  description:
+    'Maximum times an event is redelivered through `nack` before it is dropped. Pass `Infinity` to disable the cap.',
+  isOptional: true,
+  defaultValue: '5',
+},
+{
+  name: 'inFlightTimeoutMs',
+  type: 'number',
+  description:
+    'How long a handler may hold an event without acking or nacking before the reclaim loop nacks it on its behalf. The event is republished with an incremented `deliveryAttempt`, so `maxDeliveryAttempts` still applies. Set this to recover hung handlers in single-consumer groups. `0` disables it.',
+  isOptional: true,
+  defaultValue: '0',
+},
+{
+  name: 'publishRetryBudgetMs',
+  type: 'number',
+  description:
+    'How long, in milliseconds, `publish` keeps retrying a write that failed with a transient connection error, such as a closed socket, `ECONNRESET`, or Redis answering `LOADING` after a restart. When the budget runs out, `publish` rejects with `PublishRetryBudgetExhaustedError` instead of hanging. `PublishRetryBudgetExhaustedError` is exported from `@mastra/redis-streams`.',
+  isOptional: true,
+  defaultValue: '120000',
+},
+{
+  name: 'logger',
+  type: '{ debug?: Function; warn?: Function }',
+  description: 'Optional logger for diagnostics. When omitted, suppressed errors are silent.',
+  isOptional: true,
+},
 ]}
 />
 
-## 屬性 {/* #properties */}
+## 特性 {/* #properties */}
 
 <PropertiesTable
   content={[
-  {
-    name: 'supportedModes',
-    type: 'ReadonlyArray<"pull" | "push">',
-    description: '傳回 `["pull"]`。',
-  },
+{
+  name: 'supportedModes',
+  type: 'ReadonlyArray<"pull" | "push">',
+  description: 'Returns `["pull"]`.',
+},
+{
+  name: 'supportsOffsets',
+  type: 'boolean',
+  description:
+    'Returns `false`. Redis stream anchors support start positions, but not the numeric indexes used by `subscribeFromOffset()`.',
+},
 ]}
 />
 
 ## 方法 {/* #methods */}
 
-`RedisStreamsPubSub` 會實作 [`PubSub`](/reference/pubsub/base) 協定。以下方法具有此實作特有的行為。
+`RedisStreamsPubSub`實施[`PubSub`](/reference/pubsub/base) contract. The methods below have behavior specific to this implementation.
 
 ### `subscribe(topic, cb, options?)` {/* #subscribetopic-cb-options */}
 
-訂閱主題。設有 `options.group` 時，群組成員會透過 Redis 使用者群組共用事件。沒有群組時，訂閱者會透過私人使用者群組收到每個事件。
+訂閱主題。和`options.group`, members of the group share events through a Redis consumer group. Without a group, the subscriber receives every event through a private consumer group.
+
+放`options.startFrom` to `"latest"` to skip retained entries when Redis creates the consumer group. The default, `"earliest"`, reads retained entries first. This option doesn't reset an existing group's checkpoint.
 
 ```typescript
-await pubsub.subscribe('workflow.events', (event, ack, nack) => {
-  console.log(event)
-})
+await pubsub.subscribe(
+  'workflow.events',
+  (event, ack, nack) => {
+    console.log(event)
+  },
+  { group: 'live-workers', startFrom: 'latest' },
+)
 ```
 
 ### `flush()` {/* #flush */}
 
-等待進行中的發佈完成。
+
 
 ```typescript
 await pubsub.flush()
@@ -149,30 +226,95 @@ await pubsub.flush()
 
 ### `clearTopic(topic)` {/* #cleartopictopic */}
 
-刪除主題的串流及其中所有使用者群組，釋放已完成主題原本會佔用的記憶體。當一次執行到達終止狀態時，Mastra 的執行生命週期（durable Agent 及事件驅動的 Workflow 引擎）會自動呼叫此方法。只有在不會再有任何內容讀取該主題後，才應自行呼叫此方法。此方法會盡力完成操作，絕不會拋出錯誤。失敗會記錄在 warn level。刪除串流時仍保持連接的訂閱者會自行恢復，但會錯過已刪除的項目。
+刪除主題的串流及其上的每個使用者群組，從而釋放已完成的主題原本佔用的記憶體。當運行達到最終狀態時，Mastra 的運行生命週期（持久Agent和事件工作流引擎）會自動呼叫此函數。只有當沒有人會再次閱讀該主題時才調用它。这是尽最大努力并且从不抛出。故障记录在警告级别。當串流被刪除時仍然附加的訂戶可以自行恢復，但會遺失已刪除的條目。
 
-自動清理需要 `@mastra/core` 及 `@mastra/redis-streams` 的版本都支援 `clearTopic`：runtime 會透過快取層轉送呼叫，因此請同時升級兩個依賴套件，以便在執行結束時刪除串流。
+`@mastra/core` and `@mastra/redis-streams` versions that both support `clearTopic`: the runtime routes the call through its caching layer, so upgrade the two packages together to get end-of-run stream deletion.
+
+並非每個主題都能達到`clearTopic` call. Topics without a defined end of life (per-conversation streams, application feeds) are never cleared, and a stream that misses its cleanup (for example, a crashed run) is never retried. The `streamIdleTtlMs` sliding TTL (7 days by default) reclaims those streams once they go idle. Deleting a thread with `Memory.deleteThread()` also clears that thread's stream.
 
 ```typescript
 await pubsub.clearTopic('workflow.events.run-123')
 ```
 
+### `trimTopic(topic, { runId, producedBefore? })` {/* #trimtopictopic--runid-producedbefore- */}
+
+透過串流進行分頁`XRANGE` and runs `XDEL` for every entry published with `runId`. With `producedBefore`, only entries produced at or before that time are deleted, skipping approval and suspension prompts. Mastra uses this to trim a long run each time its messages are saved. Mastra calls this once a thread run's messages are persisted, so an idle thread's stream empties instead of growing to `maxLen`. Because entries are matched by `runId`, a run resumed after a restart also removes the entries it published before the restart. Entries from other runs, including those from other processes, are never touched. Best-effort. Failures are logged at warn level.
+
+```typescript
+await pubsub.trimTopic('agent.thread.thread-abc', { runId: 'run-123' })
+```
+
 ### `close()` {/* #close */}
 
-關閉 Redis 連線並停止所有訂閱。請在正常關閉期間呼叫此方法。
+關閉 Redis 連線並停止所有訂閱。在正常關閉期間呼叫此方法。
 
 ```typescript
 await pubsub.close()
 ```
 
-## 重新傳送及收回 {/* #redelivery-and-reclaim */}
+## Redis配置 {/* #redis-configuration */}
 
-訂閱者呼叫 `nack` 時，事件會以遞增的 `deliveryAttempt` 重新發佈，而原始事件會被確認。事件到達 `maxDeliveryAttempts` 後，會被捨棄而不再傳送。此外，每個訂閱都會定期收回群組中先前使用者已讀取但從未確認的事件；此行為由 `reclaimIntervalMs` 及 `reclaimIdleMs` 控制。
+放`maxmemory-policy` to `noeviction` on the Redis instance. Consumer groups, unacknowledged entries, and [lease keys](#distributed-leasing) are live state, not cache. Under any evicting policy, Redis deletes them when it reaches `maxmemory`: lease keys and streams with a TTL are eviction candidates under `volatile-*` policies, and every key is a candidate under `allkeys-*` policies. Lost leases let two processes run the same thread, and evicted streams silently drop events.
 
-## 分散式租約 {/* #distributed-leasing */}
+和`noeviction`, Redis rejects writes instead of deleting data when memory runs out, so size `maxmemory` for your traffic and rely on `streamIdleTtlMs` to reclaim idle streams. Managed services often default to an evicting policy (Amazon ElastiCache defaults to `volatile-lru`), so check the setting explicitly.
 
-`RedisStreamsPubSub` 會在同一 Redis 連線上實作 [`LeaseProvider`](/reference/pubsub/lease-provider) 協定。[signals runtime](/docs/long-running-agents/signals) 會使用它選出單一擁有者（通常按 thread key 區分），確保跨實例只有一個程序會喚醒及執行 Agent，其他程序則將後續工作轉送給租約持有人。這正是 signals 能夠在 serverless 及多實例部署中運作的原因；如沒有共用租約，每個實例都會開始各自互相競逐的執行。
+什麼時候`maxmemory` is set and the policy isn't `noeviction`, `RedisStreamsPubSub` logs a warning once after it first connects. It reads the policy with `INFO memory`, because many managed services block `CONFIG GET`.
 
-租約 key 會使用與主題相同的 `keyPrefix` namespace，格式為 `<keyPrefix>:lease:<key>`。所有操作都是原子操作：`acquireLease` 使用 `SET NX PX`，並以 idempotent 方式重新整理自身的 TTL；`releaseLease`、`renewLease` 及 `transferLease` 則使用 Lua scripts，在修改前檢查擁有權，因此不會覆蓋另一名擁有者同時進行的續期操作。
+```bash
+redis-server --maxmemory-policy noeviction
+```
 
-你毋須直接呼叫這些方法。將 `RedisStreamsPubSub` 設定為 `pubsub` 後端，runtime 便會自動偵測並使用此功能。如要了解完整的方法協定，請參閱 [`LeaseProvider`](/reference/pubsub/lease-provider)。
+### 回收沒有 TTL 創建的串流 {/* #reclaim-streams-created-without-a-ttl */}
+
+寫入的流`streamIdleTtlMs` was `0`, including by versions before the 7-day default, have no TTL. They stay in Redis until a new write gives them one. To reclaim them:
+
+1. 將實例切換到`noeviction` first. Under a `volatile-*` policy, adding a TTL makes a live stream an eviction candidate.
+2. 使用預設 TTL 的版本或明確部署寫入此 Redis 的每個進程`streamIdleTtlMs` greater than `0`. A write with expiry turned off doesn't refresh an existing TTL, so a stream that an old writer still uses would expire mid-use.
+3. 為沒有 TTL 的每個流指定其應有的到期時間：上次寫入後 7 天。空閒時間超過該時間的串流會立即過期，從而立即釋放記憶體。`PEXPIRE` runs even on an instance that's rejecting writes because it's out of memory.
+
+```bash
+# Replace mastra:topic with your keyPrefix, and add your connection flags
+# (-h, -p, -a, --tls) to every redis-cli call. On a cluster, run it against each primary.
+TTL_MS=604800000
+NOW_MS=$(redis-cli time | awk 'NR == 1 { s = $1 } NR == 2 { printf "%.0f", s * 1000 + $1 / 1000 }')
+redis-cli --scan --pattern 'mastra:topic:*' | while read -r key; do
+  [ "$(redis-cli type "$key")" = "stream" ] || continue
+  [ "$(redis-cli pttl "$key")" = "-1" ] || continue
+  last_ms=$(redis-cli --raw xinfo stream "$key" | awk 'prev == "last-generated-id" { split($0, id, "-"); print id[1]; exit } { prev = $0 }')
+  [ -n "$last_ms" ] || continue
+  if [ "$last_ms" = "0" ]; then
+    remaining=$TTL_MS # never written to, only subscribed
+  else
+    remaining=$(( TTL_MS - (NOW_MS - last_ms) ))
+    [ "$remaining" -lt 1 ] && remaining=1
+    [ "$remaining" -gt "$TTL_MS" ] && remaining=$TTL_MS
+  fi
+  redis-cli pexpire "$key" "$remaining" > /dev/null
+done
+```
+
+此循環僅涉及沒有 TTL 的流，因此重複運行是安全的。在步驟 2 之後，仍在使用的流會保留其數據，因為每次寫入都會刷新 TTL。
+
+## 重新投遞和回收 {/* #redelivery-and-reclaim */}
+
+當訂戶呼叫時`nack`, the event is republished with an incremented `deliveryAttempt` and the original is acknowledged. Once an event reaches `maxDeliveryAttempts`, it's dropped instead of redelivered. Separately, each subscription periodically reclaims events that an earlier consumer in the group read but never acknowledged, controlled by `reclaimIntervalMs` and `reclaimIdleMs`.
+
+訂閱永遠不會回收自己的處理程序仍在處理的事件，因此不會為相同事件呼叫兩次慢速處理程序。如果處理程序掛起，則該群組中的另一個使用者會在該事件閒置一段時間後回收該事件`reclaimIdleMs`. In a single-consumer group there's no sibling to do that, so set `inFlightTimeoutMs` to have the subscription nack the event itself after that long.
+
+### Agent工人接管事件 {/* #evented-agent-worker-takeover */}
+
+使用 Postgres 存儲，分散式事件Agent程式透過 Redis 發布工作人員編排事件。如果一個工作執行緒在確認事件之前退出，另一個工作執行緒可以回收該事件並完成執行，同時原始 API 程序保持活動狀態。配置 API 流程`MASTRA_WORKERS=false` and worker processes with `MASTRA_WORKERS=orchestration`. All processes must share the same Postgres database, Redis connection settings, and `keyPrefix`.
+
+保持`reclaimIdleMs` above 30 seconds (the default is 60 seconds). A lower value can reclaim an event while the stopped worker still holds the step, causing the event to be acknowledged without running.
+
+在舊版本上啟動的運行可以在升級後完成，但不保證崩潰恢復。沒有發生標識符的已保存步驟將保留其現有的不受保護的行為。其他儲存適配器在工作進程上保留分散式內部編排。
+
+被中斷的步驟可以再次執行，因此使外部副作用具有冪等性。已完成的步驟發生受到保護，不會發生過時的重新交付，並且已完成的循環迭代會重複使用其保存的結果和循環決策。即使在以下情況下，受保護的執行也會保留復原所需的記錄：`shouldPersistSnapshot` returns `false`. Resume, time travel, restart races, and individual `foreach` items aren't covered by these occurrence guards. See [make tools safe to repeat](/docs/harness/durable-agents#make-tools-safe-to-repeat) for agent tools.
+
+## 分散式租賃 {/* #distributed-leasing */}
+
+`RedisStreamsPubSub`實施[`LeaseProvider`](/reference/pubsub/lease-provider) contract on top of the same Redis connection. The [signals runtime](/docs/signals/overview) uses it to elect a single owner (usually per thread key) so that across instances only one process wakes and runs the agent, and others route follow-up work to the holder. This is what makes signals work on serverless and multi-instance deployments; without a shared lease, each instance would start its own competing run.
+
+租賃金鑰在相同的命名空間下`keyPrefix` as topics, as `<keyPrefix>:lease:<key>`. All operations are atomic: `acquireLease` uses `SET NX PX` and refreshes its own TTL idempotently, while `releaseLease`, `renewLease`, and `transferLease` use Lua scripts that check ownership before mutating, so a concurrent renewal from another owner is never clobbered.
+
+您不直接呼叫這些方法。配置`RedisStreamsPubSub` as the `pubsub` backend is enough for the runtime to detect and use the capability. See [`LeaseProvider`](/reference/pubsub/lease-provider) for the full method contract.

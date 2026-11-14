@@ -1,22 +1,22 @@
 ---
-title: "多輪 Evals | Evals"
-description: "透過在共用 thread 上依序傳送輸入，評估 Agent 在多輪對話中的行為。"
+title: "Multi-turn evals | Evals"
+description: "Evaluate Mastra agents across multi-turn conversations by sending sequential inputs on one memory thread and scoring individual turns or the full exchange."
 packages:
   - "@mastra/core"
 ---
 
-# 多輪 Evals
+# 多輪評估
 
-多輪 Evals 會測試 Agent 在整段對話中的行為。你不再提供單一 `input`，而是提供 `inputs` 陣列。每個項目都會在同一個 thread 上依序傳送給 Agent，而 scorer 則會看到所有輪次累積而成的輸出。
+多輪評估測試座席在對話中的行為。而不是單一的`input`，你提供一個`inputs`大批。每個條目都按順序發送到同一執行緒上的Agent，記分員會看到所有回合的累積輸出。
 
-## 何時使用多輪 Evals {/* #when-to-use-multi-turn-evals */}
+## 何時使用多輪評估 {/* #when-to-use-multi-turn-evals */}
 
-- Agent 使用記憶，並且必須記起較早輪次的上下文
-- Agent 處理依賴先前回應的跟進問題
-- 你需要驗證整段對話中的 Tool 呼叫次序
-- Agent 執行多步驟 Workflow（搜尋、確認、執行）
+* Agent使用記憶並且必須回憶起先前回合的上下文
+* Agent處理取決於先前回應的後續問題
+* 您需要驗證對話中的Tool呼叫序列
+* Agent程式運行多步驟Workflow（搜尋、確認、執行）
 
-## 快速開始 {/* #quickstart */}
+## 快速入門 {/* #quickstart */}
 
 ```typescript title="src/evals/conversation-eval.ts"
 import { runEvals } from '@mastra/core/evals'
@@ -38,13 +38,19 @@ const result = await runEvals({
 })
 ```
 
-每一輪都會使用相同的 thread ID 執行 `agent.generate()`，因此 Agent 可以看到完整的對話記錄。Scorer 會收到所有輪次累積而成的輸出訊息。
+每個回合運行`agent.generate()` with the same thread ID. The agent sees the full conversation history. Scorers receive the accumulated output messages from all turns.
 
-## 跨輪次記憶必須使用記憶功能 {/* #memory-is-required-for-cross-turn-recall */}
+:::警告\[預建法學碩士評判一級]
 
-多輪記憶取決於 Agent 是否已**設定 memory store**。共用 thread ID 讓每一輪都可以看到先前的輪次，但只有在 Agent 設有記憶功能時，thread 才會保留記錄。如果 Agent 未設定記憶功能，各輪次仍會依序執行，輸出亦會繼續累積以供評分，但 Agent 不會記得先前的輪次（每個輸入都會獨立執行）。`runEvals` 會在你對沒有記憶功能的 Agent 使用 `inputs` 時記錄警告。
+預先建立的 LLM 評判評分器（標題、答案相關性、忠誠度以及其他列出的內容）[Scorer compatibility](#scorer-compatibility)) read a single assistant message, so with `inputs` they grade only the last turn's response. For semantic grading across a conversation, use [`createMultiTurnJudgeScorer()`](/reference/evals/multi-turn-judge), which grades every assistant turn against one criterion, or per-turn [`turns[].scorers`](#per-turn-assertions-with-turns), where each turn grades its own output.
 
-`runEvals` 會代你管理對話識別資料：它會產生共用的 `threadId`，並注入 `resourceId`（Mastra 記憶會按 resource + thread 劃分訊息範圍，因此兩者缺一不可，Agent 才能記起內容）。預設情況下，resource 會從所產生的 thread 衍生，讓每段對話互相隔離。如要固定使用特定 resource，例如重用現有使用者的記憶，請傳入 `targetOptions.memory.resource`；thread 仍由 `runEvals` 管理，因此你不需要提供 thread：
+:::
+
+## 交叉轉彎回憶需要記憶 {/* #memory-is-required-for-cross-turn-recall */}
+
+多輪召回取決於智能體的**memory store configured**. The shared thread ID is what lets each turn see the earlier ones, but a thread only persists history when the agent has memory. If the agent has no memory configured, the turns still run sequentially and their outputs still accumulate for scoring, but the agent won't recall earlier turns (each input runs in isolation). `runEvals` logs a warning when you use `inputs` on an agent without memory.
+
+`runEvals`透過產生共享來管理對話身份`threadId` and injecting a `resourceId`. Mastra memory scopes messages by resource and thread, so recall requires both values. By default, deriving the resource from the generated thread isolates each conversation. Pass `targetOptions.memory.resource` to pin a resource, such as when reusing an existing user's memory; `runEvals` still owns the thread, so you don't provide one:
 
 ```typescript
 await runEvals({
@@ -55,31 +61,110 @@ await runEvals({
 })
 ```
 
-有關設定 memory store 的方法，請參閱 [Memory](/docs/memory/overview)。
+看[Memory](/docs/memory/overview) for how to configure a memory store.
 
-## 運作方式 {/* #how-it-works */}
+## 它是如何運作的 {/* #how-it-works */}
 
-當資料項目包含 `inputs` 陣列時，`runEvals` 會：
+當資料項有一個`inputs` array, `runEvals`:
 
-1. 為對話建立新的 thread（獨有的 `threadId`）和 resource（保留呼叫者提供的 `targetOptions.memory.resource`）
-1. 在該 thread 上透過 `agent.generate()` 依序傳送每個輸入
-1. 累積所有輪次的輸出訊息
-1. 將完整的累積輸出傳給 scorer 評估
+1. 建立一個新線程（唯一`threadId`) and resource for the conversation (a caller-provided `targetOptions.memory.resource` is preserved)
+2. 透過順序發送每個輸入`agent.generate()` on that thread
+3. 累積各回合的所有輸出訊息
+4. 將全部累積輸出傳遞給評分員進行評估
 
-Scorer 會看到完整的對話輸出，包括每一輪的內容。
+記分員可以看到完整的對話輸出，包括每個回合。
 
 ## 評分語義 {/* #scoring-semantics */}
 
-為多輪項目編寫 scorer 時，以下細節非常重要：
+在為多回合項目編寫記分器時，這些細節很重要：
 
-- **`run.output` 是每一輪的累積輸出。** 以輸出為依據的 scorer，例如 `checks.includes`、`checks.calledTool`、`checks.similarity` 及同類 scorer，會評估整段對話。例如，`checks.calledTool('get_weather', { times: 2 })` 會計算所有輪次的呼叫次數。
-- **`run.input` 只是第一輪的輸入。** 比較輸入和輸出的 scorer（忠實度、答案相關性，以及其他以輸入為依據的 LLM scorer）只會看到第一則使用者訊息，而非完整對話。多輪評估應優先使用以輸出為依據的檢查，或建立直接讀取累積 `run.output` 的 scorer。
+* **`run.output`是每輪的累計輸出。**&#x57FA;於輸出的記分器：`checks.includes`, `checks.calledTool`, `checks.similarity`, and similar: evaluate the whole conversation. For example, `checks.calledTool('get_weather', { times: 2 })` counts calls across all turns.
+* **`run.input`只是第一回合的輸入。**&#x5C07;輸入與輸出（忠誠度、答案相關性和其他與輸入相關的 LLM 評分者）進行比較的評分者只能看到第一個使用者訊息，而不是完整的對話。偏好基於輸出的多輪檢查，或建立讀取累積值的記分器`run.output` directly.
 
-## 使用 `turns` 逐輪斷言 {/* #per-turn-assertions-with-turns */}
+### 記分員相容性 {/* #scorer-compatibility */}
 
-`inputs` 形式會將**累積**輸出視為整體評分，即為所有輪次的輸出給出單一分數。這可能會掩蓋個別輪次的問題：即使跟進輪次失效，只要\_任何\_一輪提到 Brooklyn，`checks.includes('Brooklyn')` 這類以輸出為依據的檢查仍會通過。
+只有當記分員讀取全部內容時，累積輸出才有幫助：
 
-如需斷言**特定輪次**是否正確執行，請改用 `turns`。每一輪都是一個物件，包含本身的 `input`，以及可選的 `gates`／`scorers`，而這些項目**只會評估該輪次**的輸入和輸出：
+`inputs` |
+| - | - |
+| [Quick Checks](/docs/evals/quick-checks): `checks.calledTool`, `checks.includes`, `checks.similarity`, `checks.noToolErrors`, and the rest | The whole conversation. Tool-call checks count calls across every turn, and text checks search all assistant text |
+| [Multi-turn Judge scorer](/reference/evals/multi-turn-judge) | Every assistant turn, graded together against one plain-English criterion |
+| Prebuilt LLM-judge scorers: rubric, answer relevancy, answer similarity, faithfulness, hallucination, bias, toxicity, context precision, context recall, context relevance, noise sensitivity, prompt alignment, summarization | Only the last assistant message that carries text. Input-relative judges also see only the first turn's input |
+| Trajectory scorers (`AgentScorerConfig.trajectory`) | The last turn's span when traces are available, otherwise tool calls from all accumulated messages |
+| Custom scorers | Whatever they read from `run.output` |
+
+### 對整個對話進行評分 {/* #grading-a-whole-conversation */}
+
+要一起判斷每個回合，請使用[`createMultiTurnJudgeScorer()`](/reference/evals/multi-turn-judge). It builds a transcript of every assistant turn and asks a judge model whether the conversation satisfies one plain-English criterion, scoring `1` or `0`:
+
+```typescript title="src/evals/trip-planning-eval.ts"
+import { runEvals } from '@mastra/core/evals'
+import { createMultiTurnJudgeScorer } from '@mastra/evals/scorers/prebuilt'
+import { weatherAgent } from '../agents'
+
+const result = await runEvals({
+  data: [
+    {
+      inputs: [
+        "How's the weather in London?",
+        'And Paris?',
+        'Should I pack an umbrella for London?',
+      ],
+    },
+  ],
+  target: weatherAgent,
+  scorers: [
+    {
+      scorer: createMultiTurnJudgeScorer({
+        model: '__GATEWAY_ANTHROPIC_MODEL_HAIKU__',
+        criterion:
+          'The agent provided forecasts for London and Paris, and gave weather-appropriate packing advice.',
+      }),
+      threshold: 1,
+    },
+  ],
+})
+```
+
+要對標準無法表達的內容進行評分，請編寫自己的評分器，並從其中讀取輔助訊息`run.output`. [`extractAgentResponseMessages()`](/reference/evals/scorer-utils#extractagentresponsemessages) returns the text of each assistant message, in order:
+
+```typescript title="src/evals/conversation-judge.ts"
+import { createScorer } from '@mastra/core/evals'
+import { extractAgentResponseMessages } from '@mastra/evals/scorers/utils'
+import { z } from 'zod'
+
+export const conversationJudge = createScorer({
+  id: 'conversation-judge',
+  name: 'Conversation Judge',
+  description: 'Grades every assistant turn in a conversation against one criterion',
+  type: 'agent',
+  judge: {
+    model: '__GATEWAY_ANTHROPIC_MODEL_HAIKU__',
+    instructions: 'You grade multi-turn assistant transcripts against a single criterion.',
+  },
+})
+  .analyze({
+    description: 'Judge the transcript as a whole',
+    outputSchema: z.object({ satisfied: z.boolean(), reason: z.string() }),
+    createPrompt: ({ run }) => {
+      const transcript = extractAgentResponseMessages(run.output)
+        .map((text, index) => `Turn ${index + 1}: ${text}`)
+        .join('\n\n')
+
+      return `Grade this conversation:\n\n${transcript}\n\nCriterion: the assistant keeps the forecast consistent across turns.`
+    },
+  })
+  .generateScore(({ results }) => (results.analyzeStepResult?.satisfied ? 1 : 0))
+  .generateReason(({ results }) => results.analyzeStepResult?.reason ?? '')
+```
+
+傳遞給`runEvals` like any other scorer. See [Custom scorers](/docs/evals/custom-scorers) for the full `createScorer()` pipeline.
+
+## 每回合斷言`turns` {/* #per-turn-assertions-with-turns */}
+
+這`inputs` form scores the **accumulated** output as a whole, a single score over every turn's output. That can hide per-turn failures: an output-based check like `checks.includes('Brooklyn')` passes if *any* turn mentions Brooklyn, even when the follow-up turn is broken.
+
+當你需要斷言**specific turn** behaved correctly, use `turns` instead. Each turn is an object with its own `input` and optional `gates`/`scorers` that evaluate **only that turn's** input and output:
 
 ```typescript title="src/evals/per-turn-eval.ts"
 import { runEvals } from '@mastra/core/evals'
@@ -111,20 +196,20 @@ result.verdict // 'passed' | 'scored' | 'failed'
 result.turnResults // per-turn gate/threshold/scorer outcomes
 ```
 
-語義：
+語意：
 
-- 逐輪 gate 或 scorer **只會看到該輪次的** `run.input` 和 `run.output`，絕不會看到累積對話。這解決了 `inputs` 的兩個盲點：錯誤的輪次無法令檢查通過，而每一輪的 `run.input` 亦會正確無誤。
-- 每輪結果會納入 [verdict](/docs/evals/gates-and-verdicts)：如任何一輪未能通過 gate，verdict 會變為 `failed`。如未達到某輪的 threshold（而 gate 均已通過），則會變為 `scored`。
-- `result.turnResults[i]` 會報告每一輪的 `gateResults`、`thresholdResults` 和 `scores`，因此可以從失敗結果精確找出相關輪次。若有多段對話，則會按輪次索引計算 turn result 的平均值。
-- 沒有 `gates` 或 `scorers` 的輪次仍會推進對話。
-- 頂層 `scorers`／`gates` 仍會以累積輸出為整體執行，因此你可以結合「此輪必須呼叫 Tool」與「答案提到 Brooklyn」兩項要求。
-- 當 Agent 已設定儲存空間，每一項逐輪 scorer／gate 結果都會像頂層分數一樣保留，讓逐輪結果顯示於你的分數儲存空間中。每項已儲存的逐輪分數都會標上其輪次索引（`metadata.turnIndex`）、共用對話的 `threadId`，並連結至該輪本身的 Trace span。
+* 每回合門或記分員收到**only that turn's** `run.input` and `run.output`, rather than the accumulated conversation. A different turn's output can't satisfy the check, and `run.input` contains the input for the turn being evaluated.
+* 每回合的結果折算成[verdict](/docs/evals/gates-and-verdicts): a failing turn gate makes the verdict `failed`. A missed turn threshold (with gates passing) makes it `scored`.
+* `result.turnResults[i]`報告每個回合的`gateResults`, `thresholdResults`, and `scores`. A failure points at the exact turn. Across multiple conversations, turn results are averaged by turn index.
+* 一個回合沒有`gates` or `scorers` advances the conversation.
+* 頂級`scorers`/`gates` still run as a whole over the accumulated output, so you can combine "this turn must call the tool" with "the answer mentions Brooklyn."
+* 當Agent程式配置了儲存時，每個回合記分器/門結果都會像頂級分數一樣保留，因此每回合結果會顯示在您的分數儲存中。每個儲存的每回合分數都使用其回合索引作為標籤（`metadata.turnIndex`) and shares the conversation's `threadId`. It also includes a link to that turn's trace span.
 
-如果整段對話只需要一個整體分數，請使用 `inputs`。如果正確與否取決於個別輪次，請使用 `turns`。同一個資料項目中的 `turns` 不能與 `input` 或 `inputs` 一併使用。
+使用`inputs` when a single whole-conversation score over the whole conversation is enough. Use `turns` when correctness depends on individual turns. `turns` can't be combined with `input` or `inputs` in the same data item.
 
-## 與 gate 和 threshold 配合使用 {/* #combining-with-gates-and-thresholds */}
+## 與閘和閾值結合 {/* #combining-with-gates-and-thresholds */}
 
-多輪資料項目可配合 [gate 和 verdict](/docs/evals/gates-and-verdicts) 使用。請使用以輸出為依據的 scorer，讓 gate 判斷反映完整對話：
+多輪資料項與[gates and verdicts](/docs/evals/gates-and-verdicts). Use output-based scorers so gating reflects the full conversation:
 
 ```typescript title="src/evals/memory-eval.ts"
 import { runEvals } from '@mastra/core/evals'
@@ -144,9 +229,9 @@ const result = await runEvals({
 result.verdict // 'passed' | 'scored' | 'failed'
 ```
 
-## 混合單輪與多輪評估 {/* #mixing-single-turn-and-multi-turn */}
+## 單匝和多匝混合 {/* #mixing-single-turn-and-multi-turn */}
 
-單次 `runEvals` 呼叫可以同時包含單輪和多輪資料項目：
+單一`runEvals` call can include both single-turn and multi-turn data items:
 
 ```typescript title="src/evals/mixed-eval.ts"
 const result = await runEvals({
@@ -161,11 +246,11 @@ const result = await runEvals({
 })
 ```
 
-單輪項目會如常使用 `input`。多輪項目則使用 `inputs`，並可完全省略 `input`。
+單轉物品使用`input` as usual. Multi-turn items use `inputs`, `input` can be omitted entirely.
 
 ## 驗證 {/* #validation */}
 
-`runEvals` 會拋出 `MastraError`，條件是有 `inputs` 但其內容為空：
+`runEvals`拋出一個`MastraError` if `inputs` is present but empty:
 
 ```typescript
 // Throws: 'inputs' must be a non-empty array
@@ -176,8 +261,10 @@ await runEvals({
 })
 ```
 
-## 相關內容 {/* #related */}
+## 有關的 {/* #related */}
 
-- [`runEvals()` 參考資料](/reference/evals/run-evals)：`runEvals` 參數與回傳值的完整 API 說明
-- [Gate 和 verdict](/docs/evals/gates-and-verdicts)：強制執行硬性要求和品質 threshold
-- [Quick Checks](/docs/evals/quick-checks)：無需 LLM、可組合的微型 scorer
+* [`runEvals()`參考](/reference/evals/run-evals)：完整的API`runEvals` parameters and returns
+* [大門和判決](/docs/evals/gates-and-verdicts)：執行硬性要求和品質閾值
+* [快速檢查](/docs/evals/quick-checks)：零法學碩士可組合微型評分器
+* [記分器實用程式](/reference/evals/scorer-utils)：從記分器運作中讀取訊息的助手
+* [多輪裁判記分員](/reference/evals/multi-turn-judge)：LLM法官對每個助理一起評分

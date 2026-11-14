@@ -1,0 +1,416 @@
+---
+title: "ClickHouse | Database"
+description: "Use ClickHouse as a Mastra analytical storage backend for observability, scores, and metrics with vNext or legacy storage domain configuration."
+packages:
+  - "@mastra/clickhouse"
+---
+
+# 克利克屋
+
+[克利克屋](https://clickhouse.com/)是专为分析工作负载而设计的列式数据库。这`@mastra/clickhouse`软件包为多个 Mastra 存储域提供存储适配器，并且是生产可观察性的推荐后端。
+
+ClickHouse 最常用作专用的可观察性后端[composite storage](/reference/storage/composite) setup, with another database serving the remaining domains.
+
+## 何时使用 ClickHouse {/* #when-to-use-clickhouse */}
+
+跟踪、日志、指标、分数和反馈的生产可观察性。
+
+对于本地开发，请使用组合商店[LibSQL](/integrations/databases/libsql) (for memory and workflows) and `@mastra/duckdb` (for observability). Neither alone covers a development setup: LibSQL doesn't implement the observability domain, and DuckDB doesn't implement the other domains. See the [observability overview](/docs/observability/overview) for an example.
+
+## 安装 {/* #installation */}
+
+```bash npm2yarn
+npm install @mastra/clickhouse@latest
+```
+
+您还需要一个正在运行的 ClickHouse 服务器。看[Hosting options](#hosting-options) for managed and self-hosted choices.
+
+## 用法 {/* #usage */}
+
+### vNext 的可观察性（推荐） {/* #observability-with-vnext-recommended */}
+
+`ObservabilityStorageClickhouseVNext`是当前的可观测域实现。它使用仅插入模式支持`ReplacingMergeTree` and is optimized for the volume produced by traces, logs, metrics, scores, and feedback.
+
+将其与另一个存储适配器组合在一起，这样可观察性写入就不会与您的应用程序数据发生冲突：
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { MastraCompositeStore } from '@mastra/core/storage'
+import { PostgresStore } from '@mastra/pg'
+import { ObservabilityStorageClickhouseVNext } from '@mastra/clickhouse'
+import { Observability, MastraStorageExporter } from '@mastra/observability'
+
+const observabilityStore = new ObservabilityStorageClickhouseVNext({
+  url: process.env.CLICKHOUSE_URL!,
+  username: process.env.CLICKHOUSE_USERNAME!,
+  password: process.env.CLICKHOUSE_PASSWORD!,
+})
+
+export const mastra = new Mastra({
+  storage: new MastraCompositeStore({
+    id: 'composite-storage',
+    default: new PostgresStore({
+      id: 'pg',
+      connectionString: process.env.DATABASE_URL!,
+    }),
+    domains: {
+      observability: observabilityStore,
+    },
+  }),
+  observability: new Observability({
+    configs: {
+      default: {
+        serviceName: 'mastra',
+        exporters: [new MastraStorageExporter()],
+      },
+    },
+  }),
+})
+```
+
+`MastraStorageExporter`自动选择`insert-only` strategy when ClickHouse is the observability backend, which gives the highest write throughput. See [tracing strategies](/docs/observability/integrations/exporters/mastra-storage#tracing-strategies) for details.
+
+跟踪删除级联到跨度、跟踪根和分支、指标、日志、分数和由跟踪 ID 链接的反馈。没有跟踪 ID 的信号将被保留。 Mastra 记录删除谓词，然后等待应用 ClickHouse 轻量级删除掩码。当调用解析时，正常读取不再返回与该操作匹配的行。
+
+轻量级删除是一种仅隐藏操作，用 ClickHouse 的标记行`_row_exists` mask. Physical removal depends on merges and deployment-configured retention TTLs. `ObservabilityStorageClickhouseVNext` applies retention only when you pass the `retention` option. Mastra doesn't configure a default retention TTL.
+
+当所有五个Observability信号的保留时间有限时，Mastra 还会对删除请求应用 TTL，以便它们的寿命比它们所保护的信号行的寿命长。如果任何信号不受限制，则删除请求仍然不受限制。看[storage retention](/reference/storage/retention#clickhouse-native-ttl) for how the deletion-request TTL is calculated.
+
+反馈审核状态更新读取当前行并插入替换，因此需要`SELECT` and `INSERT` rather than `ALTER UPDATE`, and the insert materialized view publishes each update to delta polling. An update that re-runs a delete also needs the delete permissions listed in [initialization](#initialization). A review update that lands while a delete of the same feedback is in progress re-runs that delete and returns not found, so it can't recreate deleted feedback. A failed delete doesn't block review updates, but the next update retries it: if the retry succeeds, the update returns not found; if it fails again, the new status is saved but the update returns the delete's error. If a network error or a lagging replica lets a review row outlive a successful delete, the next review update of that feedback deletes it again and returns not found.
+
+### 遗留域的可观察性 {/* #observability-with-the-legacy-domain */}
+
+`ObservabilityStorageClickhouse`是原始的可观察性适配器，并且仍然支持尚未迁移到 vNext 架构的项目。配置形状与vNext类相同。
+
+```typescript
+import { ObservabilityStorageClickhouse } from '@mastra/clickhouse'
+
+const observabilityStore = new ObservabilityStorageClickhouse({
+  url: process.env.CLICKHOUSE_URL!,
+  username: process.env.CLICKHOUSE_USERNAME!,
+  password: process.env.CLICKHOUSE_PASSWORD!,
+})
+```
+
+新项目应该使用`ObservabilityStorageClickhouseVNext` instead.
+
+### 从旧版迁移到 vNext {/* #migrating-from-legacy-to-vnext */}
+
+从遗留系统迁移历史跨度`mastra_ai_spans` table to the vNext schema, run:
+
+```bash npm2yarn
+npx mastra migrate
+```
+
+迁移副本跨越数据`mastra_ai_spans` into `mastra_span_events` in day-sized batches. It handles column mapping and deduplicates legacy rows. The original table remains as a backup. After migration, traces appear in Studio through the vNext adapter.
+
+:::注意
+旧表不会被删除。验证迁移后手动删除它。
+:::
+
+### 适用于每个域的 ClickHouse {/* #clickhouse-for-every-domain */}
+
+`ClickhouseStoreVNext`支持`memory`, `workflows`, and `observability` domains with ClickHouse and uses the vNext observability adapter automatically. Use it when you want ClickHouse to back the entire application without wiring a composite store manually.
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { ClickhouseStoreVNext } from '@mastra/clickhouse'
+
+export const mastra = new Mastra({
+  storage: new ClickhouseStoreVNext({
+    id: 'clickhouse-storage',
+    url: process.env.CLICKHOUSE_URL!,
+    username: process.env.CLICKHOUSE_USERNAME!,
+    password: process.env.CLICKHOUSE_PASSWORD!,
+  }),
+})
+```
+
+`ClickhouseStoreVNext`接受相同的配置`ClickhouseStore` and reuses the same ClickHouse client across every domain.
+
+#### 手工构图 {/* #manual-composition */}
+
+`ClickhouseStore`是一个长期存在的类，它通过遗留可观察性适配器支持每个域。新项目应该更喜欢`ClickhouseStoreVNext`. If you need to customize the composite (for example, to override one domain with a different backend), build it manually:
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { MastraCompositeStore } from '@mastra/core/storage'
+import { ClickhouseStore, ObservabilityStorageClickhouseVNext } from '@mastra/clickhouse'
+
+const credentials = {
+  url: process.env.CLICKHOUSE_URL!,
+  username: process.env.CLICKHOUSE_USERNAME!,
+  password: process.env.CLICKHOUSE_PASSWORD!,
+}
+
+export const mastra = new Mastra({
+  storage: new MastraCompositeStore({
+    id: 'composite-storage',
+    default: new ClickhouseStore({ id: 'clickhouse-storage', ...credentials }),
+    domains: {
+      observability: new ObservabilityStorageClickhouseVNext(credentials),
+    },
+  }),
+})
+```
+
+### 自带 ClickHouse 客户端 {/* #bring-your-own-clickhouse-client */}
+
+当您需要自定义连接设置（例如请求超时、压缩或拦截器）时，传递预配置的客户端：
+
+```typescript
+import { createClient } from '@clickhouse/client'
+import { ClickhouseStore } from '@mastra/clickhouse'
+
+const client = createClient({
+  url: process.env.CLICKHOUSE_URL!,
+  username: process.env.CLICKHOUSE_USERNAME!,
+  password: process.env.CLICKHOUSE_PASSWORD!,
+  request_timeout: 60_000,
+  compression: { request: true, response: true },
+})
+
+const storage = new ClickhouseStore({ id: 'clickhouse-storage', client })
+```
+
+相同`client` form is accepted by `ObservabilityStorageClickhouse` and `ObservabilityStorageClickhouseVNext`.
+
+## 配置 {/* #configuration */}
+
+### `ClickhouseStore`选项 {/* #clickhousestore-options */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'id',
+  type: 'string',
+  description: 'Unique identifier for this storage instance.',
+  isOptional: false,
+},
+{
+  name: 'url',
+  type: 'string',
+  description:
+    'ClickHouse server URL (for example, `https://your-instance.clickhouse.cloud:8443` or `http://localhost:8123`). Required when not passing a pre-configured `client`.',
+  isOptional: true,
+},
+{
+  name: 'username',
+  type: 'string',
+  description: 'ClickHouse username. Required when not passing a pre-configured `client`.',
+  isOptional: true,
+},
+{
+  name: 'password',
+  type: 'string',
+  description:
+    'ClickHouse password. Required when not passing a pre-configured `client`. It can be an empty string for the default user on a local instance.',
+  isOptional: true,
+},
+{
+  name: 'client',
+  type: 'ClickHouseClient',
+  description:
+    'Pre-configured ClickHouse client from `@clickhouse/client`. Use this when you need custom request settings. Mutually exclusive with the credential fields above.',
+  isOptional: true,
+},
+{
+  name: 'ttl',
+  type: 'object',
+  description:
+    'Per-table TTL configuration applied at table creation time. Accepts row-level and column-level TTLs in interval units from `NANOSECOND` through `YEAR`.',
+  isOptional: true,
+},
+{
+  name: 'replication',
+  type: '{ cluster?: string; zookeeperPath?: string; replicaName?: string }',
+  description:
+    'Opt-in replicated table configuration for multi-replica ClickHouse clusters. When set, Mastra creates replicated MergeTree tables. When `cluster` is set, Mastra also adds `ON CLUSTER` to Mastra-owned data definition language (DDL).',
+  isOptional: true,
+},
+{
+  name: 'disableInit',
+  type: 'boolean',
+  description:
+    'When `true`, the store does not run table creation or migrations on first use. Call `storage.init()` explicitly from your deployment scripts.',
+  isOptional: true,
+  defaultValue: 'false',
+},
+]}
+/>
+
+`ClickhouseStore`也接受来自的每个选项`ClickHouseClientConfigOptions` (such as `database`, `request_timeout`, `compression`, `keep_alive`, and `max_open_connections`).
+
+`ClickhouseStore`和`ObservabilityStorageClickhouseVNext` apply `clickhouse_settings` to every query they run. On ClickHouse services that keep data in object storage, such as ClickHouse Cloud, limiting read-ahead lowers the memory each observability query uses, but queries that miss the local cache can run slower:
+
+```typescript title="src/mastra/index.ts"
+const observabilityStore = new ObservabilityStorageClickhouseVNext({
+  url: process.env.CLICKHOUSE_URL!,
+  username: process.env.CLICKHOUSE_USERNAME!,
+  password: process.env.CLICKHOUSE_PASSWORD!,
+  clickhouse_settings: {
+    filesystem_prefetches_limit: 8,
+  },
+})
+```
+
+### 复制集群 {/* #replicated-clusters */}
+
+使用`replication` when Mastra writes to a multi-replica ClickHouse cluster through a load balancer.
+
+```typescript
+const storage = new ClickhouseStoreVNext({
+  id: 'clickhouse-storage',
+  url: process.env.CLICKHOUSE_URL!,
+  username: process.env.CLICKHOUSE_USERNAME!,
+  password: process.env.CLICKHOUSE_PASSWORD!,
+  replication: {
+    cluster: 'company_cluster',
+  },
+})
+```
+
+什么时候`replication` is set, Mastra rewrites its `MergeTree` and `ReplacingMergeTree` table engines to `ReplicatedMergeTree` and `ReplicatedReplacingMergeTree`. The default engine arguments are:
+
+* `zookeeperPath`: `'/clickhouse/tables/{shard}/{database}/{table}'`
+* `replicaName`: `'{replica}'`
+
+默认值符合最常见的自我管理约定。如果集群的现有表使用不同的布局（例如`/clickhouse/tables/{shard}/{table}` without the `{database}` segment), set `zookeeperPath` explicitly to match. Mastra doesn't read your cluster's convention from Keeper, so a mismatched default writes Mastra's metadata to a separate branch from the rest of the cluster.
+
+```typescript
+new ClickhouseStoreVNext({
+  url: process.env.CLICKHOUSE_URL!,
+  username: process.env.CLICKHOUSE_USERNAME!,
+  password: process.env.CLICKHOUSE_PASSWORD!,
+  replication: {
+    cluster: 'company_cluster',
+    zookeeperPath: '/clickhouse/tables/{shard}/{table}',
+  },
+})
+```
+
+放`cluster` to add `ON CLUSTER` to Mastra-owned DDL such as table creation, materialized view creation, column migrations, TTL changes, and table drops.
+
+手动维护如`optimizeTable()` and `materializeTtl()` runs on every replica when `cluster` is set. These operations can be expensive on a large cluster. Prefer running them outside peak hours, and let routine merges happen on the background merge queue rather than triggering them on every restart.
+
+如果现有 Mastra 表使用本地`MergeTree` or `ReplacingMergeTree` engines, initialization fails while `replication` is enabled. Mastra refuses to silently convert local tables because copy-and-swap is unsafe across replicas. To migrate, recreate the affected tables as `Replicated*` before enabling replication. To migrate safely, rename the local table, run `CREATE TABLE ... ENGINE = ReplicatedMergeTree(...) ON CLUSTER ...`, run `INSERT INTO ... SELECT * FROM <renamed_local>`, then drop `<renamed_local>`.
+
+不设置`replication` on ClickHouse Cloud. Cloud rewrites `MergeTree` to `SharedMergeTree` server-side, and explicit `ReplicatedMergeTree` engines produce incorrect DDL. `replication` is only for self-managed multi-replica clusters.
+
+### 可观察性域选项 {/* #observability-domain-options */}
+
+`ObservabilityStorageClickhouse`和`ObservabilityStorageClickhouseVNext` accept the same connection options as `ClickhouseStore` (`url`, `username`, `password`, or a pre-configured `client`). `ObservabilityStorageClickhouseVNext` also accepts `retention`, the per-signal TTL in days described in [ClickHouse native TTL](/reference/storage/retention#clickhouse-native-ttl), and `traceQuery`, the execution limits for [trace queries](/reference/observability/tracing/advanced-queries).
+
+## 托管选项 {/* #hosting-options */}
+
+ClickHouse 可以在任何可以通过 HTTP 访问的地方运行。常见的选择包括：
+
+* **[ClickHouse云](https://clickhouse.com/cloud)**：具有免费试用级别的托管服务。提供直接兼容的连接详细信息`url`, `username`, and `password`.
+* **自托管**：运行官方[`clickhouse/clickhouse-server`](https://hub.docker.com/r/clickhouse/clickhouse-server) container or install from the [official packages](https://clickhouse.com/docs/en/install). Suitable for VPS, dedicated hardware, or Kubernetes.
+
+对于本地发展：
+
+```bash
+docker run -d --name mastra-clickhouse \
+  -p 8123:8123 -p 9000:9000 \
+  -e CLICKHOUSE_USER=default \
+  -e CLICKHOUSE_PASSWORD=password \
+  clickhouse/clickhouse-server
+```
+
+```typescript
+new ObservabilityStorageClickhouseVNext({
+  url: 'http://localhost:8123',
+  username: 'default',
+  password: 'password',
+})
+```
+
+## 使用 Railway 和类似平台进行部署 {/* #deploying-with-railway-and-similar-platforms */}
+
+平台如[Railway](https://railway.com), [Fly.io](https://fly.io), [Render](https://render.com), and Heroku run application containers on ephemeral filesystems. Embedded observability backends such as DuckDB require a writable, persistent local file, so they either lose data on restart or fail to deploy entirely on these platforms.
+
+请改用 ClickHouse。由于 ClickHouse 是通过 HTTP 访问的，因此任何主机都可以使用相同的连接：
+
+```typescript title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { MastraCompositeStore } from '@mastra/core/storage'
+import { PostgresStore } from '@mastra/pg'
+import { ObservabilityStorageClickhouseVNext } from '@mastra/clickhouse'
+import { Observability, MastraStorageExporter } from '@mastra/observability'
+
+export const mastra = new Mastra({
+  storage: new MastraCompositeStore({
+    id: 'composite-storage',
+    default: new PostgresStore({
+      id: 'pg',
+      connectionString: process.env.DATABASE_URL!,
+    }),
+    domains: {
+      observability: new ObservabilityStorageClickhouseVNext({
+        url: process.env.CLICKHOUSE_URL!,
+        username: process.env.CLICKHOUSE_USERNAME!,
+        password: process.env.CLICKHOUSE_PASSWORD!,
+      }),
+    },
+  }),
+  observability: new Observability({
+    configs: {
+      default: {
+        serviceName: 'mastra',
+        exporters: [new MastraStorageExporter()],
+      },
+    },
+  }),
+})
+```
+
+使用以下任一选项配置数据库：
+
+* **托管**：使用ClickHouse云。放`CLICKHOUSE_URL`, `CLICKHOUSE_USERNAME`, and `CLICKHOUSE_PASSWORD` as environment variables in your hosting platform.
+* **在铁路上自行托管**：从官方 Docker 镜像向您的 Railway 项目添加 ClickHouse 服务，然后通过 Railway 的专用网络在应用程序服务中引用它。
+
+相同的方法适用于具有临时文件系统的其他主机。对于也应脱离主机的应用程序数据，请将此设置与托管 PostgreSQL 或 LibSQL/Turso 实例配对，以实现`default` storage.
+
+:::警告
+不要将像 DuckDB 这样的嵌入式后端指向临时容器文件系统内的路径。当容器重新启动时，写入其中的数据会丢失，并且在某些平台上该路径是只读的。
+:::
+
+## 初始化 {/* #initialization */}
+
+当传递到`Mastra` class, `ClickhouseStore` calls `init()` automatically to create the schema and run any pending migrations. The same applies to `ObservabilityStorageClickhouseVNext` when used through `MastraCompositeStore`.
+
+如果您管理外部存储`Mastra`, call `init()` explicitly:
+
+```typescript
+import { ObservabilityStorageClickhouseVNext } from '@mastra/clickhouse'
+
+const observability = new ObservabilityStorageClickhouseVNext({
+  url: process.env.CLICKHOUSE_URL!,
+  username: process.env.CLICKHOUSE_USERNAME!,
+  password: process.env.CLICKHOUSE_PASSWORD!,
+})
+
+await observability.init()
+```
+
+在 CI/CD 管道中，设置`disableInit: true` on `ClickhouseStore` and run `init()` from a deployment step that uses elevated credentials. Runtime application credentials need:
+
+* `SELECT`和`INSERT` on the Mastra tables.
+* `ALTER DELETE`在您从中删除的Observability表上。在 ClickHouse 26.6 及更早版本上，轻量级删除还需要`ALTER UPDATE` on those tables; ClickHouse 26.7 removed that requirement.
+
+## 可观察性 {/* #observability */}
+
+ClickHouse 是推荐用于生产可观察性的后端：
+
+* **仅插入策略**: `MastraStorageExporter` writes completed spans in batches without per-span updates, which is the highest-throughput strategy available.
+* **柱状压缩**：与面向行的数据库中的相同数据相比，跨度属性和日志有效负载压缩得很好。
+
+有关完整的策略矩阵和生产指南，请参阅[`MastraStorageExporter` reference](/docs/observability/integrations/exporters/mastra-storage#storage-provider-support).
+
+## 有关的 {/* #related */}
+
+* [存储概览](/reference/storage/overview)
+* [复合存储](/reference/storage/composite)
+* [`MastraStorageExporter`](/docs/observability/integrations/exporters/mastra-storage)
+* [Observability概述](/docs/observability/overview)

@@ -1,26 +1,26 @@
 ---
-title: "Feedback | Observability"
-description: "在 Mastra Observability 中收集、列出及查詢人工 Feedback 記錄。"
+title: 'Feedback | Observability'
+description: 'Create, list, delete, aggregate, and export human feedback records in Mastra observability, with ratings and comments linked to specific traces and spans.'
 packages:
-  - "@mastra/core"
-  - "@mastra/observability"
+  - '@mastra/core'
+  - '@mastra/observability'
 ---
 
-# Feedback
+# 回饋
 
-Feedback 記錄會擷取 Human-in-the-Loop 訊號，例如正負評、評分、留言與修正。當你需要將使用者、QA、Studio 或系統審查資料附加至 Trace 或 span，並與其他 Observability 訊號一同查詢時，可以使用 Feedback。
+回饋記錄捕捉人機互動訊號，例如拇指、評分、評論和更正。當您需要將使用者、QA、Studio 或系統審核資料附加到追蹤或範圍並查詢該資料以及其他可觀察性訊號時，請使用回饋。
 
-不同於指標與 score，Feedback 通常由人員或審查 Workflow 提供。數值 Feedback 可以進行彙總、分組、依時間繪製圖表，以及查詢百分位數。
+與指標和分數不同，回饋通常由人員或審核Workflow提供。數字回饋值可以隨著時間的推移進行聚合、分組、繪製圖表以及查詢百分位數。
 
-## 使用 Feedback 的時機 {/* #when-to-use-feedback */}
+## 何時使用回饋 {/* #when-to-use-feedback */}
 
-- 收集使用者對 Agent 回應的滿意度評分。
-- 將 QA 留言或修正內容儲存在所審查的 Trace 旁。
-- 依 Agent、環境或實驗建立評分儀表板。
+* 收集Agent回應的用戶滿意度評級。
+* 將 QA 評論或更正儲存在他們審查的追蹤旁邊。
+* 建立按Agent、環境或實驗進行評級的儀表板。
 
-## 新增 Feedback {/* #add-feedback */}
+## 添加回饋 {/* #add-feedback */}
 
-若要從應用程式程式碼為已保存的 Trace 或 span 加上註記，請使用 `mastra.observability.addFeedback()`。此 helper 在 Observability 進入點上是選用項目，因此請確認目前啟用的 Observability 實作支援此功能。如需所有 Client 方法，請參閱 [Client SDK Observability 參考](/reference/client-js/observability)。
+使用`mastra.observability.addFeedback()` to annotate a trace or span from app code. The helper is optional on the observability entrypoint, so check that the active observability implementation supports it. See the [client SDK observability reference](/reference/client-js/observability) for all client methods.
 
 ```typescript title="src/mastra/feedback.ts"
 if (!mastra.observability.addFeedback) {
@@ -39,9 +39,13 @@ await mastra.observability.addFeedback({
 })
 ```
 
-## 找出訊息的 Trace {/* #find-the-trace-for-a-message */}
+回饋將發送至每個支援它的已配置導出器。每個出口商獨立處理自己的目的地。在本地儲存中遺失的追蹤不會阻止回饋到達平台或其他匯出器。
 
-Feedback 通常會針對使用者已讀取的訊息收集，因此你需要取得該訊息的 `traceId`。無論是 stream 結果，或稍後從 Memory 叫回訊息時，Assistant 訊息都會在 `content.metadata` 中帶有此值：
+[`MastraStorageExporter`](/docs/observability/integrations/exporters/mastra-storage)在儲存回饋之前，請在您配置的儲存中尋找追蹤或跨度。如果重試後目標仍然不可用，則會記錄警告並跳過本機寫入。稱呼`mastra.observability.flush()` or `shutdown()` before your process exits to finish pending delivery.
+
+## 查找訊息的踪跡 {/* #find-the-trace-for-a-message */}
+
+回饋通常是針對用戶已閱讀的訊息收集的，因此您需要`traceId` for that message. Assistant messages carry it in `content.metadata`, both in the stream result and when the message is recalled later from memory:
 
 ```typescript title="src/mastra/message-trace.ts"
 const agent = mastra.getAgent('weatherAgent')
@@ -53,13 +57,33 @@ const message = messages.find(m => m.id === messageId)
 const traceId = message?.content.metadata?.traceId
 ```
 
-這個值與執行結果中以 `traceId` 回報的 Trace 相同，因此無論是在生成時收集 Feedback，或稍後針對已儲存的訊息收集 Feedback，都會連結至同一個 Trace。在停用 Tracing 時產生的訊息不會有 `traceId`。
+該值與運行報告的追蹤值相同`traceId` on its result, so feedback collected at generation time and feedback collected later against a stored message anchor to the same trace. Messages produced while tracing is disabled have no `traceId`.
 
-## 建立 Feedback {/* #create-feedback */}
+### 讀取追蹤 ID`useChat` {/* #read-the-trace-id-in-usechat */}
 
-每次呼叫 `createFeedback()` 都必須提供 `feedbackType` 與 `value`。若 Feedback 應連結至 Trace 或特定 span，請加入 `traceId` 或 `spanId`。你可以使用 `feedbackSource` 作為選用的字串 metadata，例如 `user`、`qa`、`studio` 或 `system`。
+[`chatRoute()`](/reference/ai-sdk/chat-route)和[`handleChatStream()`](/reference/ai-sdk/handle-chat-stream) pass the run's `traceId` to your `messageMetadata` callback. Return it on the `start` part so the client has it on the live message without a server lookup:
 
-在 Storage 層級寫入時，請包含 `timestamp`，因為此方法會直接寫入 Store。
+```typescript title="src/mastra/index.ts"
+chatRoute({
+  path: '/chat/:agentId',
+  messageMetadata: ({ part, traceId }) => (part.type === 'start' ? { traceId } : undefined),
+})
+```
+
+```tsx title="app/chat.tsx"
+const { messages } = useChat<UIMessage<{ traceId?: string }>>()
+
+const lastMessage = messages.at(-1)
+const traceId = lastMessage?.role === 'assistant' ? lastMessage.metadata?.traceId : undefined
+```
+
+如果您使用以下方式驗證元數據`messageMetadataSchema`, add `traceId: z.string().optional()` to it. Send the `traceId` with the user's vote to your own route, then call `addFeedback()` there. Check that the caller owns a message with that `traceId` before adding feedback, because the value comes from the client.
+
+## 創建回饋 {/* #create-feedback */}
+
+每一個`createFeedback()` requires `feedbackType` and `value`. Add `traceId` or `spanId` when the feedback should be anchored to a trace or a specific span. Use `feedbackSource` as optional string metadata, such as `user`, `qa`, `studio`, or `system`.
+
+對於儲存級寫入，包括`timestamp` because the method writes directly to the store.
 
 ```typescript
 const observability = await mastra.getStorage()!.getStore('observability')
@@ -90,9 +114,9 @@ await observability!.createFeedback({
 })
 ```
 
-## 列出 Feedback {/* #list-feedback */}
+## 列出回饋 {/* #list-feedback */}
 
-使用 `listFeedback()` 分頁瀏覽原始記錄，或透過 delta 模式進行輪詢。
+使用`listFeedback()` to page through raw records or poll with delta mode.
 
 ```typescript
 const result = await observability!.listFeedback({
@@ -108,7 +132,7 @@ const result = await observability!.listFeedback({
 console.log(result.feedback, result.pagination?.hasMore)
 ```
 
-Filter 包含 `traceId` 和 `spanId` 等目標欄位、`feedbackType`、`feedbackSource` 和 `feedbackUserId` 等 Feedback 欄位，以及 `entityName`、`environment`、`experimentId` 和 `tags` 等共用 context 欄位。
+過濾器包括目標字段，例如`traceId` and `spanId`, feedback fields such as `feedbackType`, `feedbackSource`, and `feedbackUserId`, and shared context fields such as `entityName`, `environment`, `experimentId`, and `tags`. See [`FeedbackFilter`](/reference/observability/feedback#feedbackfilter) for every filter field. Over HTTP, the same fields are passed as query parameters, for example `GET /api/observability/feedback?traceId=trace-123&environment=production`. See [list query parameters](/reference/observability/feedback#list-query-parameters).
 
 ```typescript
 await observability!.listFeedback({
@@ -120,9 +144,21 @@ await observability!.listFeedback({
 })
 ```
 
-## 查詢 Feedback 分析資料 {/* #query-feedback-analytics */}
+## 刪除回饋 {/* #delete-feedback */}
 
-OLAP Feedback 查詢會針對數值 `value` 欄位運作。你可以用它處理評分、以 `1` 和 `-1` 編碼的正負評、數值 QA score 或其他數值 Feedback 類型。
+使用`deleteFeedback()` to delete feedback records by id. This is useful when a comment contains sensitive data. Each request accepts at most 1,000 `feedbackIds`, and deletion is idempotent. The optional `organizationId` field filters by organization, and the optional `resourceId` field filters by resource. You can supply either filter independently or use both together. In Studio, each comment on a trace or span **Feedback** tab has a delete action. Deleting a trace with `deleteTraces()` also deletes the feedback linked to it. See [Deleting traces](/reference/client-js/observability#deleting-traces).
+
+```typescript
+await observability!.deleteFeedback({
+  feedbackIds: ['feedback-1', 'feedback-2'],
+})
+```
+
+刪除的記錄也會從回饋分析中消失。 ClickHouse 使用轻量级删除来隐藏行，但不保证立即物理删除，因此开源部署必须配置一个[observability retention period](/reference/storage/retention) to physically purge them. Each request is marked applied once its delete succeeds; if the delete fails, the request stays unapplied, doesn't block updates to the still-visible feedback, and you retry by calling the delete API again. On ClickHouse, the next review update also retries the delete and reports the feedback as not found if the retry succeeds, or saves the new status and returns the delete's error if it fails again. Open-source deployments have no background reconciler. Configure retention for every observability signal to expire deletion requests after the signal rows they protect. If any signal is unbounded, deletion requests also remain unbounded to prevent deleted data from being reintroduced. On ClickHouse, delete APIs leave the separate delta cursor table untouched. Its rows contain identifiers rather than feedback payloads and expire within two days.
+
+## 查詢回饋分析 {/* #query-feedback-analytics */}
+
+OLAP 回饋查詢對數字進行操作`value` fields. Use them for ratings, thumbs encoded as `1` and `-1`, numeric QA scores, or other numeric feedback types.
 
 ```typescript
 const rating = await observability!.getFeedbackAggregate({
@@ -147,16 +183,24 @@ const ratingsOverTime = await observability!.getFeedbackTimeSeries({
 })
 ```
 
-如需所有欄位、filter、傳回型別與百分位數查詢參數，請參閱 [Feedback 參考](/reference/observability/feedback)。
+請參閱[feedback reference](/reference/observability/feedback) for all fields, filters, return types, and percentile query parameters.
 
-## 將 Feedback 匯出至外部平台 {/* #export-feedback-to-external-platforms */}
+本地運行時公開列表路由`/api/observability/feedback` and analytics under its related paths. See the [HTTP routes table](/reference/observability/feedback#http-routes) and [list query parameters](/reference/observability/feedback#list-query-parameters). Mastra Platform provides a separate, unversioned hosted query API. See the [Feedback API](/docs/mastra-platform/api#feedback-api) for regional endpoints, authentication, and project scoping.
 
-Feedback 會通過 Observability event bus，因此支援 Feedback 的 Exporter 會自動將其轉送。[PostHog Exporter](/reference/observability/tracing/exporters/posthog#feedback-export)會將 Feedback 作為原生 `$ai_feedback` event 傳送，並顯示在 PostHog 中連結的 Trace 上。
+## 將回饋匯出至 Mastra 平台 {/* #export-feedback-to-mastra-platform */}
 
-## 相關內容 {/* #related */}
+[`MastraPlatformExporter`](/reference/observability/tracing/exporters/mastra-platform-exporter)向 Mastra 平台發送回饋，該平台在需要時找到目標軌跡或跨度。不需要本地追蹤儲存。添加`MastraStorageExporter` only if you also want a local copy.
 
-- [Observability 總覽](/docs/observability/overview)
-- [Tracing 總覽](/docs/observability/tracing/overview)
-- [指標總覽](/docs/observability/metrics/overview)
-- [Client SDK Observability 參考](/reference/client-js/observability)
-- [Feedback 參考](/reference/observability/feedback)
+Studio 會向為其追蹤讀取提供服務的後端發送回饋。對於由 OSS 伺服器處理的 HTTP 創建，伺服器會在本機上保存回饋並通知配置的匯出器。由於導出器傳送是非同步的，因此成功的 HTTP 回應並不能保證記錄在遠端目標上已經可見。直接儲存寫入繞過導出器。
+
+## 將回饋匯出到外部平台 {/* #export-feedback-to-external-platforms */}
+
+回饋流經可觀察性事件匯流排，因此支援回饋的匯出器會自動轉發它。這[PostHog exporter](/reference/observability/tracing/exporters/posthog#feedback-export) sends feedback as native `$ai_feedback` events that appear on the linked trace in PostHog.
+
+## 有關的 {/* #related */}
+
+* [Observability概述](/docs/observability/overview)
+* [追蹤使用情況](/docs/observability/tracing/overview)
+* [指標概述](/docs/observability/metrics/overview)
+* [客戶端 SDK Observability參考](/reference/client-js/observability)
+* [回饋參考](/reference/observability/feedback)

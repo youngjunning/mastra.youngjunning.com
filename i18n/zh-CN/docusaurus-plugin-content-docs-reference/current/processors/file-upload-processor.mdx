@@ -1,0 +1,344 @@
+---
+title: "Reference: FileUploadProcessor | Processors"
+description: "The FileUploadProcessor uploads the files a user sends to a workspace sandbox and gives the model the sandbox path instead of the file content."
+packages:
+  - "@mastra/core"
+---
+
+# 文件上传处理器
+
+这`FileUploadProcessor`将用户发送的文件上传到[WorkspaceSandbox](/reference/workspace/sandbox)并为模型提供文本注释，并用Sandbox路径代替每个文件。该模型永远不会接收文件内容。该Agent使用其SandboxTool处理该文件。
+
+仅发送到模型的提示发生变化。存储的消息保留其文件，因此线程、Studio 等客户端和其他Agent仍然拥有原始文件。
+
+过滤器接受的文件永远不会到达模型：当当前回合的文件无法上传时，处理器会停止回合而不是让文件通过。内存是可选的。
+
+## 使用示例 {/* #usage-example */}
+
+将相同的工作空间传递给Agent和处理器：
+
+```typescript
+import { Agent } from '@mastra/core/agent'
+import { FileUploadProcessor } from '@mastra/core/processors'
+import { LocalSandbox, Workspace } from '@mastra/core/workspace'
+
+const workspace = new Workspace({
+  sandbox: new LocalSandbox({ workingDirectory: './workspace' }),
+})
+
+export const agent = new Agent({
+  id: 'file-agent',
+  name: 'file-agent',
+  instructions: 'Work on the files the user uploads to the sandbox.',
+  model: '__GATEWAY_OPENAI_MODEL_LUNA__',
+  workspace,
+  inputProcessors: [
+    new FileUploadProcessor({
+      workspace,
+      filter: ({ extension }) => extension === 'xlsx' || extension === 'docx',
+    }),
+  ],
+})
+```
+
+设置每个文件的大小限制`maxFileSize`. The function returns a number of bytes:
+
+```typescript
+import { FileUploadProcessor } from '@mastra/core/processors'
+
+const megabyte = 1024 * 1024
+
+const fileUpload = new FileUploadProcessor({
+  workspace,
+  maxFileSize: ({ mimeType }) => (mimeType.startsWith('image/') ? 5 * megabyte : 25 * megabyte),
+})
+```
+
+阅读处理器停止转动时的原因。 Tripwire 元数据的类型为`unknown`, so cast it to `FileUploadTripwireMetadata`:
+
+```typescript
+import { FILE_UPLOAD_ERROR_CODES } from '@mastra/core/processors'
+import type { FileUploadTripwireMetadata } from '@mastra/core/processors'
+
+const result = await agent.generate(messages)
+
+if (result.tripwire?.processorId === 'file-upload') {
+  const { code, fileName } = result.tripwire.metadata as FileUploadTripwireMetadata
+
+  if (code === FILE_UPLOAD_ERROR_CODES.FILE_TOO_LARGE) {
+    console.error(`${fileName} is too large`)
+  }
+}
+```
+
+## 构造函数参数 {/* #constructor-parameters */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'workspace',
+  type: 'Workspace',
+  description:
+    "Workspace whose sandbox receives the files. Pass the agent's workspace. The constructor throws when the workspace has no sandbox configured.",
+  isOptional: false,
+},
+{
+  name: 'filter',
+  type: '(file: FileUploadFileInfo) => boolean | Promise<boolean>',
+  description:
+    'Decides, for each file, whether it is uploaded (`true`) or left to the model (`false`). The function must return a boolean; throwing or returning anything else stops the turn. It runs again before each model call, so it must give the same answer for the same file. See [File selection](#file-selection).',
+  isOptional: true,
+  defaultValue: 'Every file is uploaded',
+},
+{
+  name: 'maxFileSize',
+  type: '(file: FileUploadFileInfo) => number',
+  description:
+    'Returns the largest accepted size in bytes for a file. The function must return a non-negative number; anything else stops the turn. Like `filter`, it runs more than once for the same file.',
+  isOptional: true,
+  defaultValue: '10 MB for every file',
+},
+]}
+/>
+
+## 实例属性 {/* #instance-properties */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'id',
+  type: "'file-upload'",
+  description: 'Processor identifier.',
+  isOptional: false,
+},
+{
+  name: 'name',
+  type: "'File Upload'",
+  description: 'Processor display name.',
+  isOptional: false,
+},
+{
+  name: 'processInput',
+  type: '(args: ProcessInputArgs) => Promise<MessageList>',
+  description:
+    "Runs once per call. Checks the files of the new messages as they were sent, and stops the turn when one of them can't be uploaded. Changes nothing.",
+  isOptional: false,
+},
+{
+  name: 'processInputStep',
+  type: '(args: ProcessInputStepArgs) => Promise<void>',
+  description: 'Runs before each model call. Checks the files of a signal delivered to a run that is already active.',
+  isOptional: false,
+},
+{
+  name: 'processLLMRequest',
+  type: '(args: ProcessLLMRequestArgs) => Promise<ProcessLLMRequestResult>',
+  description:
+    'Runs before each model call. Uploads the files of the prompt that the filter accepts, history included, and returns the prompt with a note in place of each one. The stored messages are not changed.',
+  isOptional: false,
+},
+]}
+/>
+
+## 文件选择 {/* #file-selection */}
+
+这`filter` function receives each file the user sent and returns `true` to upload it. A file it rejects is left untouched and reaches the model as usual. Without `filter`, every file is uploaded.
+
+此过滤器上传除模型自身读取的类型之外的所有文件：
+
+```typescript
+import { FileUploadProcessor } from '@mastra/core/processors'
+
+const readByModel = ['image/', 'audio/', 'video/', 'text/']
+
+const fileUpload = new FileUploadProcessor({
+  workspace,
+  filter: ({ mimeType }) =>
+    mimeType !== 'application/pdf' && !readByModel.some(prefix => mimeType.startsWith(prefix)),
+})
+```
+
+`filter`和`maxFileSize` receive the same `FileUploadFileInfo` object:
+
+<PropertiesTable
+  content={[
+{
+  name: 'fileName',
+  type: 'string',
+  description: 'Name the file was sent with. Undefined for a file sent without a name.',
+  isOptional: true,
+},
+{
+  name: 'mimeType',
+  type: 'string',
+  description: 'MIME type in lower case and without parameters: `Text/Plain; charset=utf-8` becomes `text/plain`.',
+  isOptional: false,
+},
+{
+  name: 'extension',
+  type: 'string',
+  description:
+    'Extension of the file name, in lower case and without the dot. Undefined when the file has no name or no extension.',
+  isOptional: true,
+},
+]}
+/>
+
+大小不是其中的一部分，因为只有在数据解码后才知道它。`filter` can be async.
+
+处理器查看模型接收到的每条用户消息的文件，包括线程历史记录，以及随信号发送的文件。它忽略助手生成的文件或Tool返回的文件。
+
+上传以二进制、base64 或数据 URL 形式内联发送的文件。处理器本身从不下载任何内容，因此服务器发出的请求不能指向内部地址：
+
+* 模型自身获取的链接或提供程序文件 ID 保留在提示中，并且`filter` isn't called for it.
+* Mastra 在模型调用之前下载模型无法获取的链接。处理器像处理模型接收的任何其他文件一样处理下载的字节。
+
+## 上传位置 {/* #upload-location */}
+
+文件被写入`uploads/<directory>/<sha256>.<extension>`, under the directory where the sandbox runs commands. `<directory>` is the thread ID, or the resource ID when the call has no thread, or `shared` when it has neither, so identical bytes from two threads never share a path.
+
+处理器读取命令目录`pwd`, then writes the file and reports it at its absolute path. Providers resolve a relative path differently for writes and for commands, so the absolute path is the one the command tool finds. A sandbox that can't run commands uses its `workingDirectory` instead, and the path stays relative when neither is known.
+
+该文件以其内容的 SHA-256 哈希值命名，因此相同的字节始终写入相同的路径：
+
+* Sandbox已有的文件不会再次写入。在以后的回合中，该文件只需要检查它是否仍然存在。
+* 从Sandbox中删除的文件，或者在回收的Sandbox中丢失的文件，会在下一轮再次写入。
+* 在一个请求中，无论模型被调用多少次，文件都会被放置一次。
+
+该路径不保留原始名称，只保留其扩展名。看起来像名称的路径会邀请模型重新输入另一个路径，并向Sandbox询问不存在的文件。该名称在注释中保持可用。
+
+|姓名已发送 |路径写法，在命令目录下 |
+| - | - |
+|`report Q3 (final).pdf` | `uploads/<directory>/<sha256>.pdf` |
+| `résumé.PDF` | `uploads/<directory>/<sha256>.pdf` |
+| `../../etc/passwd` | `uploads/<directory>/<sha256>` |
+| No name, `image/png` | `uploads/<directory>/<sha256>.png` |
+
+当类型是通用类型时，发送的不带名称的文件会从其 MIME 类型中获取扩展名。
+
+线程或资源 ID 被重写，因此该目录在 shell 命令中是安全的。重音符号被删除，每个字符都在外面`A-Z`, `a-z`, `0-9`, `.`, `_`, and `-` becomes `_`. Path separators and `..` are replaced too, so a file always stays inside `uploads/`.
+
+每个文件都以临时名称写入并移动到位，因此中断的写入永远不会留下部分文件，而稍后会生成完整的文件。处理器用Sandbox写入`writeFiles` method when the sandbox has one, in a single call for all the files to write. Otherwise it writes with `executeCommand`, sending each file as base64 in chunks, which needs `base64` and `printf` in the sandbox. When the sandbox can run commands, the processor also needs `sh`, `mkdir`, `pwd`, and `mv` there. A sandbox without commands gets every file written in place on every turn, since nothing can be checked or moved.
+
+## 上传后提示内容 {/* #prompt-content-after-upload */}
+
+在发送到模型的提示中，消息中相同位置的文件部分被文本部分替换：
+
+```text
+[File uploaded to the sandbox]
+path: /home/user/uploads/thread-1/0b2f4c6e8a1d3f5b7c9e2a4d6f8b1c3e5a7d9f2b4c6e8a1d3f5b7c9e2a4d6f8b.pdf
+name: report.pdf
+type: application/pdf
+size: 1258291 bytes
+```
+
+存储的消息保持文件发送时的原样。工作室和其他客户将其显示为附件，模型每次都会再次收到该注释。
+
+## 错误行为 {/* #error-behavior */}
+
+构造函数抛出一个`MastraError` with the ID `FILE_UPLOAD_PROCESSOR_NO_SANDBOX` when `workspace` is missing or has no sandbox configured. `error.details.code` is `NO_SANDBOX`.
+
+当前回合的文件在发送时会在写入任何内容之前进行检查。无法上传的文件会停止轮流，并且不会上传任何内容。
+
+对于线程历史记录中太大或无法解码的文件，处理器会替换解释问题的注释并让轮流继续。这可以防止存储的文件阻塞每个后续回合：
+
+```text
+[File not uploaded]
+name: report.pdf
+reason: File "report.pdf" is 31457280 bytes, over the 10485760 byte limit.
+```
+
+当Sandbox拿不到文件时，因为没有Sandbox，无法写入，或者写入失败，则当前回合的文件停止本回合。线程历史记录文件会得到一条带有原因的注释，然后继续进行。一个`filter` or `maxFileSize` that fails stops the turn, whichever file it affects. Storage remains unchanged, allowing the thread to work again once the setup is fixed. A turn without a file to upload checks nothing, so scorers, agent networks, and calls without a thread keep working.
+
+处理器通过调用来停止转动`abort()` with `retry: false`. The model isn't called. `agent.generate()` resolves with `result.tripwire` set instead of rejecting, and `agent.stream()` emits a `tripwire` chunk.
+
+Tripwire 元数据具有以下形式：
+
+<PropertiesTable
+  content={[
+{
+  name: 'processorId',
+  type: "'file-upload'",
+  description: 'Processor identifier.',
+  isOptional: false,
+},
+{
+  name: 'code',
+  type: 'FileUploadErrorCode',
+  description: 'One of the values of `FILE_UPLOAD_ERROR_CODES`.',
+  isOptional: false,
+},
+{
+  name: 'fileName',
+  type: 'string',
+  description: 'Name of the file that caused the stop, when a file did and it has a name.',
+  isOptional: true,
+},
+{
+  name: 'mimeType',
+  type: 'string',
+  description: 'MIME type of that file.',
+  isOptional: true,
+},
+{
+  name: 'size',
+  type: 'number',
+  description: 'Size of the file in bytes. Set with `FILE_TOO_LARGE`.',
+  isOptional: true,
+},
+{
+  name: 'maxFileSize',
+  type: 'number',
+  description: 'Limit the file was checked against, in bytes. Set with `FILE_TOO_LARGE`.',
+  isOptional: true,
+},
+{
+  name: 'cause',
+  type: 'string',
+  description: 'Message of the underlying error, or the invalid value returned by `maxFileSize`.',
+  isOptional: true,
+},
+{
+  name: 'orphanPaths',
+  type: 'string[]',
+  description:
+    'Sandbox paths that may still exist because cleanup after a failed upload did not succeed. Set with `UPLOAD_FAILED`.',
+  isOptional: true,
+},
+]}
+/>
+
+`FILE_UPLOAD_ERROR_CODES`列出每个代码：
+
+|代码|当它发生时 |
+| - | - |
+|`NO_SANDBOX` | The workspace resolved no sandbox for the request, or resolving it failed |
+| `NO_WRITE_CAPABILITY` | The sandbox has neither `writeFiles` nor `executeCommand` |
+| `INVALID_MAX_FILE_SIZE` | `maxFileSize` threw, or returned something other than a non-negative number |
+| `INVALID_FILTER` | `filter` threw, or returned something other than `true` or `false` |
+| `INVALID_FILE_DATA` | The inline data of a file of the current turn can't be decoded |
+| `FILE_TOO_LARGE` | A file of the current turn is larger than its limit |
+| `UPLOAD_FAILED` | Writing to the sandbox failed |
+
+当写入失败时，处理器会删除在调用期间写入的文件`rm -f` before it stops the turn. If the removal fails, or the sandbox can't run commands, `orphanPaths` lists the paths that may remain.
+
+## 通过信号发送的文件 {/* #files-sent-with-signals */}
+
+处理器处理发送的文件`agent.sendMessage()` and `agent.sendSignal()`:
+
+* 唤醒空闲Agent的信号的处理方式类似于`agent.stream()`.
+* 在该运行的下一次模型调用之前，检查并上传传递到活动运行的信号。
+* 在运行的第一个模型调用之前到达持久Agent的信号会在回合检查后加入提示。他们的文件像线程历史记录中的文件一样上传。
+
+## 局限性 {/* #limitations */}
+
+* **处理器Workflow程。**&#x4E0A;传运行于`processLLMRequest`, which doesn't run when the processor is nested in a processor workflow. There, the processor only checks the files, and they reach the model unchanged. Add `FileUploadProcessor` to `inputProcessors` directly.
+* **跨线程共享的Sandbox。**&#x6BCF;个线程的目录将文件分开但不保护它们。在其他线程或用户共享的Sandbox中，任何线程的命令Tool都可以读取每一次上传。当文件为私有时，解决[one sandbox per user or thread](/docs/sandbox/overview#sandboxes-per-user-or-thread).
+* **从 Studio 发送的文本文件。**&#x53;tudio 将文本文件（例如 CSV、JSON、Markdown 或源文件）作为文本插入到消息中，而不是将其作为文件附加。处理器永远不会看到它，因此不会上传它，并且其全部内容都会进入提示符。通过 API 作为文件部分发送的文件照常上传。
+
+## 有关的 {/* #related */}
+
+* [处理器](/docs/agents/processors)
+* [不支持的文件处理程序](/reference/processors/unsupported-file-handler)
+* [沙盒](/reference/workspace/sandbox)
+* [工作空间类](/reference/workspace/workspace-class)

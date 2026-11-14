@@ -1,0 +1,362 @@
+---
+title: "Slack | Channels"
+description: "Connect a Mastra agent to Slack channels and direct messages, configure the Slack app and webhook route, and test threaded agent conversations."
+packages:
+  - "@mastra/core"
+  - "@mastra/connect"
+---
+
+import Tabs from "@theme/Tabs";
+import TabItem from "@theme/TabItem";
+import SlackConnectTools from "@site/src/components/connect/generated/slack.mdx";
+
+# 松弛
+
+通过两种方式将 Slack 与 Mastra 结合使用：
+
+* **AgentTool**让Agent在 Slack 中执行操作，例如读取对话或发送消息。
+* **Agent聊天**让人们可以在 Slack 频道线程或直接消息中向您的Agent发送消息。 Mastra 为每条消息运行Agent，并将响应流式传输回 Slack。 Slack 适配器为您处理 Slack AI 指示器和交互式卡。
+
+[马斯特拉连接](/docs/mastra-platform/connect)在 Mastra 平台上设置并保留 Slack 凭证。对于Agent聊天，您还可以创建和管理自己的 Slack 应用程序。
+
+## 连接 {/* #connect */}
+
+在开始之前，请完成[Connect setup](/docs/mastra-platform/connect#get-started) to install `@mastra/connect` and configure your platform project.
+
+Slack Tool和 Slack 聊天使用具有不同凭据的单独连接，因此一个连接无法同时服务这两者：
+
+* `slack`授权AgentTool的Workspace。
+* `slack-channels`存储用于Agent聊天的应用程序配置令牌。
+
+要同时使用两者，请添加两个连接。
+
+<SlackConnectTools />
+
+### Agent聊天 {/* #agent-chat */}
+
+Slack 聊天使用应用程序配置令牌，让 Mastra 为每个客服人员创建一个 Slack 应用程序。 Mastra 创建并管理这些应用程序。它不使用您自己创建的 Slack 应用程序，例如来自[self-managed setup](#self-managed-setup).
+
+您的服务器需要 Slack 可以访问的公共 URL 以进行 Webhook 传递和 OAuth 回调。 Mastra 平台提供此 URL。当您在其他地方托管时，请设置`MASTRA_SERVER_URL` to your public server URL. For local development, use a public HTTPS tunnel.
+
+1. 打开[Slack apps](https://api.slack.com/apps), then open **Your App Configuration Tokens**.
+
+2. 为将运行Agent的Workspace生成应用程序配置令牌。
+
+3. 跑步`mastra connect add slack-channels` and complete the authorization flow. The platform stores and rotates the configuration credential.
+
+4. 经过[`channels()`](/reference/connect/channels) to the `Mastra` constructor. It registers the Slack channel provider and its routes:
+
+   ```typescript title="src/mastra/index.ts"
+   import { Mastra } from '@mastra/core'
+   import { channels } from '@mastra/connect'
+   import { assistant } from './agents/assistant'
+
+   export const mastra = new Mastra({
+     agents: { assistant },
+     channels: await channels({ providers: ['slack'] }),
+   })
+   ```
+
+   这`slack` key in `channels()` refers to the `slack-channels` connection.
+
+5. 启动您的 Mastra 申请。
+
+6. 在 Studio 中，将 Slack 通道连接到Agent。 Mastra 创建一个 Slack 应用程序并返回一个授权 URL。打开它，选择Workspace，然后批准机器人范围。
+
+这[default Slack manifest](/reference/channels/slack-provider#default-manifest) lists the requested scopes and event subscriptions.
+
+## 自我管理设置 {/* #self-managed-setup */}
+
+自己创建一个 Slack 应用程序并将其凭据存储在您的 Mastra 环境中。当您想要直接控制 Slack 应用程序时，请使用此路径进行Agent聊天。
+
+### 安装 {/* #installation */}
+
+从 Chat SDK 安装 Slack 适配器：
+
+```bash npm2yarn
+npm install @chat-adapter/slack
+```
+
+添加`createSlackAdapter()` to the agent's `channels.adapters` object:
+
+```typescript title="src/mastra/agents/your-agent.ts"
+import { Agent } from '@mastra/core/agent'
+import { createSlackAdapter } from '@chat-adapter/slack'
+
+export const yourAgent = new Agent({
+  id: 'your-agent',
+  name: 'Your Agent',
+  instructions: 'Help people plan tasks, answer questions, and coordinate work in Slack.',
+  model: '__GATEWAY_ANTHROPIC_MODEL_OPUS__',
+  channels: {
+    adapters: {
+      slack: createSlackAdapter(),
+    },
+  },
+})
+```
+
+### 创建 Slack 应用程序 {/* #create-a-slack-app */}
+
+要连接您的Agent，请在您希望运行它的Workspace中创建一个 Slack 应用程序。 Slack 应用程序控制Agent在 Slack 中的显示、其功能以及其接收的事件。
+
+本指南使用[manifest](https://docs.slack.dev/app-manifests/configuring-apps-with-app-manifests/#creating_manifests): a configuration file that creates the Slack app settings for you. This is the fastest path when you are adding your agent to your own workspace. It doesn't cover the platform OAuth flow where other workspaces install your agent.
+
+从清单创建 Slack 应用程序：
+
+1. 打开[api.slack.com/apps](https://api.slack.com/apps).
+2. 选择**Create an app**.
+3. 选择**From a manifest**.
+4. 选择Agent应运行的Workspace。
+5. 粘贴此清单，然后选择**Create**. Slack accepts JSON or YAML, so use whichever tab matches the format shown in the app creation modal:
+
+<Tabs>
+  <TabItem value="json" label="JSON">
+    ```json
+    {
+      "display_information": {
+        "name": "mastra-agent"
+      },
+      "features": {
+        "app_home": {
+          "home_tab_enabled": false,
+          "messages_tab_enabled": true,
+          "messages_tab_read_only_enabled": false
+        },
+        "bot_user": {
+          "display_name": "mastra-agent",
+          "always_online": true
+        }
+      },
+      "oauth_config": {
+        "scopes": {
+          "bot": [
+            "im:write",
+            "app_mentions:read",
+            "channels:history",
+            "channels:read",
+            "chat:write",
+            "users:read",
+            "im:read",
+            "im:history"
+          ]
+        },
+        "pkce_enabled": false
+      },
+      "settings": {
+        "event_subscriptions": {
+          "request_url": "https://<YOUR-PUBLIC-URL>/api/agents/<YOUR-AGENT-ID>/channels/slack/webhook",
+          "bot_events": ["app_mention", "message.channels", "message.im"]
+        },
+        "interactivity": {
+          "is_enabled": true,
+          "request_url": "https://<YOUR-PUBLIC-URL>/api/agents/<YOUR-AGENT-ID>/channels/slack/webhook"
+        },
+        "org_deploy_enabled": false,
+        "socket_mode_enabled": false,
+        "token_rotation_enabled": false,
+        "is_mcp_enabled": false
+      }
+    }
+    ```
+  </TabItem>
+
+  <TabItem value="yaml" label="YAML">
+    ```yaml
+    display_information:
+      name: mastra-agent
+    features:
+      app_home:
+        home_tab_enabled: false
+        messages_tab_enabled: true
+        messages_tab_read_only_enabled: false
+      bot_user:
+        display_name: mastra-agent
+        always_online: true
+    oauth_config:
+      scopes:
+        bot:
+          - im:write
+          - app_mentions:read
+          - channels:history
+          - channels:read
+          - chat:write
+          - users:read
+          - im:read
+          - im:history
+      pkce_enabled: false
+    settings:
+      event_subscriptions:
+        request_url: https://<YOUR-PUBLIC-URL>/api/agents/<YOUR-AGENT-ID>/channels/slack/webhook
+        bot_events:
+          - app_mention
+          - message.channels
+          - message.im
+      interactivity:
+        is_enabled: true
+        request_url: https://<YOUR-PUBLIC-URL>/api/agents/<YOUR-AGENT-ID>/channels/slack/webhook
+      org_deploy_enabled: false
+      socket_mode_enabled: false
+      token_rotation_enabled: false
+      is_mcp_enabled: false
+    ```
+  </TabItem>
+</Tabs>
+
+该清单配置：
+
+* `display_information.name`和`features.bot_user.display_name`: Set your agent's name in Slack. You can update it at any time. Remember to reinstall the app after changing names or permissions.
+* `app_home.messages_tab_enabled`和`app_home.messages_tab_read_only_enabled`: Enable direct messages from the Slack app's **Messages** tab.
+* `always_online`：显示 Slack 机器人用户始终可用。
+* `oauth_config.scopes.bot`：授予在机器人所在的频道中发布和阅读消息的权限。它还涵盖提及和直接消息以及用户查找。
+* `event_subscriptions`：告诉 Slack 将哪些消息事件发送到 webhook。
+* `interactivity`：启用交互式卡片并告诉 Slack 将卡片操作发送到哪里。
+
+创建应用程序后，打开**Install App**, select **Install to Workspace**, and approve the requested scopes.
+
+### 设置 Slack 凭证 {/* #set-slack-credentials */}
+
+在 Mastra 中设置 Slack 凭据，以便它可以验证 Slack 请求并将消息发送回 Slack。
+
+在 Slack 应用程序设置中，复制以下值：
+
+* **基本信息** > **App Credentials** > **Signing Secret**
+* **OAuth 和权限** > **Bot User OAuth Token**
+
+将它们设置在您的 Mastra 环境中：
+
+```bash title=".env"
+SLACK_SIGNING_SECRET=your-signing-secret
+SLACK_BOT_TOKEN=xoxb-your-bot-token
+```
+
+Mastra 自动读取这些环境变量。
+
+### 配置 webhook 路由 {/* #configure-the-webhook-route */}
+
+Slack 通过 webhooks 将通道活动发送到 Mastra。 Webhook 是发生某事（例如新消息、提及或用户选择交互式卡）时 Slack 调用的 HTTP 端点。
+
+Mastra 会自动为您的Agent注册 Slack webhook 路由：
+
+```text
+/api/agents/<YOUR-AGENT-ID>/channels/slack/webhook
+```
+
+从公共 Mastra 服务器 URL 和生成的路由构建 webhook URL：
+
+```text
+https://<YOUR-PUBLIC-URL>/api/agents/<YOUR-AGENT-ID>/channels/slack/webhook
+```
+
+Slack 无法将事件发送至`localhost`. For local development, keep the Mastra dev server running and expose `http://localhost:4111` with a tunnel before you save the request URL in Slack.
+
+使用隧道，例如`cloudflared` or `ngrok` for local development:
+
+```bash npm2yarn
+npx cloudflared tunnel --url http://localhost:4111
+```
+
+使用生成的隧道主机作为`<YOUR-PUBLIC-URL>`, for example:
+
+```text
+https://abc123.trycloudflare.com/api/agents/your-agent/channels/slack/webhook
+```
+
+更新 Slack 中的请求 URL：
+
+1. 在 Slack 应用程序设置中，打开**Event Subscriptions**.
+2. 代替**Request URL** with the final webhook URL.
+3. 选择**Save Changes**.
+4. 打开**Interactivity & Shortcuts**.
+5. 代替**Request URL** with the same webhook URL.
+6. 选择**Save Changes**.
+7. 如果 Slack 要求您重新安装应用程序，请打开**OAuth & Permissions** and select **Reinstall to Workspace**.
+
+### 在 Slack 中尝试一下 {/* #try-it-in-slack */}
+
+打开与 Slack 机器人用户的直接消息并发送消息。直接消息之所以有效，是因为清单包含`message.im` event and `im:*` scopes.
+
+要在频道中使用Agent，请先邀请 Slack 机器人用户：
+
+```text
+/invite @your-bot-name
+```
+
+在频道中提及机器人：
+
+```text
+@your-bot-name What can you help me with?
+```
+
+Agent在线程中做出响应。响应内容取决于Agent上配置的模型、指令、内存和Tool。
+
+## 验证 {/* #authentication */}
+
+Slack 适配器没有内置用户允许列表。安装应用程序后，Workspace中的任何人都可以通过向Agent发送直接消息或在其成员的频道中提及它来与Agent交谈。 Slack 使用签名密钥验证每个请求，Mastra 为 Webhook 收到的每条有效消息运行Agent。
+
+控制访问的主要机制是通道成员资格。机器人仅接收来自直接消息和它被邀请加入的频道的事件，因此机器人所属的频道集定义了谁可以访问它。让机器人远离不应响应的频道，并将其从频道中删除以切断访问。
+
+为了更好地控制，请对发件人的身份进行控制。每个请求都携带发送者在通道中的 Slack 用户 ID[request context](#request-context), so you can allow or deny specific users in an input processor or tool before the agent acts.
+
+### 服务器认证 {/* #server-authentication */}
+
+Slack webhook 路由不受 Mastra 的约束[server authentication](/docs/auth/overview). Slack can't send a bearer token, so Mastra registers the channel webhook as a public route and verifies each request with the Slack signing secret instead. This holds even when you enable a provider like [`MastraAuthSimple`](/docs/auth/simple-auth): the rest of your API stays protected, but the webhook route relies on the signing secret rather than your server auth. With the self-managed setup, keep `SLACK_SIGNING_SECRET` set so the adapter can reject requests that Slack didn't sign.
+
+### 外部渠道 {/* #external-channels */}
+
+共享频道（[Slack Connect](https://slack.com/connect)) let people from other workspaces join a conversation. If a workspace member adds the bot to a shared channel, everyone in that channel can talk to the agent, including external members outside your organization. Anyone who can reach the agent can also reach the tools and data it has access to.
+
+将机器人添加到共享或外部通道视为授予这些参与者对Agent的访问权限。在此之前，请确认Agent的Tool和数据可以安全地向外部成员公开，并在需要限制Agent的响应对象时控制发件人的用户 ID。
+
+## 请求上下文 {/* #request-context */}
+
+对于每条消息，Mastra 都会在[request context](/docs/server/request-context) under the `channel` key. It carries the sender's Slack display name and user ID, the bot's own identity, and details about where the message came from. Read it from an input processor or a tool to identify the user or branch on the conversation type:
+
+```typescript title="src/mastra/tools/whoami.ts"
+import { createTool } from '@mastra/core/tools'
+import type { ChannelContext } from '@mastra/core/channels'
+import { z } from 'zod'
+
+export const whoami = createTool({
+  id: 'whoami',
+  description: 'Return the Slack identity of the current user',
+  inputSchema: z.object({}),
+  execute: async (_input, context) => {
+    const channel = context?.requestContext?.get('channel') as ChannelContext | undefined
+
+    return {
+      platform: channel?.platform,
+      userId: channel?.userId,
+      userName: channel?.userName,
+      isDM: channel?.isDM,
+    }
+  },
+})
+```
+
+通道上下文包括：
+
+* `botMention`, `botUserId`, and `botUserName`: The bot's own identity on Slack.
+* `channelId`和`threadId`: The Slack channel and thread the message arrived on.
+* `isDM`：消息是否是私信。
+* `platform`：平台标识符，`slack` for this adapter.
+* `userId`和`userName`: The sender's Slack user ID and display name.
+
+Mastra 还将此上下文转换为简短的系统消息。Agent了解平台和自己的身份，以及对话是直接消息还是公共渠道。看[thread context](/docs/channels#thread-context) in the channels overview for how to change that behavior.
+
+## 生产部署 {/* #production-deployment */}
+
+使用自我管理设置，在部署 Mastra 服务器时将 Slack 应用程序设置中的两个请求 URL 更新为生产 Webhook URL。用于本地开发的隧道 URL 是临时的，并且会在隧道重新启动时发生变化。
+
+无服务器平台上的通道可能需要`waitUntil` and shared pub/sub configuration so background responses and thread leases work across short-lived instances. See [serverless deployment](/docs/channels#serverless-deployment) in the channels overview.
+
+### 闲置服务器 {/* #idle-servers */}
+
+当平台服务器没有接收流量时，它们会缩小到空闲状态，这对 Slack 来说很好。下一个事件（例如提及或直接消息）将通过传递其 Webhook 请求来唤醒服务器，然后服务器继续处理请求。服务器空闲后的第一次响应在启动时可能需要更长的时间，这是预期的。 Slack 期望`200` acknowledgement within 3 seconds and retries the event up to three times when delivery fails or times out, so a very slow cold start may take a retry before the agent responds. Subsequent messages respond at normal speed while the server stays warm.
+
+## 有关的 {/* #related */}
+
+* [渠道概览](/docs/channels)
+* [更多的](/docs/channels#other-adapters)
+* [渠道参考](/reference/agents/channels)
+* [部署概览](/docs/deployment/overview)

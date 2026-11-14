@@ -1,0 +1,94 @@
+---
+title: "Load your content"
+description: "Load your own content, such as product docs or policies, into Knowledge so agents can search and read it."
+packages:
+  - "@mastra/core"
+  - "@mastra/libsql"
+---
+
+#
+
+Agent商在工作時會向 Knowledge 寫入內容，但您通常希望內容在開始之前就位，例如您的產品文件或公司政策。從您自己的伺服器程式碼中播種它[`upsertPage()`](/reference/knowledge/knowledge-class#upsertpage)和[`addNote()`](/reference/knowledge/knowledge-class#addnote).
+
+知識還沒有進口商。计划进口商将使其与您的其他系统保持同步。在此之前，从服务器代码中播种内容，如下所示。
+
+：：：阿爾法
+
+知識處於阿爾法階段。其 API 可能會在不同版本之間變更。
+
+:::
+
+## 聲明內容範圍 {/* #declare-a-scope-for-the-content */}
+
+為種子內容指定自己的範圍類型，並說明誰可以閱讀它：
+
+```typescript title="src/mastra/knowledge.ts"
+import { Knowledge, knowledgeMemoryScopes } from '@mastra/core/knowledge'
+import { LibSQLStore } from '@mastra/libsql'
+
+export const knowledge = new Knowledge({
+  id: 'company',
+  storage: new LibSQLStore({ id: 'knowledge', url: 'file:./knowledge.db' }),
+  scopes: {
+    ...knowledgeMemoryScopes(),
+    'docs:$orgId': {
+      description: 'Product docs',
+      belongsTo: 'org:$orgId',
+      access: [{ principal: 'org:$orgId', role: 'viewer' }],
+    },
+  },
+  tools: true,
+})
+```
+
+`belongsTo`將文件放置在範圍樹中的組織下。组织中的Agent可以读取这些页面，但不能更改它们。
+
+## 寫頁面 {/* #write-the-pages */}
+
+將每個文件寫入該範圍內的路徑。路徑如`guides/install` becomes the page `docs:acme#guides/install`, and missing pages along the path are created:
+
+```typescript title="src/seed-docs.ts"
+import { knowledge } from './mastra/knowledge'
+
+type Doc = { slug: string; title: string; markdown: string }
+
+export async function seedDocs(orgId: string, docs: Doc[]) {
+  for (const doc of docs) {
+    await knowledge.upsertPage({
+      scope: `docs:${orgId}`,
+      path: doc.slug,
+      name: doc.title,
+      body: doc.markdown,
+      author: 'seed:docs',
+    })
+  }
+}
+```
+
+運行保持的特工`org:acme` can now find these pages with search and read them. If you set `vector` and `embedder`, `upsertPage()` also embeds each page for [search by meaning](/docs/knowledge/search#add-search-by-meaning).
+
+若要將註明日期的事實或評論新增至頁面，請新增註解。這`[[docs:acme#releases/2026-12]]` mention becomes a link once that page exists:
+
+```typescript title="src/seed-docs.ts"
+await knowledge.addNote({
+  scope: 'docs:acme',
+  path: 'guides/install',
+  text: 'Node 18 support ends on [[docs:acme#releases/2026-12]].',
+  when: new Date('2026-11-01'),
+  author: 'seed:docs',
+})
+```
+
+
+
+## 保持內容同步 {/* #keep-content-in-sync */}
+
+當來源更改時再次運行種子。`upsertPage()` updates changed pages and skips unchanged ones, so a re-run doesn't rewrite or re-embed them.
+
+`addNote()`每次通話都會新增註解。運行種子兩次會留下重複的音符。新增註釋一次，或變更現有註釋[`updateNote()`](/reference/knowledge/knowledge-class#updatenote).
+
+您從來源中刪除的文件仍保留在 Knowledge 中。將其刪除[`removePage()`](/reference/knowledge/knowledge-class#removepage). A page with child pages can't be removed until its children are.
+
+## 後續步驟 {/* #next-steps */}
+
+下一個，[open Knowledge in Studio](/docs/studio/knowledge) to check what you loaded. For every server-side write method, see [`upsertPage()`](/reference/knowledge/knowledge-class#upsertpage) and the methods after it.

@@ -1,21 +1,23 @@
 ---
-title: "參考：LeaseProvider | PubSub"
-description: "LeaseProvider 的 API 參考；這是 Mastra signals 層用來在不同進程間選出單一擁有者的分散式租約合約。"
+title: "Reference: LeaseProvider | PubSub"
+description: "LeaseProvider is the distributed leasing contract, separate from event delivery (PubSub)."
 packages:
   - "@mastra/core"
 ---
 
-# LeaseProvider
+# 租賃提供者
 
-`LeaseProvider` 是與事件傳送（[`PubSub`](/reference/pubsub/base)）分開的分散式租約合約。Mastra 的 [signals 層](/docs/long-running-agents/signals)使用它，在多個進程（例如 serverless invocation）之間為資源（最常見是 thread key）選出單一擁有者。擁有者是喚醒並執行 Agent 串流的進程，因此其他進程會將後續工作路由給它，而不會開始互相競爭的執行。
+`LeaseProvider`是分散式租賃合約，與事件交付分開（[`PubSub`](/reference/pubsub/base)）。馬斯特拉的[訊號層](/docs/signals/overview)
 
-租約與 pub/sub 是不同範疇。只有確實能協調鎖定的後端才會實作 `LeaseProvider`，例如透過原子 `SET`/Lua 操作的 Redis，或供單一進程使用的記憶體 map。無法提供租約的後端會省略它；signals runtime 會偵測此功能，並改用不執行操作的 Provider，以保留單一進程行為。
+[持久劑](/docs/harness/durable-agents#run-ownership)當Workflow儲存不支援運行防護時，也聲明每次運行都通過租約，因此崩潰復原可以判斷另一個進程是否仍在驅動運行。
 
-內置的 [`RedisStreamsPubSub`](/reference/pubsub/redis-streams) 會實作 `LeaseProvider`，讓 signals 能在分散式及 serverless 部署中跨執行個體協調。
+租賃與發布/訂閱是分開的。一個`LeaseProvider` implementation needs actual lock coordination, whether through an atomic Redis operation such as `SET` or Lua or through an in-memory map for a single process. For backends that omit leasing, the signals runtime preserves single-process behavior with a no-op provider.
+
+內建的[`RedisStreamsPubSub`](/reference/pubsub/redis-streams) implements `LeaseProvider`, which is what enables signals to coordinate across instances in distributed and serverless deployments.
 
 ## 使用範例 {/* #usage-example */}
 
-你不會直接建構 `LeaseProvider`。請在 `Mastra` 建構函數上設定實作它的 pub/sub 後端（例如 `RedisStreamsPubSub`），signals runtime 便會自動使用它作跨進程協調。
+你不建構一個`LeaseProvider` directly. Configure a pub/sub backend that implements it (such as `RedisStreamsPubSub`) on the `Mastra` constructor, and the signals runtime uses it automatically for cross-process coordination.
 
 ```typescript title="src/mastra/index.ts"
 import { Mastra } from '@mastra/core'
@@ -29,7 +31,7 @@ export const mastra = new Mastra({
 })
 ```
 
-若要在自訂後端實作租約，請實作以下方法。signals runtime 會從結構上偵測此功能（因此可跨套件邊界運作），並只會在所有方法均存在時使用它。
+若要在自訂後端中實現租賃，請實作以下方法。訊號運行時從結構上檢測功能（因此它可以跨包邊界工作），並且僅在所有方法都存在時才使用它。
 
 ```typescript title="src/mastra/pubsub.ts"
 import { PubSub } from '@mastra/core/events'
@@ -47,67 +49,70 @@ export class CustomPubSub extends PubSub implements LeaseProvider {
 
 ## 方法 {/* #methods */}
 
-### 租約 {/* #leasing */}
+### 租賃 {/* #leasing */}
 
 #### `acquireLease(key, owner, ttlMs)` {/* #acquireleasekey-owner-ttlms */}
 
-以原子方式嘗試取得 key 的租約。若呼叫者取得租約，傳回 `{ acquired: true, owner }`；否則傳回 `{ acquired: false, owner }`，其中 `owner` 是目前擁有者，讓呼叫者可將後續工作路由給它。同一擁有者可重複呼叫 `acquireLease`，以冪等方式續期或重新取得租約。
+以原子方式嘗試取得密鑰的租約。退貨`{ acquired: true, owner }` if the caller claimed the lease, or `{ acquired: false, owner }` where `owner` is the current holder, so the caller can route follow-up work to them. A failed acquisition can omit `owner` when the holder is unknown, for example when the backend is closed or the competing lease expired before it could be read. Check for `owner` before routing to it. The same owner can call `acquireLease` idempotently to renew or re-claim.
 
 ```typescript
 const result = await pubsub.acquireLease('thread:abc', runId, 15000)
 
 if (result.acquired) {
   // This process owns the thread, so wake and run the agent.
-} else {
+} else if (result.owner) {
   // result.owner holds the lease, so route the signal to them.
+} else {
+  // The holder is unknown, so retry acquisition or report the failure instead of dropping the work.
 }
 ```
 
-傳回：`Promise<{ acquired: boolean; owner?: string }>`
+返回：`Promise<{ acquired: boolean; owner?: string }>`
 
 <PropertiesTable
   content={[
-  {
-    name: 'key',
-    type: 'string',
-    description: '租約 key，例如 thread key。',
-  },
-  {
-    name: 'owner',
-    type: 'string',
-    description: '擁有者的識別符，例如 `runId`。同一擁有者可重複呼叫 `acquireLease`，以冪等方式續期或解除租約。',
-  },
-  {
-    name: 'ttlMs',
-    type: 'number',
-    description: '租約的存活時間（毫秒）。',
-  },
+{
+  name: 'key',
+  type: 'string',
+  description: 'The lease key, such as a thread key.',
+},
+{
+  name: 'owner',
+  type: 'string',
+  description:
+    'Identifier for the owner, such as a `runId`. The same owner can call `acquireLease` idempotently to renew or release.',
+},
+{
+  name: 'ttlMs',
+  type: 'number',
+  description: 'Time-to-live in milliseconds for the lease.',
+},
 ]}
 />
 
 #### `getLeaseOwner(key)` {/* #getleaseownerkey */}
 
-讀取租約的目前擁有者；如果沒有租約，則傳回 `undefined`。
+讀取租約的目前所有者，或`undefined` if no lease is held.
 
 ```typescript
 const owner = await pubsub.getLeaseOwner('thread:abc')
 ```
 
-傳回：`Promise<string | undefined>`
+返回：`Promise<string | undefined>`
 
 #### `releaseLease(key, owner)` {/* #releaseleasekey-owner */}
 
-解除租約。如果呼叫者不是目前擁有者，此操作不會執行任何動作：實作會先以原子方式檢查擁有權再解除租約，因此其他擁有者同時進行的續期絕不會被覆蓋。
+釋放租約。如果呼叫者不是當前所有者，則這是一個無操作：實現在釋放之前自動檢查所有權，因此另一個所有者的並發更新永遠不會被破壞。
 
 ```typescript
 await pubsub.releaseLease('thread:abc', runId)
 ```
 
-傳回：`Promise<void>`
+返回：`Promise<void>`
 
 #### `renewLease(key, owner, ttlMs)` {/* #renewleasekey-owner-ttlms */}
 
-為 `owner` 擁有的現有租約續期，延長其 TTL。若續期成功且呼叫者仍擁有租約，傳回 `true`；如果租約已失效（TTL 已屆滿或由其他擁有者取得），則傳回 `false`。
+續簽擁有的現有租約`owner`, extending its TTL. Returns `true` if the renewal succeeded and the caller still owns the lease, or `false` if the lease was lost (TTL expired or another owner took it).
 
 ```typescript
 const stillOwned = await pubsub.renewLease('thread:abc', runId, 15000)
@@ -117,13 +122,13 @@ if (!stillOwned) {
 }
 ```
 
-傳回：`Promise<boolean>`
+返回：`Promise<boolean>`
 
 #### `transferLease(key, fromOwner, toOwner, ttlMs)` {/* #transferleasekey-fromowner-toowner-ttlms */}
 
-以原子方式將現有租約從 `fromOwner` 轉移至 `toOwner`，並重新計算 TTL，期間不會解除 key。此無空隙的原語可讓後續擁有者在目前擁有者完成後，立即接管同一 key。例如，thread 執行完成時，已排隊的後續執行可立即接管。若單純先解除再取得，key 會短暫變成空置，競爭中的進程可能取得已釋放租約並開始另一個互相競爭的執行。
+以原子方式轉移持有的租約`fromOwner` to `toOwner` and refreshes its TTL without releasing the key in between. This gap-free primitive lets a follow-up owner take over the same key immediately after the current owner finishes. For example, a queued follow-up run can take over when a thread run completes. A naive release-then-acquire briefly leaves the key empty. A racing process could then win the freed lease and start a competing run.
 
-如果 `fromOwner` 仍持有租約且擁有權已移至 `toOwner`，便傳回 `true`；如果租約已失效，則傳回 `false`，此時呼叫者應改為重新呼叫 `acquireLease`。
+退貨`true` if `fromOwner` still held the lease and ownership moved to `toOwner`, or `false` if the lease was already lost, in which case the caller should fall back to a fresh `acquireLease`.
 
 ```typescript
 const transferred = await pubsub.transferLease('thread:abc', currentRunId, nextRunId, 15000)
@@ -134,21 +139,21 @@ if (!transferred) {
 }
 ```
 
-傳回：`Promise<boolean>`
+返回：`Promise<boolean>`
 
-:::warning
-無法以原子方式執行轉移的後端，仍須以盡力而為方式實作：先執行 `releaseLease(fromOwner)`，再執行 `acquireLease(toOwner)`，並註明交換並非原子操作，因為競爭中的進程可能在空隙期間取得 key。將此方法列為必要方法，代表呼叫者只有一條程式碼路徑，而原子性則由各後端明確決定。
+:::警告
+無法自動傳輸租約的後端必須使用盡力而為的方式`releaseLease(fromOwner)` followed by `acquireLease(toOwner)`. They must document that the swap is non-atomic because another process can claim the key between those calls. Keeping the method required gives callers one code path while making atomicity an explicit per-backend decision.
 :::
 
-## 功能偵測 {/* #capability-detection */}
+## 能力檢測 {/* #capability-detection */}
 
-signals runtime 會從結構上而非透過 `instanceof` 偵測 `LeaseProvider`，因此即使獨立發佈的後端解析至另一份 `@mastra/core`，偵測仍可運作。公開全部五個方法（`acquireLease`、`getLeaseOwner`、`releaseLease`、`renewLease`、`transferLease`）的值會被視為 `LeaseProvider`。
+運行時偵測到的訊號`LeaseProvider` structurally rather than with `instanceof`, so detection works even when a separately published backend resolves a different copy of `@mastra/core`. A value is treated as a `LeaseProvider` when it exposes all five methods (`acquireLease`, `getLeaseOwner`, `releaseLease`, `renewLease`, `transferLease`).
 
-若設定的 pub/sub 後端沒有實作 `LeaseProvider`，runtime 會改用一律勝出的無操作 Provider。每個呼叫者都會勝出自己的租約競爭，而解除、續期及轉移操作均不產生作用，藉此保留預期的單一進程行為。
+當配置的 pub/sub 後端未實現時`LeaseProvider`, the runtime falls back to an always-win no-op provider. Every caller wins its own lease race, and release, renew, and transfer are inert, which preserves the expected single-process behavior.
 
-## 相關內容 {/* #related */}
+## 有關的 {/* #related */}
 
-- [PubSub](/reference/pubsub/base)：與租約分開的事件傳送合約
-- [RedisStreamsPubSub](/reference/pubsub/redis-streams)：實作 `LeaseProvider` 的內置後端
-- [Signals](/docs/long-running-agents/signals)：使用租約協調跨進程 thread 執行的 runtime
-- [Channels](/docs/capabilities/channels/overview)：使用租約在 serverless 及多執行個體部署中協調 Agent 執行
+* [發布訂閱](/reference/pubsub/base)：活動交付合同，與租賃分開
+* [RedisStreamsPubSub](/reference/pubsub/redis-streams)：內建後端實現`LeaseProvider`
+* [訊號](/docs/signals/overview)：使用租賃來協調跨進程的執行緒執行的執行時間
+* [頻道](/docs/channels)：使用租賃來協調無伺服器和多執行個體部署中的Agent運行

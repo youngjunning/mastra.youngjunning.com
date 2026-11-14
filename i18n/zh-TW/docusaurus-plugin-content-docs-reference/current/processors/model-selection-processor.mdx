@@ -1,0 +1,329 @@
+---
+title: 'Reference: ModelSelectionProcessor | Processors'
+description: 'Use ModelSelectionProcessor to classify an incoming request once and downgrade the agent to a cheaper model when the classifier is confident a cheaper model can handle the request.'
+packages:
+  - '@mastra/core'
+---
+
+# 模型選擇處理器
+
+`ModelSelectionProcessor`對傳入請求進行一次分類，然後覆寫為運行提供服務的模型。它用於成本路由：將有能力的模型保留為Agent的配置預設值，並在決策模型確信更便宜的模型可以處理請求時讓處理器降級到更便宜的模型。
+
+:::警告
+路由的成本可能會超過其節省的成本。提供程序提示快取不在模型之間共用。每個交換器都會再次為對話支付全價，而更便宜的型號可以採取更多步驟來完成任務。在啟用之前衡量您自己的流量的成本和品質。看[Cost tradeoffs](#cost-tradeoffs).
+:::
+
+描述每個模型及其應處理的請求類型。處理器建構[Classifier](/reference/classifier/classifier) for you. The processor's own `model`選項採用決策模型（`DecisionModelV4 | EvaluationModelV4 | MastraDecisionModel`），同類型`Classifier`接受。一個`'provider/model'`此選項不支援字串。看[決策模型](/reference/classifier/classifier#decision-models)對於Provider設定：
+
+```typescript title="src/mastra/agents/support-agent.ts"
+import { Agent } from '@mastra/core/agent'
+import { ModelSelectionProcessor } from '@mastra/core/processors'
+import { typeSafeAi } from '@ai-sdk/typesafe-ai'
+
+export const agent = new Agent({
+  name: 'support-agent',
+  instructions: 'Answer the user concisely.',
+  model: '__GATEWAY_OPENAI_MODEL__',
+  inputProcessors: [
+    new ModelSelectionProcessor({
+      model: typeSafeAi.decisionModel('__AI_SDK_TYPESAFE_DECISION_MODEL__'),
+      choices: [
+        {
+          model: '__GATEWAY_OPENAI_MODEL_LUNA__',
+          criteria:
+            'Answerable in one or two sentences from general knowledge, with no reasoning steps',
+        },
+        {
+          model: '__GATEWAY_OPENAI_MODEL__',
+          criteria:
+            'Requires multi-step reasoning, planning, weighing trade-offs, or careful judgment',
+        },
+      ],
+    }),
+  ],
+})
+```
+
+每個選擇都會指定一個模型及其應滿足的要求。每個請求都會根據這些描述進行分類，並由獲勝的模型提供服務。
+
+預設情況下，該決定適用於運行的每個步驟。放`scope: 'first-step'` to route only the opening call and leave later steps on the agent's configured model, which lets a run that turns out harder than its first message suggested escape the decision. That sounds safer but saves much less, for the reason given under [Routing scope](#routing-scope).
+
+## 建構函數參數 {/* #constructor-parameters */}
+
+`choices`和`classifier` are alternative ways to describe the decision. Use `choices` unless you need a classifier you already own, in which case pass it with `select`.
+
+<PropertiesTable
+  content={[
+{
+  name: 'choices',
+  type: 'ModelChoice[]',
+  required: false,
+  description:
+    'Two or more choices. The processor builds a classifier from them, using each criteria string to describe when that model should be chosen. Mutually exclusive with classifier.',
+  properties: [
+    {
+      type: 'ModelChoice',
+      parameters: [
+        { name: 'model', type: 'SelectableModel', description: 'The model to use when this choice is selected.' },
+        {
+          name: 'criteria',
+          type: 'string',
+          description:
+            'The kind of request this model should handle. The classifier judges the request against this text.',
+        },
+        {
+          name: 'name',
+          type: 'string',
+          isOptional: true,
+          description:
+            'Name reported in onDecision. Defaults to the model ID. Set it when the same model appears in two choices.',
+        },
+      ],
+    },
+  ],
+},
+{
+  name: 'model',
+  type: 'DecisionModelV4 | EvaluationModelV4 | MastraDecisionModel',
+  required: false,
+  description:
+    'The decision model used to make the routing decision, the same type as the Classifier model option. A provider/model string is not supported. Required with choices, and unrelated to the models being routed to.',
+},
+{
+  name: 'instructions',
+  type: 'string',
+  required: false,
+  description:
+    'The objective the processor optimizes for, used with choices. Defaults to choosing the least capable model that can handle the request correctly. Set it to state a different objective, such as favoring accuracy over cost.',
+},
+{
+  name: 'onDecision',
+  type: '(decision: ModelSelectionDecision) => void | Promise<void>',
+  required: false,
+  description:
+    'Called once per request with the routing decision, including abstentions. See Decision callback. Errors thrown here are logged and do not fail the request.',
+},
+{
+  name: 'classifier',
+  type: 'Classifier | string',
+  required: false,
+  description:
+    'A configured Classifier instance, or the ID of a classifier registered with Mastra. String IDs resolve at request time through mastra.getClassifierById(). Used with select, and mutually exclusive with choices.',
+},
+{
+  name: 'select',
+  type: '(answers, { result }) => SelectableModel | undefined | Promise<SelectableModel | undefined>',
+  required: false,
+  description:
+    'Maps the classifier answers to a model. Receives the typed answers and the full classifier result, and returns a model, or undefined to abstain. Required with classifier.',
+},
+{
+  name: 'minProbability',
+  type: 'number',
+  required: false,
+  description:
+    'Used with choices. Require a probability at least this high before applying the chosen model. Omit it to route on the selected choice alone. See the note below, because this option fails closed.',
+},
+{
+  name: 'id',
+  type: 'string',
+  required: false,
+  defaultValue: "'model-selection'",
+  description: 'Identifier used in errors and logs.',
+},
+{
+  name: 'scope',
+  type: "'run' | 'first-step'",
+  required: false,
+  defaultValue: "'run'",
+  description:
+    "Which model calls the decision applies to. 'run' routes every step. 'first-step' routes only the opening call, which captures far less saving because context accumulates across a run.",
+},
+{
+  name: 'providerOptions',
+  type: 'SharedV4ProviderOptions',
+  required: false,
+  description: 'Provider-specific options forwarded to Classifier.decide().',
+},
+]}
+/>
+
+## 決策回調 {/* #decision-callback */}
+
+`onDecision`每個請求與決定都會觸發一次，包括當處理者棄權時。用它來記錄哪個模型服務了請求以及選擇的置信度：
+
+```typescript
+import { ModelSelectionProcessor } from '@mastra/core/processors'
+import { typeSafeAi } from '@ai-sdk/typesafe-ai'
+import { PinoLogger } from '@mastra/loggers'
+
+const logger = new PinoLogger({ name: 'model-selection' })
+
+new ModelSelectionProcessor({
+  model: typeSafeAi.decisionModel('__AI_SDK_TYPESAFE_DECISION_MODEL__'),
+  choices: [
+    { model: '__GATEWAY_OPENAI_MODEL_LUNA__', criteria: 'Simple lookups' },
+    { model: '__GATEWAY_OPENAI_MODEL__', criteria: 'Multi-step reasoning' },
+  ],
+  onDecision: decision => {
+    logger.info('model routing', decision)
+  },
+})
+```
+
+此決策包含所應用的模型、所選的標準、對該選擇的信心，以及在沒有應用模型時的原因。和`select`, the decision never includes `choice` or `probability`. It includes `abstained: 'no-text'` or `abstained: 'error'` in those cases, and has neither `model` nor `abstained` when `select` returns `undefined`:
+
+<PropertiesTable
+  content={[
+{
+  name: 'model',
+  type: 'SelectableModel',
+  required: false,
+  description: 'The model the run was routed to. Absent when the processor abstained.',
+},
+{
+  name: 'choice',
+  type: 'string',
+  required: false,
+  description: 'The choice the classifier selected. Absent when the processor abstained and with select.',
+},
+{
+  name: 'probability',
+  type: 'number',
+  required: false,
+  description:
+    'Confidence in the selected choice, taken from the answer distribution. Absent when the decision model returns no distribution.',
+},
+{
+  name: 'abstained',
+  type: "'below-threshold' | 'no-model-for-choice' | 'no-text' | 'error' | 'refused'",
+  required: false,
+  description: 'Why no model was applied. Absent on a successful routing decision and when select returns undefined.',
+},
+]}
+/>
+
+## 現有分類器 {/* #existing-classifiers */}
+
+經過`classifier` instead of `choices` to route on a [Classifier](/reference/classifier/classifier) you configured yourself, which is useful when the same classifier also backs a scorer or another processor. Use `select` to map its answers to a model:
+
+```typescript
+import { Classifier } from '@mastra/core/classifier'
+import { typeSafeAi } from '@ai-sdk/typesafe-ai'
+
+const triage = new Classifier({
+  id: 'triage',
+  model: typeSafeAi.decisionModel('__AI_SDK_TYPESAFE_DECISION_MODEL__'),
+  questions: {
+    complexity: {
+      type: 'choice',
+      criteria: {
+        trivial: 'Answerable in one or two sentences with no reasoning steps',
+        complex: 'Requires multi-step reasoning or careful judgment',
+      },
+    },
+  },
+})
+
+new ModelSelectionProcessor({
+  classifier: triage,
+  select: ({ complexity }) =>
+    complexity.choice === 'trivial' ? '__GATEWAY_OPENAI_MODEL_LUNA__' : undefined,
+})
+```
+
+返回`undefined` abstains, and the agent's configured model is used.
+
+## 路由範圍 {/* #routing-scope */}
+
+運行中的每個步驟都會將對話和迄今為止的每個Tool結果發送到模型。這使得第一個呼叫成為最便宜的呼叫，而不是最昂貴的呼叫，因此僅路由該呼叫捕獲的資訊非常少。
+
+在四步驟運行中，開頭呼叫大約保留了 14% 的輸入令牌，因此僅路由它就捕獲了不到十分之一的可用節省。該數字以全價計算每個輸入代幣。透過提示緩存，後面步驟的大部分輸入都是折扣緩存讀取，因此路由後面步驟節省的時間少於其令牌份額建議的時間。
+
+`scope: 'run'`由於這個原因，這是預設值。使用`scope: 'first-step'` when you would rather a long run drift back to the capable model than commit to one decision, and accept that on multi-step runs it saves close to nothing.
+
+單步運行不受影響，因為當只有一個模型呼叫時，兩個作用域是相同的。
+
+## 多維度 {/* #multiple-dimensions */}
+
+選擇標準是相互排斥的，當佈線依賴獨立維度時，這是錯誤的形狀。提出幾個問題並將答案組合起來`select`. It receives the fully typed answers, and the routing policy is your code:
+
+```typescript
+import { Classifier } from '@mastra/core/classifier'
+import { typeSafeAi } from '@ai-sdk/typesafe-ai'
+import { ModelSelectionProcessor } from '@mastra/core/processors'
+
+const triage = new Classifier({
+  id: 'triage',
+  model: typeSafeAi.decisionModel('__AI_SDK_TYPESAFE_DECISION_MODEL__'),
+  questions: {
+    complexity: {
+      type: 'choice',
+      criteria: {
+        trivial: 'Answerable in one or two sentences with no reasoning steps',
+        complex: 'Requires multi-step reasoning or careful judgment',
+      },
+    },
+    sensitive: {
+      type: 'boolean',
+      criteria: {
+        true: 'Involves money, credentials, legal, medical, or safety consequences',
+        false: 'Routine request with no sensitive consequences',
+      },
+    },
+  },
+})
+
+new ModelSelectionProcessor({
+  classifier: triage,
+  select: ({ complexity, sensitive }) => {
+    // Never downgrade a sensitive request, however simple it looks.
+    if (sensitive.probability >= 0.3) return undefined
+    return complexity.choice === 'trivial' ? '__GATEWAY_OPENAI_MODEL_LUNA__' : undefined
+  },
+})
+```
+
+## 機率和`minProbability` {/* #probabilities-and-minprobability */}
+
+選擇答案帶有標準的分佈，路由決策的置信度是實際選擇的標準的品質。並非每個決策模型都報告該分佈。
+
+這就是為什麼`minProbability` has no default. Each setting behaves explicitly:
+
+* **省略**：所選路線上的選擇。分類器的答案就是決策。
+* **放**：要求機率等於或高於閾值。如果模型根本沒有傳回任何分佈，則處理器**abstains**, because a threshold that can't be evaluated must not pass.
+
+如果您的決策模型不報告選擇分佈，則處理器會對每個請求放棄一次`minProbability` is set. Log `onDecision` to check: an `abstained` value of `below-threshold` with no `probability` means the distribution is missing rather than the confidence being low.
+
+## 失敗行為 {/* #failure-behavior */}
+
+路由開啟失敗。如果分類器錯誤或未註冊分類器 ID，處理器會記錄警告並使用Agent程式的設定模型。如果請求沒有要分類的使用者文本，則處理器將放棄而不進行記錄和報告`abstained: 'no-text'` to `onDecision`. With the `choices` form, if the decision model refuses the routing question, the processor abstains and reports `abstained: 'refused'`. With the `select` form, your callback receives the refusal answer and decides whether to return a model or `undefined`. This is the safe direction for a cost optimization: the worst case is that you pay for the model you already configured.
+
+這與適用於以下情況的失敗封閉立場相反[tool approval](/docs/agents/human-in-the-loop), where uncertainty should escalate rather than pass through.
+
+故障開放涵蓋路由決策，而不是所選模型。如果所選模型失敗且Agent有[fallback models](/models#model-fallbacks) configured, the processor stops overriding and the next configured model serves the request. With a single configured model there's nothing to fall back to, so the selected model's error fails the run.
+
+## 成本權衡 {/* #cost-tradeoffs */}
+
+路由會在每個請求上交換一個分類器調用，以在某些請求上使用更便宜的模型。是否省錢取決於您的流量：
+
+* **提示快取**：Provider快取每個模型的提示前綴，並以正常價格的一小部分計費快取的輸入。快取不在模型之間共用。當呼叫轉到與先前的呼叫不同的模型時，模型將支付全部輸入價格，並且在某些Provider上，針對它尚未緩存的任何對話支付緩存寫入費用。每個請求都單獨分類，因此線程中的連續輪次可以在模型之間交替。在具有大型系統提示、檢索上下文或較長歷史記錄的Agent程式上，一次切換的成本可能比更便宜的型號節省的成本更高。
+* **較便宜型號的額外工作**：更便宜的模型可以犯更多的錯誤，採取更多的步驟，或是呼叫更多的Tool來完成相同的任務。當稍後的呼叫切換回可用模型時，例如執行緒中的下一個請求或下一個步驟`scope: 'first-step'`, every step the cheaper model took, including its tool calls and results, is billed as uncached input on the capable model.
+
+只有當您的路由模型之間的流量實際上不同時，路由才有用。如果較便宜的型號能夠像功能強大的型號一樣準確地滿足您的請求，請直接配置較便宜的型號。
+
+在啟用路由之前，請執行帶有處理器和不帶處理器的流量樣本，並比較每個已完成任務的總成本，而不是每個令牌的價格。包括快取讀取和寫入、分類器呼叫、額外步驟和後續請求，並檢查處理器降級請求的答案。這[token usage metrics](/reference/observability/metrics/automatic-metrics#token-usage-metrics) report cache read and write tokens for each model call.
+
+## 行為筆記 {/* #behavior-notes */}
+
+* 分類器運行**once per request**, in `processInput`, not once per step. The decision is stashed in per-request state and read on each step.
+* 只有**latest user message** is classified. The system prompt, retrieved context, and earlier turns aren't sent to the classifier, which keeps the routing call flat as context grows. A terse follow-up such as `"now apply that to the rest"` is therefore routed on that sentence alone. If your follow-ups often re-open hard reasoning rather than applying an earlier result, keep them on the capable model by leaving it as the default.
+* 只能降級。將有能力的模型保留為Agent配置的預設值，並使用處理器向下移動。錯誤的決定會降低該請求的品質。使用預設的`scope: 'run'`, a bad downgrade applies to every step of the run. A run that turns out harder than its first message stays on the cheaper model.
+* 處理器將分類器往返新增到每個請求的關鍵路徑，包括最終放棄的請求。
+* 和`choices`, each criterion is named after its model, so `onDecision` reports the chosen model as the `choice`.
+
+## 有關的 {/* #related */}
+
+* [分類器](/reference/classifier/classifier)
+* [分類器處理器](/reference/processors/classifier-processor)
+* [處理器介面](/reference/processors/processor-interface)

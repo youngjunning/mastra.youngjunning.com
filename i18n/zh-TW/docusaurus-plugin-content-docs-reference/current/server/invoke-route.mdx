@@ -1,0 +1,147 @@
+---
+title: "Reference: invokeRoute() | Server"
+description: "Use invokeRoute() to run a Mastra server route in-process as the calling user, with the same validation, permission, and authorization checks as its HTTP endpoint."
+packages:
+  - "@mastra/server"
+---
+
+import PropertiesTable from "@site/src/components/PropertiesTable";
+
+# 呼叫路由()
+
+這`invokeRoute()`函數作為呼叫使用者在進程中執行伺服器路由，並傳回該路由透過 HTTP 應答的內容。它期望 Mastra 伺服器身份驗證已經驗證的請求上下文，然後在每個適配器上應用與路由的 HTTP 端點相同的檢查：您的身份驗證Provider的`authorize`, `authorizeUser`， 和`rules`、架構驗證、RBAC 權限和細粒度授權 (FGA)。
+
+使用它透過另一個通道（例如 MCP Tool）公開路由，而無需透過 HTTP 伺服器進行Agent，兩者不會分開。
+
+## 使用範例 {/* #usage-example */}
+
+```typescript title="src/mastra/tools/metric-aggregate.ts"
+import { Mastra } from '@mastra/core/mastra'
+import { RequestContext } from '@mastra/core/request-context'
+import { createTool } from '@mastra/core/tools'
+import { GET_METRIC_AGGREGATE } from '@mastra/server/handlers/observability'
+import { invokeRoute } from '@mastra/server/server-adapter'
+import { z } from 'zod'
+
+export const agentRunCount = createTool({
+  id: 'agentRunCount',
+  description: 'Counts agent runs',
+  inputSchema: z.object({}),
+  execute: async (_input, { mastra, requestContext = new RequestContext() }) => {
+    if (!(mastra instanceof Mastra)) throw new Error('agentRunCount must run inside Mastra')
+
+    const { status, body } = await invokeRoute(GET_METRIC_AGGREGATE, {
+      mastra,
+      requestContext,
+      body: { name: ['mastra_agent_duration_ms'], aggregation: 'count' },
+    })
+    if (status !== 200) throw new Error(`Metric aggregate failed with status ${status}`)
+    return body
+  },
+})
+```
+
+## 進口 {/* #import */}
+
+```typescript
+import { invokeRoute } from '@mastra/server/server-adapter'
+```
+
+## 簽名 {/* #signature */}
+
+```typescript
+function invokeRoute(route: ServerRoute, options: InvokeRouteOptions): Promise<InvokeRouteResult>
+```
+
+## 參數 {/* #parameters */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'route',
+  type: 'ServerRoute',
+  description:
+    "The route to run, such as one created with [`createRoute()`](/reference/server/create-route) or exported from `@mastra/server/handlers/*`. Must have `responseType: 'json'`.",
+  isOptional: false,
+},
+{
+  name: 'options.mastra',
+  type: 'Mastra',
+  description: 'The Mastra instance the route runs against.',
+  isOptional: false,
+},
+{
+  name: 'options.requestContext',
+  type: 'RequestContext',
+  description:
+    "The caller's request context, already authenticated by Mastra server auth. Its user, permissions, and auth mode decide what the caller may do.",
+  isOptional: false,
+},
+{
+  name: 'options.pathParams',
+  type: 'Record<string, string>',
+  description: "Path parameters, validated against the route's `pathParamSchema`.",
+  isOptional: true,
+},
+{
+  name: 'options.query',
+  type: 'Record<string, string | string[]>',
+  description: "Query parameters, validated against the route's `queryParamSchema`. Use an array for a repeated key.",
+  isOptional: true,
+},
+{
+  name: 'options.body',
+  type: 'unknown',
+  description: "Request body, validated against the route's `bodySchema`.",
+  isOptional: true,
+},
+{
+  name: 'options.abortSignal',
+  type: 'AbortSignal',
+  description: 'Cancels the route handler.',
+  isOptional: true,
+},
+]}
+/>
+
+## 退貨 {/* #returns */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'status',
+  type: 'number',
+  description: 'The HTTP status the route would have answered with, such as `200`, `400`, `401`, or `403`.',
+},
+{
+  name: 'body',
+  type: 'unknown',
+  description: "The route's response body, or an error body when a check fails or the handler throws.",
+},
+]}
+/>
+
+處理程序拋出的失敗檢查和錯誤將作為狀態和正文返回，而不是拋出。
+
+## 行為 {/* #behavior */}
+
+* **不會重新運行身份驗證。**&#x8A2D;定伺服器或 Studio 驗證時，請求上下文必須已包含已解析的使用者 Mastra 伺服器身份驗證。否則`invokeRoute()` returns `401` without running the handler. Requests reaching an MCP tool through a Mastra server adapter carry this context.
+* **授權掛鉤查看 HTTP 路徑。** `authorize()` and `rules` receive the route's path under the server's `apiPrefix` (`/api` by default), with path parameters filled in, and the route's method. `authorize()` gets no adapter-specific request context.
+* **僅支援 JSON 路由。** `invokeRoute()` throws for routes with any other `responseType`, such as streaming or MCP transport routes.
+* **不提供僅 HTTP 處理程序參數。**&#x8655;理程序接收解析後的參數，`mastra`, `requestContext`, and `abortSignal`, but not `request`, `registeredTools`, `taskStore`, or `routePrefix`. Routes that read those aren't suitable.
+
+## 與的差異`dispatchRoute()` {/* #differences-from-dispatchroute */}
+
+[`dispatchRoute()`](/reference/server/dispatch-route)對任何路由（包括流路由）執行相同的檢查，並在以下方面有所不同：
+
+* `invokeRoute()`配置 auth 時始終需要經過身份驗證的使用者。`dispatchRoute()` lets a caller without a user reach paths your auth config declares public.
+* `invokeRoute()`建構路徑`authorize()` and `rules` from the server's `apiPrefix`. `dispatchRoute()` uses the prefix of the server adapter that serves the route.
+* `invokeRoute()`讓主體欄位覆蓋具有相同名稱的路徑參數，就像 HTTP 適配器所做的那樣。`dispatchRoute()` lets the path parameter win.
+* `invokeRoute()`回報`{ status, body }`. `dispatchRoute()` returns the handler's raw result, or a status and error body when a check fails.
+
+## 有關的 {/* #related */}
+
+* [`dispatchRoute()`](/reference/server/dispatch-route)
+* [`createRoute()`](/reference/server/create-route)
+* [伺服器路由](/reference/server/routes)
+* [建立 MCP 應用程式](/docs/connections/mcp#build-mcp-apps)

@@ -1,0 +1,65 @@
+---
+title: "ClickHouse Managed Postgres | Database"
+description: "Store Mastra application data in ClickHouse Managed Postgres with PostgresStore and verified TLS."
+packages:
+  - "@mastra/pg"
+---
+
+# ClickHouse 管理 Postgres
+
+[ClickHouse 管理 Postgres](https://clickhouse.com/cloud/postgres)透過以下方式連接到 Mastra[`PostgresStore`](/integrations/databases/postgresql)，它使用 Node.js`pg`司機。
+
+## 設定連接 {/* #set-up-the-connection */}
+
+在 ClickHouse Cloud 控制台中，開啟您的 Postgres 實例並選擇**Connect**. Turn off **via PgBouncer** and copy the direct connection URL. Download the instance's CA certificate bundle from **Settings**.
+
+在您的應用程式中設定這些環境變數：
+
+```bash title=".env"
+DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@YOUR_HOST:5432/postgres
+PG_CA_CERT_PATH=/absolute/path/to/ca-certificate.pem
+```
+
+使密碼不受版本控制。使用來自的主機名**Connect** and leave SSL query parameters out of `DATABASE_URL`. The `ssl` object below configures certificate verification.
+
+請參閱[connection documentation](https://clickhouse.com/docs/products/managed-postgres/connection) for connection details and certificates.
+
+## 配置儲存 {/* #configure-storage */}
+
+安裝 PostgreSQL 儲存包：
+
+```bash npm2yarn
+npm install @mastra/pg@latest
+```
+
+在 Mastra 上註冊商店：
+
+```typescript title="src/mastra/index.ts"
+import { readFileSync } from 'node:fs'
+import { Mastra } from '@mastra/core/mastra'
+import { PostgresStore } from '@mastra/pg'
+
+export const mastra = new Mastra({
+  storage: new PostgresStore({
+    id: 'clickhouse-managed-postgres-storage',
+    connectionString: process.env.DATABASE_URL!,
+    ssl: {
+      ca: readFileSync(process.env.PG_CA_CERT_PATH!, 'utf8'),
+      rejectUnauthorized: true,
+    },
+  }),
+})
+```
+
+CA 憑證對於您的執行個體是唯一的。使其可供部署的應用程式使用`PG_CA_CERT_PATH`.
+
+當應用程式啟動時，Mastra 會初始化其儲存表。資料庫角色必須有權建立這些表和索引。運行您的應用程序，然後使用實例的 SQL 控制台檢查表：
+
+```sql
+SELECT table_schema, table_name
+FROM information_schema.tables
+WHERE table_name LIKE 'mastra_%'
+ORDER BY table_schema, table_name;
+```
+
+對於單獨的模式初始化和運行時角色，請參閱[PostgreSQL storage guide](/integrations/databases/postgresql).

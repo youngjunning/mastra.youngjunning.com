@@ -1,18 +1,18 @@
 ---
-title: "参考：TokenLimiterProcessor | Processors"
-description: "Mastra 中 TokenLimiterProcessor 的文档。该 Processor 会限制消息中的 token 数量。"
+title: "Reference: TokenLimiterProcessor | Processors"
+description: "Use TokenLimiterProcessor to constrain message tokens during prompt, input, or output processing with configurable limits and strategies."
 packages:
   - "@mastra/core"
   - "@mastra/memory"
 ---
 
-# TokenLimiterProcessor
+# 令牌限制器处理器
 
-`TokenLimiterProcessor` 会限制消息中的 token 数量。它可用作输入、逐步骤输入和输出 Processor：
+这`TokenLimiterProcessor`限制消息中的令牌数量。根据`trimMode`，它充当提示处理器、输入处理器和输出处理器：
 
-- **输入 Processor**（`processInput`）：在 Agent 循环开始前过滤历史消息，使其适应上下文窗口，并优先保留近期消息
-- **逐步骤输入 Processor**（`processInputStep`）：在多步骤 Agent 工作流的每个步骤中裁剪消息，避免 Tool 触发额外 LLM 调用时 token 数量无限增长
-- **输出 Processor**：通过流式或非流式方式限制生成响应的 token 数量，并可配置超出限制时的处理策略
+* **提示处理器** (`processLLMRequest`): In the default `best-fit` and `contiguous`修剪模式，在每次模型调用之前、Agent循环的每个步骤中强制执行提供程序提示上的输入预算。提示是在较早的提示处理器（例如`ToolCallFilter`）对其进行了转换，因此仅计算实际到达模型的令牌。Tool调用和Tool结果消息被分组，以便它们一起保留或删除，并且修剪是暂时的：存储的消息永远不会被修改。
+* **输入处理器** (`processInput`): In `memory-only` trim mode, filters historical messages to fit within the context window before the agentic loop starts, prioritizing recent messages
+* **输出处理器**：通过流式或非流式限制生成的响应令牌，并使用可配置的策略来处理超出的限制
 
 ## 使用示例 {/* #usage-example */}
 
@@ -30,116 +30,125 @@ const processor = new TokenLimiterProcessor({
 
 <PropertiesTable
   content={[
-  {
-    name: 'options',
-    type: 'number | Options',
-    description: '可以是表示 token 限制的简单数字，也可以是配置选项对象',
-    isOptional: false,
-    properties: [
-      {
-        type: 'number | Options',
-        parameters: [
-          {
-            name: 'limit',
-            type: 'number',
-            description: '响应中允许的最大 token 数量',
-            isOptional: false,
-          },
-          {
-            name: 'encoding',
-            type: 'TiktokenBPE',
-            description: '要使用的可选编码。默认为 gpt-5.1 所使用的 o200k_base',
-            isOptional: true,
-            default: 'o200k_base',
-          },
-          {
-            name: 'strategy',
-            type: "'truncate' | 'abort'",
-            description: "达到 token 限制时采用的策略：'truncate' 会停止发送数据块，'abort' 会调用 abort() 以停止流",
-            isOptional: true,
-            default: "'truncate'",
-          },
-          {
-            name: 'countMode',
-            type: "'cumulative' | 'part'",
-            description:
-              "是从流的开头累计 token，还是只统计当前片段：'cumulative' 会统计从开头起的所有 token，'part' 只统计当前片段中的 token",
-            isOptional: true,
-            default: "'cumulative'",
-          },
-          {
-            name: 'trimMode',
-            type: "'best-fit' | 'contiguous'",
-            description:
-              "控制超出 token 限制时如何裁剪消息：'best-fit' 会尽可能多地保留消息（可能产生间隔），'contiguous' 会在遇到第一条无法容纳的消息时停止，从而确保保留连续的对话历史后缀",
-            isOptional: true,
-            default: "'best-fit'",
-          },
-        ],
-      },
-    ],
-  },
+{
+  name: 'options',
+  type: 'number | Options',
+  description: 'Either a simple number for token limit, or configuration options object',
+  isOptional: false,
+  properties: [
+    {
+      type: 'number | Options',
+      parameters: [
+        {
+          name: 'limit',
+          type: 'number',
+          description: 'Maximum number of tokens to allow in the response',
+          isOptional: false,
+        },
+        {
+          name: 'encoding',
+          type: 'unknown',
+          description:
+            'Deprecated. Accepted for backwards compatibility but ignored. Token counts are estimated with `tokenx`, so no encoder is needed.',
+          isOptional: true,
+        },
+        {
+          name: 'strategy',
+          type: "'truncate' | 'abort'",
+          description:
+            "Strategy when token limit is reached: 'truncate' stops emitting chunks, 'abort' calls abort() to stop the stream",
+          isOptional: true,
+          default: "'truncate'",
+        },
+        {
+          name: 'countMode',
+          type: "'cumulative' | 'part'",
+          description:
+            "Whether to count tokens from the beginning of the stream or just the current part: 'cumulative' counts all tokens from start, 'part' only counts tokens in current part",
+          isOptional: true,
+          default: "'cumulative'",
+        },
+        {
+          name: 'trimMode',
+          type: "'best-fit' | 'contiguous' | 'memory-only'",
+          description:
+            "Controls how the token limit is enforced: 'best-fit' trims the provider prompt while keeping as many messages as possible (may create gaps), 'contiguous' trims the provider prompt but stops at the first message that does not fit (keeping a continuous suffix of conversation history), and 'memory-only' trims stored history in processInput instead of the prompt",
+          isOptional: true,
+          default: "'best-fit'",
+        },
+      ],
+    },
+  ],
+},
 ]}
 />
 
-## 返回值 {/* #returns */}
+## 退货 {/* #returns */}
 
 <PropertiesTable
   content={[
-  {
-    name: 'id',
-    type: 'string',
-    description: "设为 'token-limiter' 的 Processor 标识符",
-    isOptional: false,
-  },
-  {
-    name: 'name',
-    type: 'string',
-    description: '可选的 Processor 显示名称',
-    isOptional: true,
-  },
-  {
-    name: 'processInput',
-    type: '(args: { messages: MastraDBMessage[]; abort: (reason?: string) => never }) => Promise<MastraDBMessage[]>',
-    description: '在 Agent 循环开始前过滤输入消息，使其适应 token 限制；在保留系统消息的同时优先保留近期消息',
-    isOptional: false,
-  },
-  {
-    name: 'processInputStep',
-    type: '(args: ProcessInputStepArgs) => Promise<void>',
-    description:
-      '在 Agent 循环的每个步骤中（包括 Tool 调用的后续步骤）裁剪消息，使对话保持在 token 限制以内。通过优先移除最早的消息并保留系统消息，直接修改 messageList。',
-    isOptional: false,
-  },
-  {
-    name: 'processOutputStream',
-    type: '(args: ProcessOutputStreamArgs) => Promise<ChunkType | null>',
-    description:
-      '处理流式输出片段，以限制流式传输期间的 token 数量。只有文本和对象片段会计入限制并可能被拦截；生命周期、推理和 Tool 片段始终会通过。',
-    isOptional: false,
-  },
-  {
-    name: 'processOutputResult',
-    type: '(args: { messages: MastraDBMessage[]; abort: (reason?: string) => never }) => Promise<MastraDBMessage[]>',
-    description: '处理最终输出结果，以在非流式场景中限制 token 数量',
-    isOptional: false,
-  },
-  {
-    name: 'getMaxTokens',
-    type: '() => number',
-    description: '获取最大 token 限制',
-    isOptional: false,
-  },
+{
+  name: 'id',
+  type: 'string',
+  description: "Processor identifier set to 'token-limiter'",
+  isOptional: false,
+},
+{
+  name: 'name',
+  type: 'string',
+  description: "Processor display name set to 'Token Limiter'",
+  isOptional: false,
+},
+{
+  name: 'processInput',
+  type: '(args: ProcessInputArgs) => Promise<MessageList>',
+  description:
+    "Trims stored history to fit within the token limit before the agentic loop starts in 'memory-only' trim mode, prioritizing recent messages while preserving system messages and the current turn",
+  isOptional: true,
+},
+{
+  name: 'processInputStep',
+  type: '(args: ProcessInputStepArgs) => Promise<void>',
+  description:
+    "In 'memory-only' trim mode, applies stored-history trimming at each step. In the 'best-fit' and 'contiguous' trim modes, it leaves trimming to processLLMRequest when the agent runs that method for this processor. Otherwise it trims stored history, for example in generateLegacy() and streamLegacy() or when the limiter is inside a processor workflow.",
+  isOptional: true,
+},
+{
+  name: 'processLLMRequest',
+  type: '(args: ProcessLLMRequestArgs) => Promise<ProcessLLMRequestResult>',
+  description:
+    "Enforces the input budget on the provider prompt in the 'best-fit' and 'contiguous' trim modes. Runs after earlier prompt processors have transformed the prompt, counts that exact prompt, and returns a trimmed copy for the model call only. System messages are always preserved, and tool call and tool result messages are grouped so they are kept or removed together.",
+  isOptional: true,
+},
+{
+  name: 'processOutputStream',
+  type: '(args: ProcessOutputStreamArgs) => Promise<ChunkType | null>',
+  description:
+    'Processes streaming output parts to limit token count during streaming. Only text and object parts count against the limit and can be withheld; lifecycle, reasoning and tool parts always pass through.',
+  isOptional: false,
+},
+{
+  name: 'processOutputResult',
+  type: '(args: { messages: MastraDBMessage[]; abort: (reason?: string) => never }) => Promise<MastraDBMessage[]>',
+  description: 'Processes final output results to limit token count in non-streaming scenarios',
+  isOptional: false,
+},
+{
+  name: 'getMaxTokens',
+  type: '() => number',
+  description: 'Get the maximum token limit',
+  isOptional: false,
+},
 ]}
 />
 
 ## 输出流行为 {/* #output-stream-behavior */}
 
-用作输出 Processor 时，只有承载生成输出的片段会计入限制：`text-delta` 和 `object`。生命周期片段（例如 `step-start`）、推理增量、响应元数据和 Tool 片段（`tool-call`、`tool-result`）既不会计数，也不会被拦截，因此 Tool 调用始终能到达 Agent 循环并得到执行。
+作为输出处理器，只有携带生成输出的部分才算作限制：`text-delta` and `object`. Lifecycle parts (such as `step-start`), reasoning deltas, response metadata, and tool parts (`tool-call`, `tool-result`) are neither counted nor withheld, so tool calls always reach the agentic loop and get executed.
 
-使用默认的 `truncate` 策略时，Processor 第一次拦截输出会在流中发送一个临时的 `data-token-limit-reached` 片段：
+使用默认的`truncate` strategy, the first time output is withheld the processor emits a transient `data-token-limit-reached` part on the stream:
 
-```typescript
+```typescript oxfmt:false
 for await (const part of stream.fullStream) {
   if (part.type === 'data-token-limit-reached') {
     console.log('output truncated at', part.data.limit, 'tokens')
@@ -147,12 +156,17 @@ for await (const part of stream.fullStream) {
 }
 ```
 
+## 媒体令牌计数 {/* #media-token-counting */}
+
+图像和文件附件是估计的而不是标记化的，包括`file` message parts and tool results shaped like `{ data, mediaType }`. Images use a flat per-image estimate; other media uses decoded byte size, while remote URLs and provider file ids use a flat fallback because their size isn't known locally. Encoded payloads such as base64 data are never counted as text, avoiding an inflated count that could truncate history unnecessarily.
+
 ## 错误行为 {/* #error-behavior */}
 
-用作输入 Processor（包括 `processInput` 和 `processInputStep`）时，`TokenLimiterProcessor` 会在以下情况下抛出 `TripWire` 错误：
+当修剪输入时，`TokenLimiterProcessor` throws a `TripWire` error in the following cases:
 
-- **消息为空**：如果没有可处理的消息，则会抛出 TripWire，因为无法在没有消息的情况下发送 LLM 请求。
-- **系统消息超出限制**：如果仅系统消息就超过 token 限制，则会抛出 TripWire，因为无法发送只有系统消息、没有用户或助手消息的 LLM 请求。
+* **空消息**：如果没有要处理的非系统消息，则会抛出 TripWire，因为您无法发送没有消息的 LLM 请求。
+* **系统消息超出限制**：如果单独的系统消息超出了令牌限制，则会引发 TripWire，因为您无法发送仅包含系统消息而没有用户/助理消息的 LLM 请求。
+* **没有适合的消息**：如果没有消息符合剩余令牌预算，则会抛出 TripWire，因为您无法发送没有消息的 LLM 请求。
 
 ```typescript
 import { TripWire } from '@mastra/core/agent'
@@ -168,9 +182,9 @@ try {
 
 ## 扩展使用示例 {/* #extended-usage-example */}
 
-### 用作输入 Processor（限制上下文窗口） {/* #as-an-input-processor-limit-context-window */}
+### 作为输入处理器（限制上下文窗口） {/* #as-an-input-processor-limit-context-window */}
 
-使用 `inputProcessors` 限制发送给模型的历史消息，有助于保持在上下文窗口限制以内：
+使用`inputProcessors` to limit historical messages sent to the model, which helps stay within context window limits:
 
 ```typescript title="src/mastra/agents/context-limited-agent.ts"
 import { Agent } from '@mastra/core/agent'
@@ -189,9 +203,9 @@ export const agent = new Agent({
 })
 ```
 
-### 用作逐步骤输入 Processor（限制多步骤 token 增长） {/* #as-a-per-step-input-processor-limit-multi-step-token-growth */}
+### 作为每步处理器（限制多步代币增长） {/* #as-a-per-step-processor-limit-multi-step-token-growth */}
 
-当 Agent 跨多个步骤使用 Tool 时（例如 `maxSteps > 1`），每个步骤都会累积此前所有步骤的对话历史。使用 `inputProcessors` 还可以限制 Agent 循环每个步骤中的 token。`TokenLimiterProcessor` 会自动应用于初始输入和之后的每个步骤：
+当Agent跨多个步骤使用Tool时（例如`maxSteps > 1`), each step accumulates conversation history from all previous steps. `TokenLimiterProcessor` applies its limit at every step, measuring the prompt that's about to be sent after any earlier prompt processors have run. To count the prompt the model actually receives, register the limiter after prompt-shrinking processors such as `ToolCallFilter`:
 
 ```typescript title="src/mastra/agents/multi-step-agent.ts"
 import { Agent } from '@mastra/core/agent'
@@ -213,9 +227,11 @@ const result = await agent.generate('Research this topic using your tools', {
 })
 ```
 
-### 用作输出 Processor（限制响应长度） {/* #as-an-output-processor-limit-response-length */}
+处理器Workflow程不运行`processLLMRequest`, so a `TokenLimiterProcessor` inside a processor workflow trims stored messages in `processInputStep`, before prompt processors such as `ToolCallFilter` remove anything from the request. To count the prompt the model receives, add the limiter directly to `inputProcessors`.
 
-使用 `outputProcessors` 限制生成响应的长度：
+### 作为输出处理器（限制响应长度） {/* #as-an-output-processor-limit-response-length */}
+
+使用`outputProcessors` to limit the length of generated responses:
 
 ```typescript title="src/mastra/agents/response-limited-agent.ts"
 import { Agent } from '@mastra/core/agent'
@@ -236,6 +252,6 @@ export const agent = new Agent({
 })
 ```
 
-## 相关内容 {/* #related */}
+## 有关的 {/* #related */}
 
-- [Guardrails](/docs/agents/guardrails)
+* [护栏](/docs/agents/guardrails)

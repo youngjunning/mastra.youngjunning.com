@@ -67,7 +67,7 @@ const capabilities = [
       message: 'Connect agents to external tools and publish your own Model Context Protocol servers.',
     }),
     cta: translate({ id: 'homepage.capabilities.mcp.cta', message: 'Explore MCP' }),
-    href: '/docs/mcp/overview',
+    href: '/docs/connections/mcp',
   },
   {
     icon: Telescope,
@@ -107,7 +107,7 @@ const useCases = [
       },
       {
         label: translate({ id: 'homepage.useCases.product.streaming', message: 'Streaming' }),
-        href: '/guides/concepts/streaming',
+        href: '/docs/guides/streaming',
       },
     ],
   },
@@ -126,7 +126,7 @@ const useCases = [
       },
       {
         label: translate({ id: 'homepage.useCases.operations.toolsAndMcp', message: 'Tools and MCP' }),
-        href: '/docs/mcp/overview',
+        href: '/docs/connections/mcp',
       },
     ],
   },
@@ -141,7 +141,7 @@ const useCases = [
     links: [
       {
         label: translate({ id: 'homepage.useCases.platform.mastraServer', message: 'Mastra server' }),
-        href: '/docs/server/mastra-server',
+        href: '/docs/deployment/mastra-server',
       },
       {
         label: translate({ id: 'homepage.useCases.platform.modelProviders', message: 'Model providers' }),
@@ -159,7 +159,7 @@ const resources = [
       id: 'homepage.resources.quickstart.description',
       message: 'Create and run your first Mastra agent.',
     }),
-    href: '/guides/getting-started/quickstart',
+    href: '/docs',
   },
   {
     icon: Code2,
@@ -168,7 +168,7 @@ const resources = [
       id: 'homepage.resources.guides.description',
       message: 'Start from working agent and workflow patterns.',
     }),
-    href: '/guides',
+    href: '/docs/guides/overview',
   },
   {
     icon: Sparkles,
@@ -481,7 +481,7 @@ export default function Home(): ReactNode {
                 </Translate>
               </p>
               <div className={styles.heroActions}>
-                <Link className={styles.primaryButton} to="/guides/getting-started/quickstart">
+                <Link className={styles.primaryButton} to="/docs">
                   <Translate id="homepage.hero.startBuilding">Start building</Translate>{' '}
                   <ArrowRight aria-hidden="true" size={17} />
                 </Link>
@@ -835,7 +835,7 @@ export default function Home(): ReactNode {
               </Translate>
             </p>
             <div className={styles.heroActions}>
-              <Link className={styles.primaryButton} to="/guides/getting-started/quickstart">
+              <Link className={styles.primaryButton} to="/docs">
                 <Translate id="homepage.finalCta.quickstart">Open the quickstart</Translate>{' '}
                 <ArrowRight aria-hidden="true" size={17} />
               </Link>

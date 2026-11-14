@@ -1,0 +1,627 @@
+---
+title: "E2B | Sandbox"
+description: "Run Mastra workspace commands in isolated E2B cloud sandboxes with background processes, cloud storage mounts, custom templates, and reconnection."
+packages:
+  - "@mastra/e2b"
+---
+
+# E2B
+
+在隔离中执行命令[E2B](https://e2b.dev)云Sandbox。提供安全、短暂的环境，并支持安装云存储。接口详情请参见[Workspace沙盒界面](/reference/workspace/sandbox).
+
+## 安装 {/* #installation */}
+
+```bash npm2yarn
+npm install @mastra/e2b
+```
+
+## 用法 {/* #usage */}
+
+添加一个`E2BSandbox` to a workspace and assign it to an agent:
+
+```typescript
+import { Agent } from '@mastra/core/agent'
+import { Workspace } from '@mastra/core/workspace'
+import { E2BSandbox } from '@mastra/e2b'
+
+const workspace = new Workspace({
+  sandbox: new E2BSandbox({
+    id: 'dev-sandbox',
+    timeout: 60_000, // 60 second timeout (default: 5 minutes)
+  }),
+})
+
+const agent = new Agent({
+  id: 'dev-agent',
+  name: 'dev-agent',
+  model: '__GATEWAY_ANTHROPIC_MODEL_OPUS__',
+  workspace,
+})
+```
+
+## 构造函数参数 {/* #constructor-parameters */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'apiKey',
+  type: 'string',
+  description: 'E2B API key. Falls back to E2B_API_KEY environment variable.',
+  isOptional: true,
+},
+{
+  name: 'timeout',
+  type: 'number',
+  description: 'Execution timeout in milliseconds',
+  isOptional: true,
+  defaultValue: '300000 (5 minutes)',
+},
+{
+  name: 'lifecycle',
+  type: 'SandboxLifecycle',
+  description:
+    "Controls what happens when the sandbox timeout is reached. Defaults to pausing the sandbox so the next start resumes it. Pass `{ onTimeout: 'kill' }` to destroy idle sandboxes instead, which suits stateless workspaces whose data is persisted outside the sandbox. An explicit `stop()` always pauses, regardless of this setting.",
+  isOptional: true,
+  defaultValue: "{ onTimeout: 'pause' }",
+},
+{
+  name: 'template',
+  type: 'string | TemplateBuilder | function | NamedTemplateSpec',
+  description:
+    'Sandbox template specification. Can be a template ID string, a TemplateBuilder, a function that customizes the default template, or a named spec such as the one returned by createRepoTemplate.',
+  isOptional: true,
+},
+{
+  name: 'env',
+  type: 'Record<string, string>',
+  description: 'Environment variables to set in the sandbox',
+  isOptional: true,
+},
+{
+  name: 'workingDirectory',
+  type: 'string',
+  description:
+    'Default directory for command execution when no per-command `cwd` is given. A per-command `cwd` always wins; when neither is set, commands run from the sandbox home directory. Use an absolute path.',
+  isOptional: true,
+},
+{
+  name: 'id',
+  type: 'string',
+  description: 'Unique identifier for this sandbox instance',
+  isOptional: true,
+  defaultValue: 'Auto-generated',
+},
+{
+  name: 'sandboxId',
+  type: 'string',
+  description:
+    'Persisted E2B provider sandbox ID to reattach to deterministically. When set, `start()` connects to this exact sandbox (resuming it if paused) instead of discovering by logical `id` metadata. Under the default `reattach: \'best-effort\'`, only a typed "sandbox gone" error (not found, killed, or not running) falls through to the usual logical-id lookup and create ladder; auth, quota, rate-limit, timeout, and network errors propagate without creating a new sandbox. A sandbox tagged with a different logical id is refused. Read the resolved provider ID from the `sandboxId` property after start.',
+  isOptional: true,
+},
+{
+  name: 'reattach',
+  type: "'best-effort' | 'required'",
+  description:
+    "What `start()` does when `sandboxId` is set but that sandbox is gone. `'best-effort'` falls through to the logical-id lookup, which may reconnect to another sandbox with the same `id` before creating a new one. `'required'` throws a `SandboxError` with code `SANDBOX_REATTACH_FAILED` instead of looking up or creating a sandbox. See [Requiring reattachment](#requiring-reattachment).",
+  isOptional: true,
+  defaultValue: "'best-effort'",
+},
+{
+  name: 'domain',
+  type: 'string',
+  description: 'Domain for self-hosted E2B. Falls back to E2B_DOMAIN env var.',
+  isOptional: true,
+},
+{
+  name: 'apiUrl',
+  type: 'string',
+  description: 'API URL for self-hosted E2B. Falls back to E2B_API_URL env var.',
+  isOptional: true,
+},
+{
+  name: 'accessToken',
+  type: 'string',
+  description: 'Access token for authentication. Falls back to E2B_ACCESS_TOKEN env var.',
+  isOptional: true,
+},
+{
+  name: 'metadata',
+  type: 'Record<string, unknown>',
+  description: 'Custom metadata attached to the sandbox instance.',
+  isOptional: true,
+},
+{
+  name: 'instructions',
+  type: 'string | ((opts: { defaultInstructions: string; requestContext?: RequestContext }) => string)',
+  description:
+    'Custom instructions returned by `getInstructions()`. A string fully replaces the defaults; a function receives the defaults and can extend or customize them per-request. Pass an empty string to suppress instructions entirely.',
+  isOptional: true,
+},
+]}
+/>
+
+## 特性 {/* #properties */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'id',
+  type: 'string',
+  description: 'Sandbox instance identifier',
+},
+{
+  name: 'name',
+  type: 'string',
+  description: "Provider name ('E2BSandbox')",
+},
+{
+  name: 'provider',
+  type: 'string',
+  description: "Provider identifier ('e2b')",
+},
+{
+  name: 'status',
+  type: 'ProviderStatus',
+  description:
+    "'pending' | 'initializing' | 'ready' | 'starting' | 'running' | 'stopping' | 'stopped' | 'destroying' | 'destroyed' | 'error'",
+},
+{
+  name: 'sandboxId',
+  type: 'string | undefined',
+  description:
+    'The E2B provider sandbox ID resolved after connect or create. Persist it and pass it back via the `sandboxId` constructor option (or `clone({ sandboxId })`) to reattach deterministically. Undefined until the sandbox has been started in this process.',
+},
+{
+  name: 'processes',
+  type: 'E2BProcessManager',
+  description:
+    'Background process manager. See [SandboxProcessManager reference](/reference/workspace/process-manager).',
+},
+{
+  name: 'filesystem',
+  type: 'E2BSandboxFilesystem',
+  description:
+    "The sandbox's disk through E2B's files API. Each operation starts the sandbox if needed and retries once when the sandbox died server-side. Paths are absolute and not confined to a root. Copies, appends, and no-overwrite writes run as one command in the VM. See [Native filesystem](/reference/workspace/sandbox#native-filesystem).",
+},
+]}
+/>
+
+## 需要重新连接 {/* #requiring-reattachment */}
+
+当你通过坚持`sandboxId` and that sandbox is gone, the default `reattach: 'best-effort'` falls through to the logical-id lookup, which may reconnect to another sandbox with the same `id` or create a new one. When a different sandbox would silently lose state your app depends on, set `reattach: 'required'`:
+
+```typescript title="src/mastra/workspaces.ts"
+const sandbox = new E2BSandbox({
+  id: 'session-123',
+  sandboxId: persistedSandboxId,
+  reattach: 'required',
+})
+```
+
+和`reattach: 'required'`, a gone sandbox rejects `start()` with a `SandboxError` whose `code` is `SANDBOX_REATTACH_FAILED`, and no lookup or create runs. The error's `details` include `provider`, `sandboxId`， 和`logicalId`（Sandbox的逻辑`id`）。其他错误传播不变，就像它们在下面一样`'best-effort'`。要重新开始，请清除您的坚持`sandboxId`并在没有它的情况下构建Sandbox。克隆人继承了`reattach`环境。
+
+## 后台进程 {/* #background-processes */}
+
+`E2BSandbox`包括一个内置的进程管理器，用于生成和管理后台进程。进程使用 E2B SDK 在 E2B 云Sandbox中运行`commands.run()` with `background: true`.
+
+```typescript
+const sandbox = new E2BSandbox({ id: 'dev-sandbox' })
+await sandbox.start()
+
+// Spawn a background process
+const handle = await sandbox.processes.spawn('node server.js', {
+  env: { PORT: '3000' },
+  onStdout: data => console.log(data),
+})
+
+// Interact with the process
+console.log(handle.stdout)
+await handle.sendStdin('input\n')
+await handle.kill()
+```
+
+`list()`返回Sandbox中运行的进程，包括该管理器未启动的进程，以及尚未读取其输出的已退出进程。
+
+E2B 流程管理器支持重新连接到外部生成的或重新连接之前生成的流程。称呼`get(pid)` with a PID to connect to an existing process. Output written before connecting isn't available:
+
+```typescript
+const handle = await sandbox.processes.get(existingPid)
+if (handle) {
+  console.log(handle.stdout)
+}
+```
+
+看[`SandboxProcessManager` reference](/reference/workspace/process-manager) for the full API.
+
+## 安装云存储 {/* #mounting-cloud-storage */}
+
+E2B Sandbox可以挂载 S3、GCS 和 Azure Blob 文件系统，使云存储可以作为Sandbox内的本地目录进行访问。这对于：
+
+* 处理存储在云存储桶中的大型数据集
+* 将输出文件直接写入云存储
+* 在Sandbox会话之间共享数据
+
+### 使用挂载配置 {/* #using-the-mounts-config */}
+
+挂载文件系统最简单的方法是通过Workspace`mounts` config:
+
+```typescript
+import { Workspace } from '@mastra/core/workspace'
+import { S3Filesystem } from '@mastra/s3'
+import { GCSFilesystem } from '@mastra/gcs'
+import { E2BSandbox } from '@mastra/e2b'
+
+const workspace = new Workspace({
+  mounts: {
+    '/s3-data': new S3Filesystem({
+      bucket: 'my-s3-bucket',
+      region: 'us-east-1',
+      accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+    }),
+    '/gcs-data': new GCSFilesystem({
+      bucket: 'my-gcs-bucket',
+      projectId: 'my-project',
+      credentials: JSON.parse(process.env.GCS_SERVICE_ACCOUNT_KEY),
+    }),
+  },
+  sandbox: new E2BSandbox({ id: 'dev-sandbox' }),
+})
+```
+
+当Sandbox启动时，文件系统会自动挂载到指定的路径。然后，在Sandbox中运行的代码可以访问以下位置的文件：`/s3-data` and `/gcs-data` as if they were local directories.
+
+### 安装工作原理 {/* #how-mounting-works */}
+
+E2BSandbox使用FUSE（用户空间中的文件系统）挂载云存储：
+
+* **S3/R2**：安装通过[s3fs-fuse](https://github.com/s3fs-fuse/s3fs-fuse)
+* **地面站**：安装通过[gcsfuse](https://github.com/GoogleCloudPlatform/gcsfuse)
+* **蔚蓝斑点**：安装通过[blobfuse2](https://github.com/Azure/azure-storage-fuse)
+
+使用挂载时E2BSandbox会自动安装所需的FUSETool。为了获得最佳性能，请使用安装的Tool预先构建自定义模板。
+
+## 自定义模板 {/* #custom-templates */}
+
+默认情况下，当没有指定模板时，E2BSandbox 会自动构建一个模板`s3fs` installed for S3 mounting support, a current Node.js LTS installed over the base image's older runtime, and corepack enabled so `pnpm` and `yarn` resolve to whatever a repository's `packageManager` field pins. This template is cached and reused across sandbox instances.
+
+Node.js 版本已准确固定，并且是模板标识的一部分。经过`nodeVersion` to `createDefaultMountableTemplate()` to select a different release; changing it builds a new template.
+
+对于 GCS 安装，`gcsfuse` is automatically installed at mount time if not already present. For additional tools or faster cold starts, use custom templates.
+
+### 使用现有模板 {/* #using-an-existing-template */}
+
+如果您有预构建的模板，请传递其 ID：
+
+```typescript
+const workspace = new Workspace({
+  sandbox: new E2BSandbox({
+    id: 'dev-sandbox',
+    template: 'my-custom-template',
+  }),
+})
+```
+
+### 自定义默认模板 {/* #customizing-the-default-template */}
+
+传递一个函数来自定义默认的可安装模板。该函数接收一个`TemplateBuilder` and should return the modified template:
+
+```typescript
+const workspace = new Workspace({
+  sandbox: new E2BSandbox({
+    template: base =>
+      base
+        .aptInstall(['ffmpeg', 'imagemagick', 'poppler-utils'])
+        .pipInstall(['pandas', 'numpy'])
+        .npmInstall(['sharp']),
+  }),
+})
+```
+
+模板构建器支持方法链操作，例如：
+
+* `aptInstall(packages)`- 安装系统包
+* `pipInstall(packages)`- 安装Python包
+* `npmInstall(packages)`- 安装 Node.js 包
+* `runCmd(command)`- 运行外壳命令
+* `setEnvs(vars)`- 设置环境变量
+* `copy(src, dest)`- 将文件复制到模板中
+
+看[E2B's template documentation](https://e2b.dev/docs/template/defining-template) for the full list of available methods.
+
+### 预构建模板 {/* #pre-building-templates */}
+
+默认模板是在首次使用时构建并缓存的。为了更快的冷启动或包含 GCS 支持，您可以预先构建一个模板：
+
+```typescript
+import { createDefaultMountableTemplate } from '@mastra/e2b'
+import { Template } from 'e2b'
+
+// Get the default mountable template (includes s3fs)
+const { template, id } = createDefaultMountableTemplate()
+
+// Build and save to E2B
+const result = await Template.build(template, id)
+console.log('Template ID:', result.templateId)
+
+// Use this ID in your E2BSandbox config for instant startup
+const sandbox = new E2BSandbox({
+  template: result.templateId,
+})
+```
+
+为了更快地 GCS 冷启动，请预安装`gcsfuse` in a custom template:
+
+```typescript
+const workspace = new Workspace({
+  sandbox: new E2BSandbox({
+    id: 'dev-sandbox',
+    template: base => base.aptInstall(['gcsfuse']),
+  }),
+})
+```
+
+这是可选的：`gcsfuse` is installed automatically at mount time if not present.
+
+### 存储库模板 {/* #repository-templates */}
+
+`createRepoTemplate`生成一个克隆存储库的模板规范，并
+在构建时运行其设置命令，因此Sandbox以热检出开始
+并安装依赖项，而不是在每个上购买冷克隆
+会议：
+
+```typescript
+import { E2BSandbox, createRepoTemplate } from '@mastra/e2b'
+
+const sandbox = new E2BSandbox({
+  id: sessionId,
+  template: createRepoTemplate({
+    getRepositoryAccess: async () => ({
+      cloneUrl: 'https://github.com/octocat/hello-world.git',
+    }),
+    setupCommand: 'pnpm install',
+  }),
+})
+```
+
+`getRepositoryAccess`提供克隆 URL，对于私有存储库，提供
+凭证。它是克隆 URL 的唯一来源，因此克隆的内容和
+模板所标识的内容不能偏离。当它是`undefined`,
+`createRepoTemplate` returns `undefined` — which is how a session with no
+repository asks for the provider's default template without a conditional at
+the call site.
+
+每个存储库和设置命令只有一个模板：模板
+name 包含 repo slug 加上输入的短哈希，以及提交
+sha 作为该名字的标签
+（`mastra-repo-<owner>-<repo>-<hash>:sha-<sha>`). The spec pins itself to the
+repository's current default-branch head at resolution time: right before
+the template lookup it runs `git ls-remote` (no clone, ~100ms) and keys the
+tag on that sha. When the default branch moves, the next new sandbox
+rebuilds the same template in place under a new tag, and old sha tags remain
+as prunable build history instead of piling up as stale templates. If the
+head can't be resolved, the ref degrades to the stable `current` tag and the
+build clones whatever the default branch is at build time.
+
+解析是惰性的，并且只在模板的第一个构建时阻塞。
+每一次成功的构建都会带来稳定的`current` tag, so when the head
+moves, the next sandbox boots immediately from the previous build while the
+fresh sha ref builds in the background on E2B's side (its runtime setup
+`git fetch` fast-forwards the slightly stale checkout — freshness never
+depends on the template). A changed setup command hashes to a new template
+name.
+
+`setupCommand`也接受一个数组。每个条目都作为自己的缓存构建运行
+步骤。`workingDirectory` sets the cwd for the build and the sandbox, and the
+repository is cloned to `<workingDirectory>/<repo>`.
+
+#### 一个模板中的多个存储库 {/* #several-repositories-in-one-template */}
+
+经过`repos` instead of `getRepositoryAccess` to clone several repositories
+into one template, each with its own credential resolver and setup command (a string or an
+array, each entry its own build step):
+
+```typescript
+const sandbox = new E2BSandbox({
+  id: sessionId,
+  template: createRepoTemplate({
+    repos: [
+      {
+        getRepositoryAccess: async () => ({
+          cloneUrl: 'https://github.com/mastra-ai/mastra.git',
+        }),
+        setupCommand: 'pnpm install --frozen-lockfile',
+      },
+      {
+        getRepositoryAccess: async () => ({
+          cloneUrl: 'https://github.com/mastra-ai/template-docs-expert.git',
+        }),
+        setupCommand: 'npm install',
+      },
+    ],
+    workspaceSetupCommand: 'npm install --global @mastra/mcp-docs-server',
+    continueOnSetupFailure: true,
+    workingDirectory: '/home/user/repos',
+  }),
+})
+```
+
+每个存储库都被克隆到`<workingDirectory>/<repo>`. Public repositories
+are built before private ones, keeping the caller's order within each group.
+Private credentials are build envs visible to every build step, so any
+repository's setup command can read every other repository's token: only list
+repositories whose setup commands you trust together.
+
+`workspaceSetupCommand`在每个存储库之后的工作目录中运行
+已设置。`continueOnSetupFailure` (default `false`) lets a failing setup
+command record its repository in `.mastra-sandbox/setup-failed` and continue
+instead of failing the build.
+
+标记告诉会话图像已经运行了什么：`.mastra-sandbox/repos/<repo>`
+per repository and `.mastra-sandbox/workspace-setup` after the workspace
+commands, all under the working directory. With `continueOnSetupFailure`,
+check `.mastra-sandbox/setup-failed` first.
+
+添加或删除存储库会启动一个新模板，编辑存储库也是如此
+setup 命令，而轮换凭证则重复使用现有凭证。如果任何条目的访问无法解决，Sandbox就会崩溃
+返回其默认模板。无法解析其头部的存储库是
+克隆未固定，而其他人则保留其固定。
+
+模板按照 E2B 的默认机器大小（2 个 vCPU，1024 MB）构建，除非
+规格要求更多。经过`cpuCount` and `memoryMB` to size the machine the
+template's sandboxes run on:
+
+```typescript
+const sandbox = new E2BSandbox({
+  id: sessionId,
+  template: createRepoTemplate({
+    getRepositoryAccess: async () => ({
+      cloneUrl: 'https://github.com/octocat/hello-world.git',
+    }),
+    setupCommand: 'pnpm install',
+    cpuCount: 4,
+    memoryMB: 2048,
+  }),
+})
+```
+
+资源是模板身份的一部分：它们散列到模板中
+名称与存储库和设置命令一起，因此调整大小会构建一个新的
+模板，而不是默默地重用以旧尺寸构建的模板。当回购
+模板的构建失败并且Sandbox回退到默认可安装
+模板，后备也按请求的大小构建，因此设置永远不会
+落在比它要求的更小的机器上。账户等级限制适用于
+E2B 接受的值。
+
+主动预热模板，而不是等待第一个会话
+合并后，调用`refreshRepoTemplate` with the same options from a
+scheduled job or a merge-to-main event handler. It performs the same
+resolution as sandbox start — resolves the current head, reuses the build
+when it already exists, and otherwise builds it (moving `current`) — and
+reports `{ ref, action, sha }`:
+
+```typescript
+import { refreshRepoTemplate } from '@mastra/e2b'
+
+const result = await refreshRepoTemplate({
+  getRepositoryAccess: async () => ({
+    cloneUrl: 'https://github.com/octocat/hello-world.git',
+  }),
+  setupCommand: 'pnpm install',
+})
+// { ref: 'mastra-repo-octocat-hello-world-…:sha-…', action: 'built' | 'reused', sha: '…' }
+```
+
+模板层位于默认可安装底座（E2B 的`base`
+image, so git and common tooling are present, plus `s3fs`/FUSE for mount
+support). The clone lands in the build user's home directory at
+`$HOME/<repo>`, derived from the clone URL. Build steps and runtime commands
+both run as the sandbox's non-root `user` in its home, so no directory prep
+is needed, runtime file ownership stays correct, and a runtime `$HOME` probe
+finds the checkout exactly where the template left it.
+
+失败处理的设计使得损坏的模板永远不会阻塞会话：
+
+* 失败的构建会回退到默认的可安装模板；的
+  会话的运行时冷克隆到`$HOME` keeps working.
+* E2B 使失败的构建的引用保持可见`Template.exists`, so a broken
+  ref could otherwise be reused forever. When creating a sandbox from a
+  named ref fails, the cached resolution is dropped and creation retries
+  down the fallback ladder.
+
+如果没有模板Tool链的Sandbox比启动失败更糟糕，请设置`fallbackTemplate: false` on the resolved spec. A failed build, or a ref that can't create a sandbox, then rejects `start()` with the original error instead of falling back:
+
+```typescript title="src/mastra/workspaces.ts"
+const repoTemplate = createRepoTemplate({
+  getRepositoryAccess: async () => ({ cloneUrl: 'https://github.com/acme/app.git' }),
+  setupCommand: 'pnpm install',
+})!
+
+const sandbox = new E2BSandbox({
+  template: {
+    resolveSpec: async () => ({ ...(await repoTemplate.resolveSpec()), fallbackTemplate: false }),
+  },
+})
+```
+
+私有存储库在以下情况下构建温暖模板：`getRepositoryAccess` returns
+an `authorization` alongside the clone URL — a fresh, short-lived credential
+(such as a GitHub App installation token) minted per template resolution.
+The credential authenticates the head lookup and the build's clone through
+an in-shell `http.extraheader` — it enters the template definition's
+environment (visible to build steps but not persisted into runtime sandbox
+environments) and never touches the image filesystem, so no captured layer
+can contain it. It's set as `GH_TOKEN`, the same variable a session installs
+before running setup, so a
+command that shells out to `gh` or authenticated https behaves the same in
+the build as it does in a session.
+
+仅传递短期凭据 - 值保留在模板中
+定义直到下一次重建，所以它的过期是限制
+曝光。请注意，克隆的存储库内容将成为
+团队可见的模板图像。当访问调用没有返回凭据时
+克隆是无令牌的：公共存储库构建良好，并且私有存储库
+存储库的构建降级为回退，其中会话自己的运行时
+setup（使用运行时注入的身份验证）进行克隆。
+
+设置命令需要自己的凭据 - 注册表令牌、私有凭据
+索引 URL — 带他们浏览`buildEnv`, which accepts a record or an async
+resolver. Those values are part of the template's identity, so changing one
+produces a new template. To keep values out of the template name, also pass a
+`buildEnvRevision`. The values still reach the build steps like the clone
+credential, but only the revision names the template. Change the revision
+whenever the values change.
+
+`repoTemplateRef`计算规范的标记参考而不构建
+任何东西——对于使用 E2B CLI 修剪旧的 sha 标签很有用。
+
+### 每会话Sandbox {/* #per-session-sandboxes */}
+
+每个会话构建一个Sandbox的主机，例如 Mastra Factory 的`sandbox` config, use `E2BFactorySandbox`: sandbox identity is the session id
+(id-keyed getOrCreate, so the sandbox pauses on E2B's idle timeout and resumes
+by id), the repo template comes from `createRepoTemplate` over the session's
+repositories, and the project's `cpuCount` and `memoryMb` settings flow into
+the template. See the [FactorySandbox reference](/reference/workspace/factory-sandbox).
+
+```typescript
+import { MastraFactory } from '@mastra/factory'
+import { E2BFactorySandbox } from '@mastra/e2b'
+
+new MastraFactory({
+  sandbox: new E2BFactorySandbox({ apiKey: process.env.E2B_API_KEY }),
+})
+```
+
+裸回调形式，`sandbox: ctx => new E2BSandbox({ id: ctx.sessionId, template: createRepoTemplate(ctx) })`,
+is also supported: factory sees it as a custom provider with no settings to
+tune. Either way, factory attaches its own session setup to the
+sandbox it gets back.
+
+## 与代码模式一起使用 {/* #using-with-code-mode */}
+
+[代码模式](/docs/agents/code-mode)让Agent编写一个 TypeScript 程序来编排其Tool。由于 E2B 在远程微虚拟机中运行该程序，因此它需要一种将程序写入Sandbox文件系统而不是主机的传输。`@mastra/e2b` provides `E2BCodeModeTransport` for this. Pass it as the second argument to `createCodeMode`:
+
+```typescript
+import { createCodeMode } from '@mastra/core/tools'
+import { E2BSandbox, E2BCodeModeTransport } from '@mastra/e2b'
+
+const { tool, instructions } = createCodeMode(
+  {
+    tools: { getWeather, getForecast },
+    sandbox: new E2BSandbox({ timeout: 60_000 }),
+  },
+  new E2BCodeModeTransport(),
+)
+```
+
+`E2BCodeModeTransport`如果Sandbox未运行，则自动启动Sandbox，使用 esbuild 剥离主机上的 TypeScript（因此无论Sandbox的 Node 版本如何，它都可以工作），运行`node` inside the VM, and cleans up the program files afterwards. The default `StdioCodeModeTransport` from `@mastra/core` only works with sandboxes that share the host filesystem, such as `LocalSandbox`.
+
+## 有关的 {/* #related */}
+
+* [SandboxProcessManager 参考](/reference/workspace/process-manager)
+* [Workspace沙盒界面](/reference/workspace/sandbox)
+* [本地沙盒参考](/reference/workspace/local-sandbox)
+* [S3文件系统参考](/integrations/file-storage/amazon-s3)
+* [GCS文件系统参考](/integrations/file-storage/google-cloud-storage)
+* [Azure Blob 文件系统参考](/integrations/file-storage/azure-blob)
+* [沙盒](/docs/sandbox/overview)

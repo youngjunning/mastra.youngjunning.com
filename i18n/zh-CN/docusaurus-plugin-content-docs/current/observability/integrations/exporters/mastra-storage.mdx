@@ -1,30 +1,30 @@
 ---
-title: "Mastra Storage exporter | 集成 | 可观测性"
-description: "在本地存储 Trace，用于开发和调试"
+title: "Storage exporter | Observability"
+description: "Persist Mastra traces and metrics with MastraStorageExporter, choose a storage provider and tracing strategy, and inspect observability data in Studio."
 packages:
   - "@mastra/observability"
 ---
 
-# Mastra Storage exporter
+# 存储出口商
 
-`MastraStorageExporter` 会将 Trace 持久化到配置的存储后端，使其可以通过 Studio 访问。它不需要外部服务。
+这`MastraStorageExporter`将跟踪保留到您配置的存储后端，以便通过 Studio 访问它们。它不需要外部服务。
 
-:::note
+：：：笔记
 
-`MastraStorageExporter` 以前名为 `DefaultExporter`。为向后兼容，原来的 `DefaultExporter` 类仍从 `@mastra/observability` 导出，但已弃用。新代码应使用 `MastraStorageExporter`。
+`MastraStorageExporter`以前被称为`DefaultExporter`. The original `DefaultExporter`类仍然导出自`@mastra/observability`为了向后兼容，但它已被弃用。新代码应该使用`MastraStorageExporter`.
 
 :::
 
-:::warning[生产环境可观测性]
-在生产环境中，可观测性数据可能很快压垮通用数据库。对于高流量应用，请通过 [composite storage](/reference/storage/composite) 将 observability storage domain 路由到 [ClickHouse](/reference/storage/clickhouse)。详情请参阅[生产环境建议](#production-recommendations)。
+:::警告\[生产可观察性]
+可观察性数据很快就会压倒生产中的通用数据库。对于高流量应用程序，将Observability存储域路由到[ClickHouse](/integrations/databases/clickhouse) through [composite storage](/reference/storage/composite). See [Production Recommendations](#production-recommendations) for details.
 :::
 
 ## 配置 {/* #configuration */}
 
-### 前提条件 {/* #prerequisites */}
+### 先决条件 {/* #prerequisites */}
 
-1. **存储后端**：配置 storage Provider（libSQL、PostgreSQL 等）
-1. **Studio**：安装 Studio 以在本地查看 Trace
+1. **存储后端**：配置存储提供者（libSQL、PostgreSQL等）
+2. **工作室**：安装以在本地查看痕迹
 
 ### 基本设置 {/* #basic-setup */}
 
@@ -51,7 +51,7 @@ export const mastra = new Mastra({
 
 ### 推荐配置 {/* #recommended-configuration */}
 
-在可观测性配置中包含 MastraStorageExporter：
+在您的可观察性配置中包含 MastraStorageExporter：
 
 ```typescript
 import { Mastra } from '@mastra/core'
@@ -83,26 +83,72 @@ export const mastra = new Mastra({
 })
 ```
 
-## Studio {/* #studio */}
+## 导出到存储和平台 {/* #export-to-storage-and-platform */}
 
-通过 Studio 访问 Trace：
+在 Mastra 平台上，一个非空`MASTRA_DEPLOYMENT_ID` disables `MastraStorageExporter` and the deprecated `DefaultExporter` by default. Other exporters remain enabled. The opt-in below applies only to `MastraStorageExporter`. Deprecated `DefaultExporter` stays disabled on Platform even with the flag set to `true`. Migrate to `MastraStorageExporter` to use this option.
 
-1. 启动 Studio
-1. 前往 Observability
-1. 过滤和搜索本地 Trace
-1. 检查详细的 span 信息
+:::警告即使选择加入，本地存储仍然被阻止
 
-## Tracing 策略 {/* #tracing-strategies */}
+`retainStorageExporterOnPlatform: true` **doesn't** enable in-memory, local libSQL, or DuckDB observability writes on Platform. When the observability domain reports local persistence, the built-in storage exporter stays disabled: it won't persist traces, logs, metrics, scores, or feedback to that database. Other exporters continue to receive events.
 
-MastraStorageExporter 会根据 storage Provider 自动选择最优 Tracing 策略。如有需要，也可以覆盖这一选择。
+:::
+
+有了更新的适配器和`retainStorageExporterOnPlatform: true`, the behavior on Platform is:
+
+|Observability数据库|平台存储导出 |
+| - | - |
+| PostgreSQL |允许 |
+|远程 libSQL/Turso (`libsql://` or `https://`) | Allowed |
+| Local libSQL (`file:` or `:memory:`) | Blocked |
+| libSQL embedded replica with a remote sync URL | Blocked: it still writes locally |
+| DuckDB, including in-memory databases | Blocked |
+| `InMemoryStore`, including the fallback when no storage is configured | Blocked |
+
+要继续写入您自己的远程数据库以及平台可观察性，请设置[`retainStorageExporterOnPlatform`](/reference/observability/tracing/configuration#observabilityinstanceconfig) to `true` on the observability config:
+
+```typescript
+import { Observability, MastraStorageExporter, MastraPlatformExporter } from '@mastra/observability'
+
+const observability = new Observability({
+  configs: {
+    production: {
+      serviceName: 'my-service',
+      retainStorageExporterOnPlatform: true,
+      exporters: [new MastraStorageExporter(), new MastraPlatformExporter()],
+    },
+  },
+})
+```
+
+通过这个`observability` instance to `new Mastra()` alongside your configured `storage` provider. The option applies only to this config, including exporters registered later. It doesn't configure a database or add exporters automatically. Other configs keep the default suppression unless they also opt in.
+
+该限制适用于**observability domain**, which can use a different provider from your default application storage. It doesn't disable other storage domains. Outside Platform, local observability storage continues to work.
+
+要启用此防护，请升级`@mastra/core` and any `@mastra/libsql` or `@mastra/duckdb` adapters alongside `@mastra/observability`: older or custom adapters without the `persistenceLocation` capability retain the existing opt-in behavior and aren't checked for local persistence.
+
+被阻止的导出器会在初始化期间记录警告，但即使您的日志记录设置隐藏了该警告，该限制仍然适用。如果双重导出未写入数据库，请根据上表检查可观察性提供程序并配置远程数据库。重试或增加批处理间隔不会启用被阻止的导出器。
+
+## 工作室 {/* #studio */}
+
+通过 Studio 访问您的痕迹：
+
+1. 开始工作室
+2. 导航至可观察性
+3. 过滤并搜索您的本地痕迹
+4. 检查详细的跨度信息
+
+## 追踪策略 {/* #tracing-strategies */}
+
+MastraStorageExporter 根据您的存储Provider自动选择最佳跟踪策略。如果需要，您还可以覆盖此选择。
 
 ### 可用策略 {/* #available-strategies */}
 
-| 策略 | 说明 | 用例 |
+|战略|描述 |使用案例|
 | - | - | - |
-| **realtime** | 立即处理每个事件 | 开发、调试、低流量 |
-| **batch-with-updates** | 缓冲事件并批量写入，支持完整生命周期 | 低流量生产环境 |
-| **insert-only** | 仅处理已完成的 span，忽略更新 | 高流量生产环境 |
+|**realtime** | Process each event immediately | Development, debugging, low traffic |
+| **batch-with-updates** | Buffer events and batch write with full lifecycle support | Low volume Production |
+| **insert-only** | Only process completed spans, ignore updates | High volume Production |
+| **event-sourced** | Write one row when a span starts and another when it ends, then collapse them on read | High volume Production, in-progress traces |
 
 ### 策略配置 {/* #strategy-configuration */}
 
@@ -110,7 +156,7 @@ MastraStorageExporter 会根据 storage Provider 自动选择最优 Tracing 策�
 new MastraStorageExporter({
   strategy: 'auto', // Default - let storage provider decide
   // or explicitly set:
-  // strategy: 'realtime' | 'batch-with-updates' | 'insert-only'
+  // strategy: 'realtime' | 'batch-with-updates' | 'insert-only' | 'event-sourced'
 
   // Batching configuration (applies to both batch-with-updates and insert-only)
   maxBatchSize: 1000, // Max spans per batch
@@ -119,87 +165,96 @@ new MastraStorageExporter({
 })
 ```
 
-## Storage Provider 支持 {/* #storage-provider-support */}
+## 存储Provider支持 {/* #storage-provider-support */}
 
-不同 storage Provider 支持不同的 Tracing 策略。部分 Provider 支持生产工作负载的可观测性，其他则主要面向本地开发。
+不同的存储Provider支持不同的跟踪策略。一些Provider支持生产工作负载的可观察性，而其他Provider则主要用于本地开发。
 
-如果将策略设为 `'auto'`，`MastraStorageExporter` 会自动为 storage Provider 选择最优策略。如果显式设置了 Provider 不支持的策略，exporter 会记录警告并回退到该 Provider 的首选策略。
+如果您将策略设置为`'auto'`, the `MastraStorageExporter` automatically selects the optimal strategy for the storage provider. If you set an explicit strategy that the storage provider doesn't support, the exporter logs a warning and falls back to the provider's preferred strategy.
 
-### 支持可观测性的 Provider {/* #providers-with-observability-support */}
+### 提供可观察性支持的Provider {/* #providers-with-observability-support */}
 
-| Storage Provider | 首选策略 | 支持的策略 | 建议用途 |
+|存储Provider|首选策略 |支持的策略|推荐用途 |
 | - | - | - | - |
-| **[ClickHouse](/reference/storage/clickhouse)** | insert-only | insert-only | 生产环境（高流量） |
-| **[PostgreSQL](/reference/storage/postgresql)** | batch-with-updates | batch-with-updates, insert-only | 生产环境（低流量） |
-| **[MSSQL](/reference/storage/mssql)** | batch-with-updates | batch-with-updates, insert-only | 生产环境（低流量） |
-| **[MongoDB](/reference/storage/mongodb)** | batch-with-updates | batch-with-updates, insert-only | 生产环境（低流量） |
-| **[OracleDB](/reference/storage/oracledb)** | batch-with-updates | batch-with-updates, insert-only | 生产环境（低流量） |
-| **[libSQL](/reference/storage/libsql)** | batch-with-updates | batch-with-updates, insert-only | 默认存储，适合开发 |
+|**[ClickHouse](/integrations/databases/clickhouse)** | insert-only | insert-only | Production (high-volume) |
+| **[PostgresStore](/integrations/databases/postgresql)** | batch-with-updates | batch-with-updates, insert-only | Production (low volume) |
+| **[PostgresStoreVNext](/integrations/databases/postgresql)** | event-sourced | event-sourced | Production (high-volume) |
+| **[MSSQL](/integrations/databases/mssql)** | batch-with-updates | batch-with-updates, insert-only | Production (low volume) |
+| **[MongoDB](/integrations/databases/mongodb)** | batch-with-updates | batch-with-updates, insert-only | Production (low volume) |
+| **[OracleDB](/integrations/databases/oracledb)** | batch-with-updates | batch-with-updates, insert-only | Production (low volume) |
+| **[libSQL](/integrations/databases/libsql)** | batch-with-updates | batch-with-updates, insert-only | Default storage, good for development |
 
-### 不支持可观测性的 Provider {/* #providers-without-observability-support */}
+：：：笔记
 
-以下 storage Provider **不支持** observability domain。如果你使用其中之一且需要可观测性，请使用 [composite storage](/reference/storage/composite) 将可观测性数据路由到支持的 Provider：
+在下面`insert-only`, only completed spans are persisted, and span start and update events are ignored. A trace therefore becomes visible in Studio only after its root span ends, and filtering traces by `status: 'running'` returns no results. `PostgresStoreVNext` uses `event-sourced` tracing instead, so in-progress traces remain visible while preserving append-only writes.
 
-- [Convex](/reference/storage/convex)
-- [DynamoDB](/reference/storage/dynamodb)
-- [Cloudflare D1](/reference/storage/cloudflare-d1)
-- [Cloudflare Durable Objects](/reference/storage/cloudflare)
-- [Upstash](/reference/storage/upstash)
-- [LanceDB](/reference/storage/lance)
+:::
+
+### 没有可观察性支持的Provider {/* #providers-without-observability-support */}
+
+以下存储Provider**don't support** the observability domain. If you're using one of these providers and need observability, use [composite storage](/reference/storage/composite) to route observability data to a supported provider:
+
+* [凸面](/integrations/databases/convex)
+* [动态数据库](/integrations/databases/dynamodb)
+* [Cloudflare D1](/integrations/databases/cloudflare-d1)
+* [Cloudflare 耐用对象](/integrations/databases/cloudflare-kv)
+* [乌普斯塔什](/integrations/databases/upstash)
+* [兰斯数据库](/integrations/databases/lancedb)
 
 ### 策略优势 {/* #strategy-benefits */}
 
-- **realtime**：立即可见，最适合调试
-- **batch-with-updates**：吞吐量提升 10–100 倍，支持完整 span 生命周期
-- **insert-only**：数据库操作进一步减少 70%，非常适合分析
+* **即时的**：立即可见，最适合调试
+* **批量更新**：吞吐量提高 10-100 倍，全生命周期
+* **仅插入**：数据库操作额外减少 70%，非常适合分析
+* **事件源**：仅追加类似于仅插入，但在执行运行时，正在进行的跟踪在 Studio 中保持可见
 
-## 生产环境建议 {/* #production-recommendations */}
+## 制作建议 {/* #production-recommendations */}
 
-可观测性数据在生产环境中增长很快。一次 Agent 交互可能产生数百个 span，高流量应用每天可能产生数千条 Trace。大多数通用数据库并未针对这种写入密集、仅追加的工作负载进行优化。
+Observability数据在生产环境中快速增长。单个Agent交互可以生成数百个跨度，高流量应用程序每天可以生成数千个跟踪。大多数通用数据库并未针对这种写入量大、仅追加的工作负载进行优化。
 
-### 建议：高流量生产环境使用 ClickHouse {/* #recommended-clickhouse-for-high-volume-production */}
+### 推荐：用于大批量生产的 ClickHouse {/* #recommended-clickhouse-for-high-volume-production */}
 
-[ClickHouse](/reference/storage/clickhouse) 是专为高流量分析工作负载设计的列式数据库。建议将它用于生产环境可观测性，原因如下：
+[克利克屋](/integrations/databases/clickhouse)是专为大容量分析工作负载而设计的列式数据库。这是生产可观察性的推荐选择，因为：
 
-- **针对写入优化**：每秒可处理数百万次插入
-- **高效压缩**：降低 Trace 数据的存储成本
-- **快速查询**：列式存储可实现快速 Trace 查找和聚合
-- **原生时间序列支持**：内置基于时间的数据保留和分区支持
+* **针对写入进行优化**：每秒处理数百万次插入
+* **高效压缩**：降低跟踪数据的存储成本
+* **快速查询**：列式存储可实现快速跟踪查找和聚合
+* **时间序列原生**：内置支持基于时间的数据保留和分区
 
-### 使用 Composite Storage {/* #using-composite-storage */}
+### 使用复合存储 {/* #using-composite-storage */}
 
-如果正在使用不支持可观测性的 Provider（如 Convex 或 DynamoDB），或希望优化性能，请使用 [composite storage](/reference/storage/composite#specialized-storage-for-observability) 将可观测性数据路由到 ClickHouse，同时将其他数据保留在主数据库中。
+如果您使用的提供程序没有Observability支持（例如 Convex 或 DynamoDB）或想要优化性能，请使用[composite storage](/reference/storage/composite#specialized-storage-for-observability) to route observability data to ClickHouse while keeping other data in your primary database.
 
 ## 批处理行为 {/* #batching-behavior */}
 
-### 刷新触发条件 {/* #flush-triggers */}
+### 冲洗触发器 {/* #flush-triggers */}
 
-对于两种批处理策略（`batch-with-updates` 和 `insert-only`），满足以下任一条件时，Trace 会刷新到存储：
+对于两种批量策略（`batch-with-updates` and `insert-only`), traces are flushed to storage when any of these conditions are met:
 
-1. **大小触发**：缓冲区达到 `maxBatchSize` 个 span
-1. **时间触发**：从第一个事件开始经过 `maxBatchWaitMs`
-1. **紧急刷新**：缓冲区接近 `maxBufferSize` 限制
-1. **关闭**：强制刷新所有待处理事件
+1. **尺寸触发**: 缓冲区达到`maxBatchSize` spans
+2. **时间触发**: `maxBatchWaitMs` elapsed since first event
+3. **紧急冲洗**：缓冲方法`maxBufferSize` limit
+4. **关闭**：强制刷新所有待处理事件
 
 ### 错误处理 {/* #error-handling */}
 
-MastraStorageExporter 包含适用于生产环境的可靠错误处理：
+MastraStorageExporter 包括用于生产用途的可靠错误处理：
 
-- **重试逻辑**：指数退避（500ms、1s、2s、4s）
-- **暂时性失败**：使用退避自动重试
-- **持续性失败**：失败 4 次后丢弃批次
-- **缓冲区溢出**：在存储中断期间防止内存问题
+* **重试逻辑**：指数退避（500ms、1s、2s、4s）
+* **瞬时故障**：带退避功能的自动重试
+* **持续失败**: 4 次失败尝试后删除批次
+* **缓冲区溢出**：防止存储中断期间出现内存问题
 
-## 丢弃的可观测性事件 {/* #dropped-observability-events */}
+## 丢弃的Observability事件 {/* #dropped-observability-events */}
 
-当 `DefaultExporter` 无法持久化可观测性数据时，会发出结构化的丢弃事件。注册带有 `onDroppedEvent` 的 exporter 或 bridge，将这些丢弃事件转发到告警或监控系统。
+`DefaultExporter`当它无法持久保存可观察性数据时，会发出结构化的放置事件。注册出口商或桥梁`onDroppedEvent` to forward these drops to alerting or monitoring.
 
-事件会因以下两种原因被丢弃：
 
-- `unsupported-storage`：storage Provider 未实现该信号类型。
-- `retry-exhausted`：exporter 最多重试批次 `maxRetries` 次，随后将其丢弃。
 
-以下示例演示如何将丢弃详情转发到监控 endpoint：
+* `unsupported-storage`：存储提供者没有实现信号类型。
+* `retry-exhausted`：出口商重试批次最多`maxRetries` times and then dropped it.
+* `span-not-updatable`： 在下面`realtime` or `batch-with-updates`, a span update or end reached storage but didn't apply, because the span was never stored or had already ended. Ended spans don't change.
+
+以下示例演示了将丢弃详细信息转发到监控端点：
 
 ```typescript title="src/mastra/observability.ts"
 import { BaseExporter } from '@mastra/observability'
@@ -225,7 +280,7 @@ class DropAlertExporter extends BaseExporter {
 }
 ```
 
-## 配置示例 {/* #configuration-examples */}
+## 配置举例 {/* #configuration-examples */}
 
 ```typescript
 // Zero config - recommended for most users
@@ -250,9 +305,9 @@ new MastraStorageExporter({
 })
 ```
 
-## 相关内容 {/* #related */}
+## 有关的 {/* #related */}
 
-- [Tracing 概览](/docs/observability/tracing/overview)
-- [MastraPlatformExporter](/docs/observability/integrations/exporters/mastra-platform)
-- [Composite Storage](/reference/storage/composite)：组合多个 storage Provider
-- [存储配置](/docs/storage/overview)
+* [追踪使用情况](/docs/observability/tracing/overview)
+* [Mastra平台出口商](/docs/mastra-platform/observability)
+* [复合存储](/reference/storage/composite)：合并多个存储Provider
+* [存储配置](/docs/storage)

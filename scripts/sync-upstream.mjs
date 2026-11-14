@@ -8,7 +8,7 @@ const upstreamRoot = path.resolve(
   process.env.MASTRA_UPSTREAM_DIR ?? path.join(repositoryRoot, '..', 'github', 'mastra'),
 )
 const upstreamDocs = path.join(upstreamRoot, 'docs')
-const expectedBranch = 'codex/mastra-latest-docs'
+const expectedBranch = 'main'
 const expectedOrigin = 'https://github.com/mastra-ai/mastra.git'
 
 const protectedPaths = [
@@ -85,6 +85,7 @@ if (changedProtectedPaths) {
 const exclusions = [
   '/.git/',
   '/.docusaurus/',
+  '/.codex/',
   '/build/',
   '/node_modules/',
   '/pnpm-lock.yaml',
@@ -103,6 +104,21 @@ const exclusions = [
   '/static/googled29fba422c357ff8.html',
   '/scripts/sync-upstream.mjs',
   '/scripts/report-upstream-progress.mjs',
+  '/scripts/generate-ko-localization.mjs',
+  '/scripts/generate-zh-model-docs.mjs',
+  '/scripts/generate-zh-tw-model-docs.mjs',
+  '/scripts/generate-zh-hk-model-docs.mjs',
+  '/scripts/sync-localized-heading-anchors.mjs',
+  '/scripts/update-upstream-ledger.mjs',
+  '/src/sidebar-keys.js',
+  '/styleguides/AUTHORING_WORKFLOW.md',
+  '/styleguides/CHECKS.md',
+  '/styleguides/COMPONENTS.md',
+  '/styleguides/DOC.md',
+  '/styleguides/GUIDE_INTEGRATION.md',
+  '/styleguides/INFORMATION_ARCHITECTURE.md',
+  '/styleguides/REFERENCE.md',
+  '/styleguides/STYLEGUIDE.md',
   ...protectedPaths.map(file => `/${file}`),
 ]
 

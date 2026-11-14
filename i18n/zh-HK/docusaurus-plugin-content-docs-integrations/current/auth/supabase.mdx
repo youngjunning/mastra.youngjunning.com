@@ -1,0 +1,162 @@
+---
+title: "Supabase | Auth"
+description: "Give Mastra agents Supabase tools through Mastra Connect, and authenticate Mastra server requests with Supabase Auth and MastraClient."
+packages:
+  - "@mastra/auth-supabase"
+  - "@mastra/client-js"
+  - "@mastra/connect"
+  - "@mastra/core"
+---
+
+import Tabs from "@theme/Tabs";
+import TabItem from "@theme/TabItem";
+import SupabaseConnectTools from "@site/src/components/connect/generated/supabase.mdx";
+
+# 蘇帕貝斯
+
+透過兩種方式將 Supabase 與 Mastra 結合使用：
+
+* **AgentTool**讓Agent透過 Supabase 查詢表、呼叫資料庫函數以及管理儲存和驗證用戶[Mastra Connect](/docs/mastra-platform/connect).
+* **[伺服器認證](#server-authentication)**&#x4F7F;用 Supabase 驗證對 Mastra 伺服器的請求，使用`@mastra/auth-supabase` package.
+
+## 連接 {/* #connect */}
+
+在開始之前，請完成[Connect setup](/docs/mastra-platform/connect#get-started) to install `@mastra/connect` and configure your platform project.
+
+<SupabaseConnectTools />
+
+## 伺服器認證 {/* #server-authentication */}
+
+這`@mastra/auth-supabase` package provides authentication for Mastra using Supabase Auth. It verifies incoming requests using Supabase's authentication system and integrates with the Mastra server using the `auth` option.
+
+### 先決條件 {/* #prerequisites */}
+
+此範例使用 Supabase Auth。確保將您的 Supabase 憑證新增至您的`.env` file and ensure your Supabase project is properly configured.
+
+```env title=".env"
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_ANON_KEY=your-anon-key
+```
+
+：：：筆記
+
+檢查您的 Supabase 行級安全性 (RLS) 設定以確保正確的資料存取控制。
+
+:::
+
+### 安裝 {/* #installation */}
+
+在您可以使用之前`MastraAuthSupabase` class you have to install the `@mastra/auth-supabase` package.
+
+```bash npm2yarn
+npm install @mastra/auth-supabase@latest
+```
+
+### 使用範例 {/* #usage-example */}
+
+```typescript {2,6-9} title="src/mastra/index.ts"
+import { Mastra } from '@mastra/core'
+import { MastraAuthSupabase } from '@mastra/auth-supabase'
+
+export const mastra = new Mastra({
+  server: {
+    auth: new MastraAuthSupabase({
+      url: process.env.SUPABASE_URL,
+      anonKey: process.env.SUPABASE_ANON_KEY,
+    }),
+  },
+})
+```
+
+：：：筆記
+
+預設`authorizeUser` method checks the `isAdmin` column in the `users` table in the `public` schema. To customize user authorization, provide a custom `authorizeUser` function when constructing the provider.
+
+訪問[MastraAuthSupabase](/reference/auth/supabase) for all available configuration options.
+
+:::
+
+### 客戶端設定 {/* #client-side-setup */}
+
+使用 Supabase 驗證時，您需要從客戶端的 Supabase 檢索存取權杖並將其傳遞給您的 Mastra 請求。
+
+#### 檢索訪問令牌 {/* #retrieving-the-access-token */}
+
+使用 Supabase 用戶端對使用者進行身份驗證並檢索其存取權杖：
+
+```typescript title="lib/auth.ts"
+import { createClient } from '@supabase/supabase-js'
+
+const supabase = createClient('<supabase-url>', '<supabase-key>')
+
+const authTokenResponse = await supabase.auth.signInWithPassword({
+  email: "<user's email>",
+  password: "<user's password>",
+})
+
+const accessToken = authTokenResponse.data?.session?.access_token
+```
+
+：：：筆記
+
+請參閱[Supabase documentation](https://supabase.com/docs/guides/auth) for other authentication methods like OAuth, magic links, and more.
+
+:::
+
+### 配置`MastraClient` {/* #configuring-mastraclient */}
+
+什麼時候`auth` is enabled, all requests made with `MastraClient` must include a valid Supabase access token in the `Authorization` header:
+
+```typescript {6} title="lib/mastra/mastra-client.ts"
+import { MastraClient } from '@mastra/client-js'
+
+export const mastraClient = new MastraClient({
+  baseUrl: 'https://<mastra-api-url>',
+  headers: {
+    Authorization: `Bearer ${accessToken}`,
+  },
+})
+```
+
+：：：筆記
+
+訪問令牌必須帶有前綴`Bearer` in the Authorization header.
+
+訪問[Mastra Client SDK](/docs/server/mastra-client) for more configuration options.
+
+:::
+
+#### 發出經過身份驗證的請求 {/* #making-authenticated-requests */}
+
+一次`MastraClient` is configured with the Supabase access token, you can send authenticated requests:
+
+<Tabs>
+  <TabItem value="react" label="React">
+    ```tsx title="src/components/test-agent.tsx"
+    import { mastraClient } from '../../lib/mastra-client'
+
+    export const TestAgent = () => {
+      async function handleClick() {
+        const agent = mastraClient.getAgent('weatherAgent')
+
+        const response = await agent.generate("What's the weather like in New York")
+
+        console.log(response)
+      }
+
+      return <button onClick={handleClick}>Test Agent</button>
+    }
+    ```
+  </TabItem>
+
+  <TabItem value="curl" label="cURL">
+    ```bash
+    curl -X POST http://localhost:4111/api/agents/weatherAgent/generate \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer <your-supabase-access-token>" \
+      -d '{
+        "messages": "Weather in London"
+      }'
+    ```
+  </TabItem>
+</Tabs>

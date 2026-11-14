@@ -1,0 +1,739 @@
+---
+title: "Daytona | Sandbox"
+description: "Run Mastra workspace commands in Daytona cloud sandboxes with custom images, resources, volumes, snapshots, streaming output, and lifecycle controls."
+packages:
+  - "@mastra/daytona"
+---
+
+import Tabs from "@theme/Tabs";
+import TabItem from "@theme/TabItem";
+
+# 代托纳
+
+在隔离中执行命令[Daytona](https://www.daytona.io)云Sandbox。支持多个运行时、资源配置、卷、快照、流输出、Sandbox重新连接、文件系统挂载（S3、GCS）和网络隔离。接口详情请参见[Workspace沙盒界面](/reference/workspace/sandbox).
+
+## 安装 {/* #installation */}
+
+```bash npm2yarn
+npm install @mastra/daytona @daytona/sdk
+```
+
+通过以下三种方式之一设置您的 Daytona API 密钥。
+
+<Tabs>
+  <TabItem value="shell-export" label="Shell export">
+    ```bash
+    export DAYTONA_API_KEY=your-api-key
+    ```
+  </TabItem>
+
+  <TabItem value="env-file" label=".env file">
+    ```bash
+    DAYTONA_API_KEY=your-api-key
+    ```
+  </TabItem>
+
+  <TabItem value="constructor" label="Constructor">
+    ```typescript
+    new DaytonaSandbox({ apiKey: 'your-api-key' })
+    ```
+  </TabItem>
+</Tabs>
+
+## 用法 {/* #usage */}
+
+添加一个`DaytonaSandbox` to a workspace and assign it to an agent:
+
+```typescript
+import { Agent } from '@mastra/core/agent'
+import { Workspace } from '@mastra/core/workspace'
+import { DaytonaSandbox } from '@mastra/daytona'
+
+const workspace = new Workspace({
+  sandbox: new DaytonaSandbox({
+    language: 'typescript',
+    timeout: 120_000,
+  }),
+})
+
+const agent = new Agent({
+  id: 'code-agent',
+  name: 'Code Agent',
+  instructions: 'You are a coding assistant working in this workspace.',
+  model: '__GATEWAY_ANTHROPIC_MODEL_SONNET__',
+  workspace,
+})
+
+const response = await agent.generate(
+  'Print "Hello, world!" and show the current working directory.',
+)
+
+console.log(response.text)
+// I'll run both commands simultaneously!
+//
+// Here are the results:
+//
+// 1. **Hello, world!** — Successfully printed the message.
+// 2. **Current Working Directory** — `/home/daytona`
+//
+// Both commands ran in parallel and completed successfully!
+```
+
+### 带快照 {/* #with-a-snapshot */}
+
+使用预构建的快照来跳过环境设置时间：
+
+```typescript
+const workspace = new Workspace({
+  sandbox: new DaytonaSandbox({
+    snapshot: 'my-snapshot-id',
+    timeout: 60_000,
+  }),
+})
+```
+
+### 带有资源的自定义图像 {/* #custom-image-with-resources */}
+
+使用具有特定资源分配的自定义 Docker 映像：
+
+```typescript
+const workspace = new Workspace({
+  sandbox: new DaytonaSandbox({
+    image: 'node:20-slim',
+    resources: { cpu: 2, memory: 4, disk: 6 },
+    language: 'typescript',
+  }),
+})
+```
+
+### 短暂的Sandbox {/* #ephemeral-sandbox */}
+
+对于一次性任务：Sandbox在停止时立即删除：
+
+```typescript
+const workspace = new Workspace({
+  sandbox: new DaytonaSandbox({
+    ephemeral: true,
+    language: 'python',
+  }),
+})
+```
+
+### 流式输出 {/* #streaming-output */}
+
+通过实时流命令输出`onStdout` and `onStderr` callbacks:
+
+```typescript
+await sandbox.executeCommand('bash', ['-c', 'for i in 1 2 3; do echo "line $i"; sleep 1; done'], {
+  onStdout: chunk => process.stdout.write(chunk),
+  onStderr: chunk => process.stderr.write(chunk),
+})
+```
+
+两个回调都是可选的并且可以独立使用。
+
+### 重连 {/* #reconnection */}
+
+通过提供相同的内容重新连接到现有Sandbox`id`. The sandbox resumes with its files and state intact:
+
+```typescript
+const sandbox = new DaytonaSandbox({ id: 'my-persistent-sandbox' })
+
+// First session
+await sandbox._start()
+await sandbox.executeCommand('sh', ['-c', 'echo "session 1" > /tmp/state.txt'])
+await sandbox._stop()
+
+// Later — reconnects to the same sandbox
+const sandbox2 = new DaytonaSandbox({ id: 'my-persistent-sandbox' })
+await sandbox2._start()
+const result = await sandbox2.executeCommand('cat', ['/tmp/state.txt'])
+console.log(result.stdout) // "session 1"
+```
+
+如果Sandbox处于停止或存档状态，它会自动重新启动。如果它处于死亡状态（被破坏、出错），则会创建一个新的Sandbox。
+
+### 文件系统挂载 {/* #filesystem-mounting */}
+
+将 S3 或 GCS 存储桶挂载为Sandbox内的本地目录。
+
+#### 通过Workspace挂载配置 {/* #via-workspace-mounts-config */}
+
+最简单的方法：Sandbox启动时自动挂载文件系统：
+
+```typescript
+import { Workspace } from '@mastra/core/workspace'
+import { DaytonaSandbox } from '@mastra/daytona'
+import { GCSFilesystem } from '@mastra/gcs'
+import { S3Filesystem } from '@mastra/s3'
+
+const workspace = new Workspace({
+  mounts: {
+    '/s3-data': new S3Filesystem({
+      bucket: process.env.S3_BUCKET!,
+      region: 'auto',
+      accessKeyId: process.env.S3_ACCESS_KEY_ID,
+      secretAccessKey: process.env.S3_SECRET_ACCESS_KEY,
+      endpoint: process.env.S3_ENDPOINT, // e.g. https://<account-id>.r2.cloudflarestorage.com
+    }),
+    '/gcs-data': new GCSFilesystem({
+      bucket: process.env.GCS_BUCKET!,
+      projectId: 'my-project-id',
+      credentials: JSON.parse(process.env.GCS_SERVICE_ACCOUNT_KEY!),
+    }),
+  },
+  sandbox: new DaytonaSandbox({ language: 'python' }),
+})
+```
+
+当Workspace启动时，文件系统会自动安装到指定的路径。然后，在Sandbox中运行的代码可以访问以下位置的文件：`/s3-data` and `/gcs-data` as if they were local directories.
+
+#### 临时 S3 凭证 {/* #temporary-s3-credentials */}
+
+将所有三个凭证值传递给`S3Filesystem` when using temporary credentials. Daytona forwards the session token to s3fs:
+
+```typescript
+import { Workspace } from '@mastra/core/workspace'
+import { DaytonaSandbox } from '@mastra/daytona'
+import { S3Filesystem } from '@mastra/s3'
+
+const workspace = new Workspace({
+  mounts: {
+    '/s3-data': new S3Filesystem({
+      bucket: process.env.S3_BUCKET!,
+      region: process.env.S3_REGION ?? 'us-east-1',
+      endpoint: process.env.S3_ENDPOINT,
+      prefix: 'resource-123/thread-456/',
+      accessKeyId: process.env.SCOPED_S3_ACCESS_KEY_ID!,
+      secretAccessKey: process.env.SCOPED_S3_SECRET_ACCESS_KEY!,
+      sessionToken: process.env.SCOPED_S3_SESSION_TOKEN!,
+    }),
+  },
+  sandbox: new DaytonaSandbox({ language: 'python', ephemeral: true }),
+})
+```
+
+在启动Workspace之前，请从存储Provider处获取仅授权预期前缀的凭据。证书颁发是特定于Provider的； Mastra 不会铸造或限制凭证。一个`prefix` selects a directory but doesn't enforce authorization. Authenticate each request, authorize its resource and thread, and use separate sandboxes for separate security scopes.
+
+挂载开始时会加载临时凭据，并且不会自动刷新。主机端凭据提供程序函数不会刷新挂载。将运行保持在凭证生命周期内，并使用新凭证创建一个新Sandbox以供以后运行。重新连接到Sandbox不会更新其凭据。
+
+凭证上传到私有目录内的所有者专用文件中。启动 s3fs 后，Daytona 会删除临时凭证暂存文件和目录。守护进程在其环境中保留凭据，以同一用户或 root 身份运行的Sandbox代码仍然可以读取这些凭据。切勿提供比Sandbox需要更广泛的凭据。使用长期凭据的挂载会在 s3fs 需要它们时保留其密码文件。卸载并重新连接清理在验证守护进程已退出后删除这些文件。如果守护进程仍然处于活动状态，包括在将安装移到一边之后，或者无法检查其状态，则文件将被保留并记录警告。稍后卸载同一路径时进行清理重试删除；删除Sandbox会删除所有剩余文件。
+
+带前缀的文件系统需要在初始化期间列出其前缀的权限。对于 s3fs，带前缀的挂载可能还需要精确的零字节对象`<prefix>/` key. Provision that directory marker before mounting. After launching s3fs, Daytona checks the mounted directory's metadata without listing its contents, with a 15-second timeout and forced termination after another 5 seconds. A failed check reports a mount failure. Cleanup attempts to unmount the failed mount, moving a stuck mount aside if necessary to free the original path for retry. Moved stale mounts may remain until sandbox deletion. This startup check doesn't guarantee read or write access to individual files or ongoing daemon health; verify a read and write through the mounted path.
+
+#### 通过`sandbox.mount()` {/* #via-sandboxmount */}
+
+Sandbox启动后随时手动挂载：
+
+#### S3 {/* #s3 */}
+
+```typescript
+import { S3Filesystem } from '@mastra/s3'
+
+await sandbox.mount(
+  new S3Filesystem({
+    bucket: process.env.S3_BUCKET!,
+    region: 'us-east-1',
+    accessKeyId: process.env.S3_ACCESS_KEY_ID,
+    secretAccessKey: process.env.S3_SECRET_ACCESS_KEY,
+  }),
+  '/data',
+)
+```
+
+#### S3 兼容（Cloudflare R2、MinIO） {/* #s3-compatible-cloudflare-r2-minio */}
+
+```typescript
+import { S3Filesystem } from '@mastra/s3'
+
+await sandbox.mount(
+  new S3Filesystem({
+    bucket: process.env.S3_BUCKET!,
+    region: 'auto',
+    accessKeyId: process.env.S3_ACCESS_KEY_ID,
+    secretAccessKey: process.env.S3_SECRET_ACCESS_KEY,
+    endpoint: process.env.S3_ENDPOINT, // e.g. https://<account-id>.r2.cloudflarestorage.com
+  }),
+  '/data',
+)
+```
+
+#### 地面站 {/* #gcs */}
+
+```typescript
+import { GCSFilesystem } from '@mastra/gcs'
+
+await sandbox.mount(
+  new GCSFilesystem({
+    bucket: process.env.GCS_BUCKET!,
+    projectId: 'my-project-id',
+    credentials: JSON.parse(process.env.GCS_SERVICE_ACCOUNT_KEY!),
+  }),
+  '/data',
+)
+```
+
+### 网络隔离 {/* #network-isolation */}
+
+限制出站网络访问：
+
+```typescript
+const workspace = new Workspace({
+  sandbox: new DaytonaSandbox({
+    networkBlockAll: true,
+    networkAllowList: '10.0.0.0/8,192.168.0.0/16',
+  }),
+})
+```
+
+使用`domainAllowList` for services whose IP addresses change, such as package registries and hosted APIs:
+
+```typescript
+const workspace = new Workspace({
+  sandbox: new DaytonaSandbox({
+    networkBlockAll: true,
+    domainAllowList: 'registry.npmjs.org,*.githubusercontent.com',
+  }),
+})
+```
+
+两个允许列表都在Sandbox创建时应用，并由`clone()`. To change the policy after the sandbox has started, use the underlying Daytona sandbox:
+
+```typescript
+await sandbox.instance.updateNetworkSettings({
+  domainAllowList: 'api.example.com',
+})
+```
+
+### 秘密 {/* #secrets */}
+
+注入凭据而不将原始值暴露给Sandbox内运行的代码。创建一个[Daytona Secret](https://www.daytona.io/docs/en/secrets/) once for your organization (via the Daytona dashboard or SDK), then map environment variable names to Secret names:
+
+```typescript
+const workspace = new Workspace({
+  sandbox: new DaytonaSandbox({
+    secrets: {
+      GITHUB_TOKEN: 'github-token',
+    },
+  }),
+})
+```
+
+在Sandbox内部，环境变量包含一个不透明的占位符。 Daytona 的出口Agent将实际值替换为针对 Secret 允许的主机的 HTTPS 请求标头，因此原始凭证永远不会进入Sandbox。秘密在Sandbox创建时应用并由`clone()`.
+
+### 电脑使用（台式机） {/* #computer-use-desktop */}
+
+启用[computer capability](/docs/sandbox/computer) with `computerUse`. This adds screenshot, mouse, and keyboard control to the sandbox. When the sandbox is used in a workspace, agents automatically get the `mastra_workspace_computer_*` tools.
+
+默认情况下禁用计算机使用。放`computerUse: true` to start the desktop processes (Xvfb, xfce4, x11vnc, noVNC) lazily on the first computer operation:
+
+```typescript
+const sandbox = new DaytonaSandbox({ computerUse: true })
+await sandbox.start()
+
+await sandbox.computer.leftClick(100, 200)
+await sandbox.computer.type('hello')
+const { data } = await sandbox.computer.screenshot() // PNG bytes
+
+// Live desktop view via the noVNC preview link
+const url = await sandbox.computer.streamUrl()
+```
+
+传递选项对象来配置功能。例如，直接管理 Daytona 进程时禁用自动桌面启动：
+
+```typescript
+const sandbox = new DaytonaSandbox({
+  computerUse: { autoStart: false },
+})
+
+await sandbox.start()
+await sandbox.daytona.computerUse.start()
+```
+
+对于 Daytona 特定的桌面 API（区域、压缩屏幕截图、屏幕录制、辅助功能树），请使用[direct SDK access](#direct-sdk-access) escape hatch: `sandbox.daytona.computerUse`.
+
+## 构造函数参数 {/* #constructor-parameters */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'id',
+  type: 'string',
+  description: 'Unique identifier for this sandbox instance.',
+  isOptional: true,
+  defaultValue: 'Auto-generated',
+},
+{
+  name: 'apiKey',
+  type: 'string',
+  description: 'Daytona API key for authentication. Falls back to DAYTONA_API_KEY environment variable.',
+  isOptional: true,
+},
+{
+  name: 'apiUrl',
+  type: 'string',
+  description:
+    'Daytona API endpoint. Falls back to the DAYTONA_API_URL process environment variable, or the deprecated DAYTONA_SERVER_URL (the SDK no longer reads either from `.env` files). If a `.env`, `.env.local` or `.env.development` file in the working directory also defines one of these variables, as is common with `mastra dev`, the sandbox fails to start with an "endpoint is ambiguous" error. For self-hosted Daytona, pass the endpoint explicitly, for example `apiUrl: process.env.DAYTONA_API_URL`.',
+  isOptional: true,
+},
+{
+  name: 'target',
+  type: 'string',
+  description: 'Runner region. Falls back to DAYTONA_TARGET environment variable.',
+  isOptional: true,
+},
+{
+  name: 'timeout',
+  type: 'number',
+  description: 'Default execution timeout in milliseconds.',
+  isOptional: true,
+  defaultValue: '300000 (5 minutes)',
+},
+{
+  name: 'language',
+  type: "'typescript' | 'javascript' | 'python'",
+  description: 'Runtime language for the sandbox.',
+  isOptional: true,
+  defaultValue: "'typescript'",
+},
+{
+  name: 'snapshot',
+  type: 'string',
+  description: 'Pre-built snapshot ID to create the sandbox from. Takes precedence over image.',
+  isOptional: true,
+},
+{
+  name: 'image',
+  type: 'string',
+  description:
+    'Docker image for sandbox creation. Triggers image-based creation when set. Can be combined with resources. Ignored when snapshot is set.',
+  isOptional: true,
+},
+{
+  name: 'resources',
+  type: '{ cpu?: number; memory?: number; disk?: number }',
+  description:
+    'Resource allocation for the sandbox (CPU cores, memory in GiB, disk in GiB). Only used when image is set.',
+  isOptional: true,
+},
+{
+  name: 'env',
+  type: 'Record<string, string>',
+  description: 'Environment variables to set in the sandbox.',
+  isOptional: true,
+  defaultValue: '{}',
+},
+{
+  name: 'workingDirectory',
+  type: 'string',
+  description:
+    'Default directory for command execution when no per-command `cwd` is given. A per-command `cwd` always wins. When set, the sandbox skips its automatic working-directory probe; when omitted, the probe fills the `workingDirectory` getter after start.',
+  isOptional: true,
+},
+{
+  name: 'labels',
+  type: 'Record<string, string>',
+  description: 'Custom metadata labels.',
+  isOptional: true,
+  defaultValue: '{}',
+},
+{
+  name: 'name',
+  type: 'string',
+  description: 'Sandbox display name.',
+  isOptional: true,
+  defaultValue: 'Sandbox id',
+},
+{
+  name: 'user',
+  type: 'string',
+  description: 'OS user to run commands as.',
+  isOptional: true,
+  defaultValue: "'daytona'",
+},
+{
+  name: 'public',
+  type: 'boolean',
+  description: 'Make port previews public.',
+  isOptional: true,
+  defaultValue: 'false',
+},
+{
+  name: 'ephemeral',
+  type: 'boolean',
+  description: 'Delete sandbox immediately on stop.',
+  isOptional: true,
+  defaultValue: 'false',
+},
+{
+  name: 'autoStopInterval',
+  type: 'number',
+  description: 'Auto-stop interval in minutes. Set to 0 to disable.',
+  isOptional: true,
+  defaultValue: '15',
+},
+{
+  name: 'autoArchiveInterval',
+  type: 'number',
+  description: 'Auto-archive interval in minutes. Set to 0 for the maximum interval (7 days).',
+  isOptional: true,
+  defaultValue: '7 days',
+},
+{
+  name: 'autoDeleteInterval',
+  type: 'number',
+  description: 'Auto-delete interval in minutes. Negative values disable auto-delete. Set to 0 to delete on stop.',
+  isOptional: true,
+  defaultValue: 'disabled',
+},
+{
+  name: 'volumes',
+  type: 'Array<{ volumeId: string; mountPath: string }>',
+  description: 'Daytona volumes to attach at sandbox creation time.',
+  isOptional: true,
+},
+{
+  name: 'networkBlockAll',
+  type: 'boolean',
+  description: 'Block all outbound network access from the sandbox.',
+  isOptional: true,
+  defaultValue: 'false',
+},
+{
+  name: 'networkAllowList',
+  type: 'string',
+  description: 'Comma-separated list of allowed CIDR addresses when network access is restricted.',
+  isOptional: true,
+},
+{
+  name: 'domainAllowList',
+  type: 'string',
+  description:
+    'Comma-separated list of allowed domains when network access is restricted. Supports wildcards, for example `*.githubusercontent.com`. Use this instead of `networkAllowList` for services whose IP addresses change.',
+  isOptional: true,
+},
+{
+  name: 'secrets',
+  type: 'Record<string, string>',
+  description:
+    "Daytona Secrets to expose inside the sandbox, mapping environment variable names to Daytona Secret names. The env var holds an opaque placeholder; the real value is substituted into HTTPS request headers at egress toward the Secret's allowed hosts.",
+  isOptional: true,
+},
+{
+  name: 'computerUse',
+  type: 'boolean | { autoStart?: boolean; noVncPort?: number }',
+  description:
+    'Computer-use (desktop) capability configuration. Set to true or provide an options object to enable the capability. Set autoStart to false to manage the desktop processes yourself. noVncPort sets the noVNC viewer port used by computer.streamUrl().',
+  isOptional: true,
+  defaultValue: 'false',
+},
+]}
+/>
+
+## 特性 {/* #properties */}
+
+<PropertiesTable
+  content={[
+{
+  name: 'id',
+  type: 'string',
+  description: 'Sandbox instance identifier.',
+},
+{
+  name: 'name',
+  type: 'string',
+  description: "Provider name ('DaytonaSandbox').",
+},
+{
+  name: 'provider',
+  type: 'string',
+  description: "Provider identifier ('daytona').",
+},
+{
+  name: 'status',
+  type: 'ProviderStatus',
+  description: "'pending' | 'initializing' | 'ready' | 'stopped' | 'destroyed' | 'error'",
+},
+{
+  name: 'instance',
+  type: 'Sandbox',
+  description:
+    'The underlying Daytona Sandbox instance. Throws SandboxNotReadyError if the sandbox has not been started.',
+},
+{
+  name: 'processes',
+  type: 'DaytonaProcessManager',
+  description:
+    'Background process manager. See [SandboxProcessManager reference](/reference/workspace/process-manager).',
+},
+{
+  name: 'computer',
+  type: 'SandboxComputer | undefined',
+  description:
+    'Computer-use capability: screenshot, mouse, keyboard, and stream URL. Available only when computerUse is explicitly enabled. See [SandboxComputer reference](/reference/workspace/sandbox#computer-capability).',
+},
+]}
+/>
+
+## 后台进程 {/* #background-processes */}
+
+`DaytonaSandbox`包括一个内置的进程管理器，用于生成和管理后台进程。进程使用基于会话的命令执行在 Daytona 云Sandbox中运行。
+
+```typescript
+const sandbox = new DaytonaSandbox({ language: 'typescript' })
+await sandbox.start()
+
+// Spawn a background process
+const handle = await sandbox.processes.spawn('node server.js', {
+  env: { PORT: '3000' },
+  onStdout: data => console.log(data),
+})
+
+// Interact with the process
+console.log(handle.stdout)
+await handle.sendStdin('input\n')
+await handle.kill()
+```
+
+看[`SandboxProcessManager` reference](/reference/workspace/process-manager) for the full API.
+
+## 安装云存储 {/* #mounting-cloud-storage */}
+
+Daytona Sandbox可以挂载 S3 或 GCS 存储桶，使云存储可以作为Sandbox内的本地目录进行访问。这对于：
+
+* 处理存储在云存储桶中的大型数据集
+* 将输出文件直接写入云存储
+* 在Sandbox会话之间共享数据
+
+有关使用示例，请参阅[Filesystem mounting](#filesystem-mounting).
+
+DaytonaSandbox使用FUSE（用户空间中的文件系统）挂载云存储：
+
+* **S3/R2**：安装通过[s3fs-fuse](https://github.com/s3fs-fuse/s3fs-fuse)
+* **地面站**：安装通过[gcsfuse](https://github.com/GoogleCloudPlatform/gcsfuse)
+
+如果沙盒映像中尚未存在所需的 FUSE Tool，则会在挂载时自动安装。
+
+### S3环境变量 {/* #s3-environment-variables */}
+
+|变量|描述 |
+| - | - |
+|`S3_BUCKET` | Bucket name |
+| `S3_REGION` | AWS region or `auto` for R2/MinIO |
+| `S3_ACCESS_KEY_ID` | Access key ID |
+| `S3_SECRET_ACCESS_KEY` | Secret access key |
+| `S3_ENDPOINT` | Endpoint URL (S3-compatible only) |
+
+### GCS环境变量 {/* #gcs-environment-variables */}
+
+|变量|描述 |
+| - | - |
+|`GCS_BUCKET` | Bucket name |
+| `GCS_SERVICE_ACCOUNT_KEY` | Service account key JSON (full JSON string, not a path) |
+
+### 通过快照减少冷启动延迟 {/* #reducing-cold-start-latency-with-a-snapshot */}
+
+默认情况下，`s3fs` and `gcsfuse` are installed at first mount via `apt`, which adds startup time. To eliminate this, prebake them into a Daytona snapshot and pass the snapshot name via the `snapshot` option.
+
+**选项 1：声明式映像构建**
+
+```typescript
+import { Daytona, Image } from '@daytona/sdk'
+
+const template = Image.base('daytonaio/sandbox')
+  .runCommands('sudo apt-get update -qq')
+  .runCommands('sudo apt-get install -y s3fs')
+  // gcsfuse requires the Google Cloud apt repository
+  .runCommands(
+    'sudo mkdir -p /etc/apt/keyrings && ' +
+      'curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg -o /tmp/gcsfuse-key.gpg && ' +
+      'sudo gpg --batch --yes --dearmor -o /etc/apt/keyrings/gcsfuse.gpg /tmp/gcsfuse-key.gpg && ' +
+      // Use gcsfuse-jammy for Ubuntu, gcsfuse-bookworm for Debian
+      'echo "deb [signed-by=/etc/apt/keyrings/gcsfuse.gpg] https://packages.cloud.google.com/apt gcsfuse-jammy main" | sudo tee /etc/apt/sources.list.d/gcsfuse.list',
+  )
+  .runCommands('sudo apt-get update -qq && sudo apt-get install -y gcsfuse')
+
+const daytona = new Daytona()
+
+await daytona.snapshot.create(
+  {
+    name: 'cloud-fs-mounting',
+    image: template,
+  },
+  { onLogs: console.log },
+)
+```
+
+**选项 2：Dockerfile：**&#x4F7F;用[`Image.fromDockerfile()`](https://www.daytona.io/docs/typescript-sdk/image#fromdockerfile)
+
+```dockerfile
+FROM daytonaio/sandbox
+RUN sudo apt-get update -qq
+RUN sudo apt-get install -y s3fs
+# Use gcsfuse-jammy for Ubuntu, gcsfuse-bookworm for Debian
+RUN sudo mkdir -p /etc/apt/keyrings && curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg -o /tmp/gcsfuse-key.gpg && sudo gpg --batch --yes --dearmor -o /etc/apt/keyrings/gcsfuse.gpg /tmp/gcsfuse-key.gpg && echo "deb [signed-by=/etc/apt/keyrings/gcsfuse.gpg] https://packages.cloud.google.com/apt gcsfuse-jammy main" | sudo tee /etc/apt/sources.list.d/gcsfuse.list
+RUN sudo apt-get update -qq && sudo apt-get install -y gcsfuse
+```
+
+```typescript
+import { Daytona, Image } from '@daytona/sdk'
+
+const daytona = new Daytona()
+
+await daytona.snapshot.create(
+  {
+    name: 'cloud-fs-mounting',
+    image: Image.fromDockerfile('./Dockerfile'),
+  },
+  { onLogs: console.log },
+)
+```
+
+然后在Sandbox配置中使用快照名称：
+
+```typescript
+const workspace = new Workspace({
+  mounts: {
+    '/s3-data': new S3Filesystem({/* ... */}),
+    '/gcs-data': new GCSFilesystem({/* ... */}),
+  },
+  sandbox: new DaytonaSandbox({ snapshot: 'cloud-fs-mounting' }),
+})
+```
+
+## 直接SDK访问 {/* #direct-sdk-access */}
+
+访问底层 Daytona`Sandbox` instance for filesystem, git, and other operations not exposed through the `WorkspaceSandbox` interface:
+
+```typescript
+const daytonaSandbox = sandbox.instance
+
+// Upload a file
+await daytonaSandbox.fs.uploadFile(Buffer.from('hello'), '/tmp/hello.txt')
+
+// Run git operations
+await daytonaSandbox.git.clone('https://github.com/org/repo', '/workspace/repo')
+```
+
+这`instance` getter throws `SandboxNotReadyError` if the sandbox hasn't been started yet.
+
+## 沙盒创建模式 {/* #sandbox-creation-modes */}
+
+`DaytonaSandbox`根据提供的选项选择创建模式：
+
+|选项|创作模式|
+| - | - |
+|`snapshot` set | Snapshot-based (snapshot takes precedence over image) |
+| `image` set (no snapshot) | Image-based (optionally with `resources`) |
+| Neither set | Default snapshot-based |
+
+仅在以下情况下才应用资源`image` is set. Passing `resources` without `image` has no effect.
+
+## 有关的 {/* #related */}
+
+* [SandboxProcessManager 参考](/reference/workspace/process-manager)
+* [Workspace沙盒界面](/reference/workspace/sandbox)
+* [本地沙盒参考](/reference/workspace/local-sandbox)
+* [S3文件系统参考](/integrations/file-storage/amazon-s3)
+* [GCS文件系统参考](/integrations/file-storage/google-cloud-storage)
+* [沙盒](/docs/sandbox/overview)

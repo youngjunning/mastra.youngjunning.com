@@ -3,7 +3,6 @@ import { Button } from '@site/src/components/ui/button'
 import { usePluginData } from '@docusaurus/useGlobalData'
 import { useDocsChat } from '@mastra/docusaurus-plugin-kapa/client'
 import type { Ref } from 'react'
-import Translate from '@docusaurus/Translate'
 
 export function AskAI() {
   const pluginData = usePluginData('docusaurus-plugin-kapa', 'default', { failfast: false }) as
@@ -24,11 +23,7 @@ export function AskAI() {
       variant="outline"
       className="rounded-lg border-[0.5px] border-(--border) text-(--mastra-text-secondary) shadow-none hover:bg-(--mastra-surface-2) hover:text-(--mastra-text-primary) dark:bg-(--mastra-surface-4)"
     >
-      <span className="text-sm">
-        <Translate id="navbar.askAI.label" description="Label for the button that opens the documentation AI chat">
-          Ask AI
-        </Translate>
-      </span>
+      <span className="text-sm">Ask AI</span>
     </Button>
   )
 }
