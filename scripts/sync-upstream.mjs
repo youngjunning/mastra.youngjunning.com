@@ -90,9 +90,12 @@ const exclusions = [
   '/pnpm-lock.yaml',
   '/pnpm-workspace.yaml',
   '/UPSTREAM.md',
+  '/UPSTREAM_INCREMENTAL.json',
   '/LICENSE.md',
+  '/AGENTS.md',
   '/static/googled29fba422c357ff8.html',
   '/scripts/sync-upstream.mjs',
+  '/scripts/report-upstream-progress.mjs',
   ...protectedPaths.map(file => `/${file}`),
 ]
 

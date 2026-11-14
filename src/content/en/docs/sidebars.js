@@ -924,25 +924,16 @@ const sidebars = {
           type: 'doc',
           id: 'mastra-platform/deploy',
           label: 'Deploy',
-          customProps: {
-            tags: ['new'],
-          },
         },
         {
           type: 'doc',
           id: 'mastra-platform/environments',
           label: 'Environments',
-          customProps: {
-            tags: ['new'],
-          },
         },
         {
           type: 'doc',
           id: 'mastra-platform/regions',
           label: 'Regions',
-          customProps: {
-            tags: ['new'],
-          },
         },
         {
           type: 'doc',
@@ -981,9 +972,6 @@ const sidebars = {
           type: 'doc',
           id: 'mastra-platform/workspaces',
           label: 'Workspaces',
-          customProps: {
-            tags: ['new'],
-          },
         },
         {
           type: 'doc',

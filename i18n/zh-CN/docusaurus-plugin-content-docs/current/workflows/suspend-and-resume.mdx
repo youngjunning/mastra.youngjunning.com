@@ -1,13 +1,13 @@
 ---
 title: "挂起与恢复 | Workflows"
-description: "Mastra Workflow 中的挂起与恢复允许你在等待外部输入或 Resource 时暂停执行。"
+description: "在等待外部输入、资源或时间条件时挂起 Mastra Workflow，之后携带数据恢复已保存的运行，并找回中断的执行。"
 packages:
   - "@mastra/core"
 ---
 
 # 挂起与恢复
 
-Workflow 可以在任意步骤暂停，以收集额外数据、等待 API 回调、限制高成本操作，或请求 [Human-in-the-loop](/docs/workflows/human-in-the-loop) 输入。Workflow 挂起时，当前执行状态会保存为 Snapshot。你可以稍后从[特定步骤 ID](/docs/workflows/snapshots#retrieving-snapshots) 恢复 Workflow，并还原 Snapshot 中捕获的确切状态。[Snapshot](/docs/workflows/snapshots) 存储在已配置的 Storage Provider 中，可跨部署和应用重启持久存在。
+你可以在任意步骤暂停 Workflow，以收集额外数据、等待 API 回调、限制高成本操作，或请求 [Human-in-the-loop](/docs/workflows/human-in-the-loop) 输入。挂起时，当前执行状态会保存为 Snapshot。之后可从[特定步骤 ID](/docs/workflows/snapshots#retrieving-snapshots) 恢复，准确还原保存时的状态。[Snapshot](/docs/workflows/snapshots) 存储在已配置的 Storage Provider 中，可跨部署和应用重启持久存在。
 
 ## 使用 `suspend()` 暂停 Workflow {/* #pausing-a-workflow-with-suspend */}
 
@@ -16,9 +16,22 @@ Workflow 可以在任意步骤暂停，以收集额外数据、等待 API 回调
 - 如果条件不满足，Workflow 会暂停并返回 `suspend()`。
 - 如果条件满足，Workflow 会继续执行步骤中的剩余逻辑。
 
-![使用 suspend() 暂停 Workflow](/img/workflows/workflows-suspend.jpg)
+```mermaid
+flowchart LR
+  accTitle: 挂起 Workflow 并保存状态
+  accDescr: Workflow 从 step1 开始。该步骤可以完成 Workflow，也可以挂起并保存 Snapshot。
+  start(( start )) -- in --> step1([step1])
+  step1 -- out --> stop(( end ))
+  step1 pending1@-. suspend .-> snapshot@{ shape: cyl, label: "已保存的 Snapshot" }
 
-```typescript {9-11,16-18} title="src/mastra/workflows/test-workflow.ts"
+  class stop accent
+  class snapshot pending
+```
+
+```typescript {12-14,19-21} title="src/mastra/workflows/test-workflow.ts"
+import { createWorkflow, createStep } from '@mastra/core/workflows'
+import { z } from 'zod'
+
 const step1 = createStep({
   id: 'step-1',
   inputSchema: z.object({
@@ -61,7 +74,17 @@ export const testWorkflow = createWorkflow({
 
 使用 `resume()` 从暂停的步骤重新启动已挂起的 Workflow。传入与步骤 `resumeSchema` 匹配的 `resumeData`，满足挂起条件并继续执行。
 
-![使用 resume() 重新启动 Workflow](/img/workflows/workflows-resume.jpg)
+```mermaid
+flowchart LR
+  accTitle: 从已保存的 Snapshot 恢复 Workflow
+  accDescr: 恢复操作会加载保存的 Snapshot 并重新运行 step1，随后 Workflow 完成。
+  snapshot@{ shape: cyl, label: "已保存的 Snapshot" }
+  snapshot pending1@-. resume .-> step1([step1])
+  step1 -- out --> stop(( end ))
+
+  class snapshot pending
+  class stop accent
+```
 
 ```typescript
 import { step1 } from './workflows/test-workflow'
@@ -105,7 +128,7 @@ const stream = run.resume({
 })
 ```
 
-你可以从应用中的任何位置调用 `resume()`，包括 HTTP Endpoint、事件处理器、响应[人工输入](/docs/workflows/human-in-the-loop)时或计时器中。
+你可以在应用中的 HTTP Endpoint 或事件处理器中调用 `resume()`；计时器和响应[人工输入](/docs/workflows/human-in-the-loop)的代码也能恢复 Workflow。
 
 ```typescript
 const midnight = new Date()
@@ -123,7 +146,10 @@ setTimeout(async () => {
 
 步骤挂起后，你可能希望在稍后恢复时访问传给 `suspend()` 的数据。使用步骤 execute 函数中的 `suspendData` 参数访问这些数据。
 
-```typescript {22-25,29-30} title="src/mastra/workflows/user-approval.ts"
+```typescript {25-28,32-33} title="src/mastra/workflows/user-approval.ts"
+import { createStep } from '@mastra/core/workflows'
+import { z } from 'zod'
+
 const approvalStep = createStep({
   id: 'user-approval',
   inputSchema: z.object({
@@ -189,7 +215,7 @@ if (result.status === 'suspended') {
 
 ### 示例输出 {/* #example-output */}
 
-`suspended` 数组包含 Run 中所有已挂起 Workflow 和步骤的 ID。调用 `resume()` 时，可以将这些值传给 `step` 参数，定位并恢复已挂起的执行路径。
+`suspended` 数组为 Run 中每个已挂起的步骤提供一条路径。路径是从顶层 Workflow 到挂起步骤的一组步骤 ID，可能经过嵌套 Workflow。将整条路径传给 `resume()` 的 `step` 参数，即可恢复对应的执行路径。默认引擎下，即使嵌套 Workflow 的多个并行步骤同时挂起，一次也只会返回其中一条路径；恢复后应再次检查返回的 `suspended` 数组。请将路径视为不可拆解的值，原样传回：不同引擎可能在其中加入重复 ID 或 `.foreach()` 的数字索引。若路径指向挂起的 `.foreach()` 步骤，默认会恢复所有挂起的迭代；如需逐个恢复，请传入 [`forEachIndex`](/reference/workflows/run-methods/resume)。对于嵌套 Workflow 中挂起的步骤，`result.suspended[0]` 如下：
 
 ```typescript
 ['nested-workflow', 'step-1']

@@ -6,10 +6,13 @@ This repository is based on the `docs/` snapshot from
 [`mastra-ai/mastra`](https://github.com/mastra-ai/mastra) `main` at commit
 `f33264f517ae603279afd5c4251e2b40f6dd3618` (synced 2026-08-09).
 
-For incremental documentation updates, use `UPSTREAM.md` as the source of
-truth for the currently imported upstream commit. Run `pnpm sync:upstream` to
-advance the snapshot, then review and update localized content against the
-new English source before making locale-specific changes.
+For incremental English and Simplified Chinese documentation updates, read
+`UPSTREAM.md` and run `scripts/report-upstream-progress.mjs` against a current
+official clone. Update selected English pages from upstream and their changed
+Chinese sections, then record and verify both blobs in
+`UPSTREAM_INCREMENTAL.json`. The commit in `UPSTREAM.md` remains the full-import
+baseline. For a coordinated full snapshot, run `pnpm sync:upstream` and review
+localized content against the new English source.
 
 When working check src/content/en/docs/ and src/content/en/reference/ update existing docs or create new docs
 @CONTRIBUTING.md for setup, local development, and components / frontmatter

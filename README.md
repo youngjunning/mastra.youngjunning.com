@@ -1,7 +1,7 @@
 # Mastra site mirror
 
-This branch deploys a complete Mastra landing page together with the latest
-documentation source from the official
+This branch deploys a complete Mastra landing page together with a tracked
+documentation snapshot from the official
 [mastra-ai/mastra](https://github.com/mastra-ai/mastra) repository.
 
 The documentation source is imported from upstream `main/docs` without old
@@ -43,6 +43,31 @@ pnpm build
 The static output is written to `build/`.
 
 ## Sync the latest upstream docs
+
+For a lower-cost English and Simplified Chinese update, compare the official
+clone with the full-import baseline before selecting a small batch:
+
+```bash
+mkdir -p ../github
+git clone --filter=blob:none --sparse https://github.com/mastra-ai/mastra.git ../github/mastra
+git -C ../github/mastra sparse-checkout set docs
+git -C ../github/mastra fetch origin main
+git -C ../github/mastra switch main
+git -C ../github/mastra pull --ff-only origin main
+node scripts/report-upstream-progress.mjs
+```
+
+The clone commands are needed only once. Set `MASTRA_UPSTREAM_DIR` when the
+official clone is elsewhere. Update each
+selected English page from upstream, translate only its changed content in the
+corresponding `i18n/zh-CN` page, then record both Git blob IDs in
+`UPSTREAM_INCREMENTAL.json`. If local site integration needs an adaptation,
+also record the local `englishBlob` while keeping the official `sourceBlob`. The report
+counts a pair as current only while both local files match those IDs and the
+upstream English page has not changed again. Deleted pages need separate
+review. Other locales are outside this incremental ledger.
+
+The full snapshot command remains available for a coordinated upgrade:
 
 Keep the official clone at `../github/mastra`, commit a clean local working
 tree, and run:
