@@ -54,8 +54,7 @@ git clone --filter=blob:none --sparse https://github.com/mastra-ai/mastra.git ..
 git -C ../github/mastra sparse-checkout set docs
 ```
 
-Before each batch, update the clone and inspect changes since the last
-inspected commit:
+Before each batch, update the clone and inspect the current backlog:
 
 ```bash
 git -C ../github/mastra fetch origin main
@@ -66,21 +65,22 @@ node scripts/report-upstream-progress.mjs
 
 Set `MASTRA_UPSTREAM_DIR` when the official clone is elsewhere. Use `--json`
 for the complete machine-readable change queue. The report compares
-`observedCommit..HEAD` for newly changed files and
-`translationBaseCommit..HEAD` for the remaining backlog. It covers
-`src/content/en` and the English top-level pages in `src/learn/content`; the
-course and other locales need separate tracking. After reviewing the new commit
-range, advance `observedCommit` in `UPSTREAM_INCREMENTAL.json`, even if some
-pages remain untranslated; the backlog calculation retains them.
+`translationBaseCommit..HEAD` and verifies the current upstream file blob
+against each recorded English and Chinese page pair. Use `--since=COMMIT` only
+when you need to inspect the commits and changed files in a shorter range.
+There is no persistent inspection cursor. It covers `src/content/en` and the
+English top-level pages in `src/learn/content`; the course and other locales
+need separate tracking. Unchanged pages from the comparison base are not
+audited by this report.
 
 For each selected page, update its English source and only the changed sections
 of its corresponding Simplified Chinese page (`i18n/zh-CN` for docs,
-`src/learn/content/zh-CN` for Learn). Record `sourceCommit` and the upstream
-`sourceBlob` plus the Chinese `zhCNBlob`. If local site integration needs an
-adaptation, also record the local `englishBlob`. The report verifies the source
-blob at `sourceCommit` and both local files at the current upstream `HEAD`.
-It stops if the recorded commits leave upstream `main`, so a rewritten history
-requires manual review. Deletions and other locales need separate review.
+`src/learn/content/zh-CN` for Learn). Record the upstream `sourceBlob` and
+Chinese `zhCNBlob`. If local site integration needs an adaptation, also record
+the local `englishBlob`. A matching blob proves the files have not changed
+since review; it does not assess translation quality. When the upstream page
+changes again, the pair returns to the pending queue. Review deletions and
+renames separately.
 
 The full snapshot command remains available for a coordinated upgrade:
 

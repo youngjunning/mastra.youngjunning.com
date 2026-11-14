@@ -17,17 +17,17 @@ import**; it does not imply that the whole site is current. Use
 `scripts/report-upstream-progress.mjs` against a current official clone to
 check which individual page pairs match the latest upstream source.
 
-The incremental ledger distinguishes three commit records.
-`translationBaseCommit` defines the comparison range for English and Simplified
-Chinese work. Its current value is the original source snapshot, not proof that
-every pre-existing translation was audited. `observedCommit` marks the latest
-upstream commit whose changed-file list was inspected; it does not claim
-translation is complete.
-Each page's `sourceCommit` and `sourceBlob` identify the official content
-reviewed for that page. The report recomputes the pending queue from the
-translation base, so advancing the inspected commit or the full English
-import cannot silently discard unfinished Chinese pages. A changed upstream
-blob makes a previously reviewed page pending again.
+`translationBaseCommit` defines the Git comparison range for English and
+Simplified Chinese work. Its current value is the original source snapshot,
+not proof that every pre-existing translation was audited. Each page's
+`sourceBlob` identifies the official English content used in its last manual
+review; local English and Chinese blobs detect later edits. The report
+recomputes the pending queue from the comparison base and current upstream
+`main`, so a newer English import does not discard unfinished Chinese pages.
+This is a file-level freshness check, not a translation-quality check. Commit
+history is useful for investigating changes, but replaying every upstream
+commit would repeatedly translate pages that changed more than once. Pages
+unchanged since the comparison base are outside this report's audit.
 
 ## Incremental sync progress
 
@@ -45,9 +45,8 @@ then record and verify both blobs. Review removals and route changes separately.
 The existing full-snapshot sync remains available when a coordinated upgrade
 is affordable. No production deployment is implied by this ledger.
 
-On 2026-11-14, the four commits after `8acea4cc5b97dcfd1e1179f9b40ca34c05f255cf`
-were inspected through `7277766d6c967c475675d58ff2d0e5c6d7be7c84`. One
-commit changed `docs/src/content/en/docs/harness/durable-agents.mdx`; this page
-has no English or Chinese counterpart in the mirror yet and remains pending.
-The inspected commit was advanced without changing the three completed page
-pairs or the translation base.
+On 2026-11-14, the upstream range
+`8acea4cc5b97dcfd1e1179f9b40ca34c05f255cf..7277766d6c967c475675d58ff2d0e5c6d7be7c84`
+included one English documentation change, to
+`docs/src/content/en/docs/harness/durable-agents.mdx`. This page has no English
+or Chinese counterpart in the mirror yet and remains pending.

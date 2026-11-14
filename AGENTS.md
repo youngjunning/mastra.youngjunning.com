@@ -8,14 +8,13 @@ This repository is based on the `docs/` snapshot from
 
 For incremental English and Simplified Chinese documentation updates, read
 `UPSTREAM.md` and run `scripts/report-upstream-progress.mjs` against a current
-official clone. Update selected English pages from upstream and their changed
-Chinese sections, then record and verify both blobs in
-`UPSTREAM_INCREMENTAL.json` with the upstream source commit. Its
-`observedCommit` records the last inspected upstream commit, not complete
-translation. Its `translationBaseCommit` defines the comparison range for
-unfinished Chinese work; `UPSTREAM.md` records the last full English import.
-For a coordinated full snapshot, run `pnpm sync:upstream` and review localized
-content against the new English source before advancing the translation base.
+official clone. Use `translationBaseCommit` to find changed files, then update
+selected pages from the latest upstream content and translate only changed
+Chinese sections. Record upstream and local file blobs in
+`UPSTREAM_INCREMENTAL.json`; a commit range is optional for investigating
+recent changes, not a translation cursor. `UPSTREAM.md` records the last full
+English import. For a coordinated full snapshot, run `pnpm sync:upstream` and
+review localized content before advancing the translation base.
 
 When working check src/content/en/docs/ and src/content/en/reference/ update existing docs or create new docs
 @CONTRIBUTING.md for setup, local development, and components / frontmatter
