@@ -1,11 +1,13 @@
 ---
 name: translation
-description: Translate and localize Mastra technical documentation from English into Simplified Chinese (zh-CN), Taiwan Traditional Chinese (zh-TW), Hong Kong Traditional Chinese (zh-HK), and Japanese (ja). Use for translating, reviewing, synchronizing, or quality-checking localized Markdown and MDX documentation in this repository while preserving code, components, links, frontmatter, established English technical terminology, and model tokens.
+description: Translate and review selected Mastra technical documentation from English into Simplified Chinese (zh-CN), Taiwan Traditional Chinese (zh-TW), Hong Kong Traditional Chinese (zh-HK), and Japanese (ja). Use for localized Markdown and MDX content and quality checks; upstream version tracking and sync batches use mastra-doc-sync.
 ---
 
 # Translate Mastra documentation
 
 Translate technical content accurately and naturally without changing its behavior or structure.
+
+For upstream change detection and batch selection, read [mastra-doc-sync](../mastra-doc-sync/SKILL.md) first.
 
 ## Target locales
 
@@ -63,6 +65,6 @@ Before finishing:
 
 1. Compare headings, lists, tables, admonitions, links, code fences, and MDX tags against the English source for missing or extra structure.
 2. Search the changed files for altered model tokens, code identifiers, and accidental cross-locale vocabulary.
-3. After translating headings, run `pnpm i18n:anchors` so localized headings retain the English source anchor IDs, then run `pnpm i18n:anchors:check` to detect drift.
+3. After translating headings, run `node scripts/sync-localized-heading-anchors.mjs --locale=<locale>` so the selected locale retains the English source anchor IDs, then check it with `node scripts/sync-localized-heading-anchors.mjs --check --locale=<locale>`.
 4. Run the narrowest relevant repository checks. For a documentation batch, prefer `pnpm validate` and `pnpm lint:prose`; run `pnpm build` when routing, MDX structure, or shared configuration changes.
 5. Report any source ambiguity, untranslated intentional text, skipped generated content, or checks that could not run.

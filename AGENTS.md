@@ -6,15 +6,10 @@ This repository is based on the `docs/` snapshot from
 [`mastra-ai/mastra`](https://github.com/mastra-ai/mastra) `main` at commit
 `f33264f517ae603279afd5c4251e2b40f6dd3618` (synced 2026-08-09).
 
-For incremental English and Simplified Chinese documentation updates, read
-`UPSTREAM.md` and run `scripts/report-upstream-progress.mjs` against a current
-official clone. Use `translationBaseCommit` to find changed files, then update
-selected pages from the latest upstream content and translate only changed
-Chinese sections. Record upstream and local file blobs in
-`UPSTREAM_INCREMENTAL.json`; a commit range is optional for investigating
-recent changes, not a translation cursor. `UPSTREAM.md` records the last full
-English import. For a coordinated full snapshot, run `pnpm sync:upstream` and
-review localized content before advancing the translation base.
+For upstream English and Simplified Chinese sync, batch planning, or progress
+checks, read `.codex/skills/mastra-doc-sync/SKILL.md`. For translation of
+selected pages, also read `.codex/skills/translation/SKILL.md`. Current source
+and progress are recorded in `UPSTREAM.md` and `UPSTREAM_INCREMENTAL.json`.
 
 When working check src/content/en/docs/ and src/content/en/reference/ update existing docs or create new docs
 @CONTRIBUTING.md for setup, local development, and components / frontmatter
