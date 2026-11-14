@@ -4,7 +4,7 @@ Use @styleguides/STYLEGUIDE.md first.
 
 This repository is based on the `docs/` snapshot from
 [`mastra-ai/mastra`](https://github.com/mastra-ai/mastra) `main` at commit
-`f33264f517ae603279afd5c4251e2b40f6dd3618` (synced 2026-08-09).
+`7277766d6c967c475675d58ff2d0e5c6d7be7c84` (synced 2026-11-14).
 
 For upstream English and Chinese locale sync, batch planning, or progress
 checks, read `.codex/skills/mastra-doc-sync/SKILL.md`. For translation of
