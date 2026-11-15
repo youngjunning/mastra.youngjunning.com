@@ -1,6 +1,31 @@
 import { describe, expect, it } from 'vitest'
 
-import { getIntegrationItemHref, getIntegrationItemKey, getIntegrationItems, integrationCategories } from './data'
+import {
+  getIntegrationIconSrc,
+  getIntegrationItemHref,
+  getIntegrationItemKey,
+  getIntegrationItems,
+  integrationCategories,
+} from './data'
+
+describe('getIntegrationIconSrc', () => {
+  it('replaces every svgl icon used by the integrations grid', () => {
+    for (const category of integrationCategories) {
+      for (const item of category.items) {
+        for (const icon of [item.customProps?.icon, item.customProps?.iconDark]) {
+          if (icon?.startsWith('https://svgl.app/library/')) {
+            expect(getIntegrationIconSrc(icon)).not.toContain('svgl.app')
+          }
+        }
+      }
+    }
+  })
+
+  it('keeps local and working third-party icons unchanged', () => {
+    expect(getIntegrationIconSrc('/img/integrations/mastra.svg')).toBe('/img/integrations/mastra.svg')
+    expect(getIntegrationIconSrc('https://cdn.simpleicons.org/slack')).toBe('https://cdn.simpleicons.org/slack')
+  })
+})
 
 describe('getIntegrationItems', () => {
   it('returns all items from a sidebar section', () => {

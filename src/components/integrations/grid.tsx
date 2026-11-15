@@ -1,7 +1,8 @@
+import { useState } from 'react'
 import Link from '@docusaurus/Link'
 import { cn } from '@site/src/lib/utils'
 import type { IntegrationItem } from './data'
-import { getIntegrationItemHref, getIntegrationItemKey, getIntegrationItems } from './data'
+import { getIntegrationIconSrc, getIntegrationItemHref, getIntegrationItemKey, getIntegrationItems } from './data'
 import styles from './integrations.module.css'
 
 interface IntegrationGridProps {
@@ -17,6 +18,29 @@ interface IntegrationItemsGridProps {
   columns?: 3 | 4
 }
 
+function IntegrationIconImage({ src, item, className }: { src: string; item: IntegrationItem; className: string }) {
+  const [failed, setFailed] = useState(false)
+  if (failed) {
+    const initials = item.label
+      .split(/\s+/)
+      .map(word => word[0])
+      .join('')
+      .slice(0, 2)
+    return (
+      <span
+        className={cn(className, 'flex shrink-0 items-center justify-center text-xs font-semibold')}
+        aria-hidden="true"
+      >
+        {initials}
+      </span>
+    )
+  }
+
+  return (
+    <img src={getIntegrationIconSrc(src)} alt="" loading="lazy" className={className} onError={() => setFailed(true)} />
+  )
+}
+
 function IntegrationIcon({ item }: { item: IntegrationItem }) {
   const icon = item.customProps?.icon
   if (!icon) return null
@@ -25,13 +49,13 @@ function IntegrationIcon({ item }: { item: IntegrationItem }) {
   const iconDark = item.customProps?.iconDark
 
   if (!iconDark) {
-    return <img src={icon} alt="" loading="lazy" className={className} />
+    return <IntegrationIconImage src={icon} item={item} className={className} />
   }
 
   return (
     <>
-      <img src={icon} alt="" loading="lazy" className={cn(className, 'dark:hidden')} />
-      <img src={iconDark} alt="" loading="lazy" className={cn(className, 'hidden dark:block')} />
+      <IntegrationIconImage src={icon} item={item} className={cn(className, 'dark:hidden')} />
+      <IntegrationIconImage src={iconDark} item={item} className={cn(className, 'hidden dark:block')} />
     </>
   )
 }

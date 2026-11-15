@@ -74,6 +74,32 @@ export const integrationCategories = Array.isArray(integrationsSidebar)
   ? integrationsSidebar.filter(isIntegrationCategory)
   : []
 
+const replacementIcons: Record<string, string> = {
+  'aws_light.svg': 'https://www.google.com/s2/favicons?domain=aws.amazon.com&sz=64',
+  'aws_dark.svg': 'https://www.google.com/s2/favicons?domain=aws.amazon.com&sz=64',
+  'azure.svg': 'https://www.google.com/s2/favicons?domain=azure.microsoft.com&sz=64',
+  'canva.svg': 'https://www.google.com/s2/favicons?domain=canva.com&sz=64',
+  'drive.svg': 'googledrive',
+  'google-cloud.svg': 'googlecloud',
+  'google.svg': 'google',
+  'microsoft-teams.svg': 'https://www.google.com/s2/favicons?domain=teams.microsoft.com&sz=64',
+  'microsoft.svg': 'https://www.google.com/s2/favicons?domain=microsoft.com&sz=64',
+  'openai.svg': 'https://www.google.com/s2/favicons?domain=openai.com&sz=64',
+  'slack.svg': 'https://www.google.com/s2/favicons?domain=slack.com&sz=64',
+  'workos.svg': 'https://thesvg.org/icons/workos/default.svg',
+  'xai_light.svg': 'https://thesvg.org/icons/xai/default.svg',
+  'xai_dark.svg': 'https://thesvg.org/icons/xai/default.svg',
+}
+
+export function getIntegrationIconSrc(src: string): string {
+  const filename = src.startsWith('https://svgl.app/library/') ? src.split('/').pop() : undefined
+  const replacement = filename && replacementIcons[filename]
+  if (!replacement) return src
+  return replacement.startsWith('https://')
+    ? replacement
+    : `https://cdn.simpleicons.org/${replacement}?viewbox=auto&size=28`
+}
+
 export function getIntegrationItemKey(item: IntegrationItem): string {
   return item.type === 'doc' ? item.id : item.href
 }
